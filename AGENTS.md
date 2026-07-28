@@ -197,6 +197,26 @@ a bypass around the user's own confirmation dialog. Observe with `{}` instead.
 
 ---
 
+# Known issues
+
+Not fixed, deliberately deferred — do not "discover" these again from scratch.
+
+- **Menu header text and the Keep Mac Awake checkmark can disagree with the
+  real keep-awake state** (observed 2026-07-28 while exercising the manual
+  toggle). `enabledHeader()` and `toggle.state` are derived from
+  `store.manualToggle` / `store.shouldKeepAwake`, while the assertion is owned
+  by `ActivityAssertion` after `convergeNow()` — the three can drift apart
+  mid-transition, and `manualOverrideOff` (not persisted) makes the header claim
+  a state the assertion does not hold. `argus status` is the source of truth
+  while debugging. A clean relaunch clears it.
+- Codex approvals never reach the phone: the hook path is Qoder-only, and Codex
+  has no HTTP hooks — it needs the app-server route.
+- Whether Qoder blocks or fails open when a `PermissionRequest` hook cannot be
+  reached is unverified. Rollback if the IDE hangs:
+  `cp ~/.argus-backup/qoder-settings.before-hook.json ~/.qoder/settings.json`.
+
+---
+
 ## Working agreements
 
 - No emoji anywhere — code, comments, commit messages, replies.
