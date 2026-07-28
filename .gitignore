@@ -10,3 +10,6 @@ DerivedData/
 
 # 개인 홍보 초안 (비공개)
 /drafts/
+
+# 汇报/交接类文档不入库
+/HANDOFF-*.md

@@ -14,7 +14,7 @@ public enum HelperProtocolVersion {
     func currentState(reply: @escaping (Bool, Error?) -> Void)
 
     /// ADR-0025 — CLI TTL hold. helper 가 자체 타이머로 만료 시 복원하므로
-    /// GUI heartbeat 없이도 유효하다 (`eclam on` 의 실체).
+    /// GUI heartbeat 없이도 유효하다 (`argus on` 의 실체).
     /// `seconds < 0` ⇒ forever (CLI 가 경고와 함께 명시적으로만 보냄).
     /// 유한 값은 helper 가 [60s, 30d] 로 검증한다 (ADR-0023 입력 cap 정신).
     func holdSleepDisabled(forSeconds seconds: Double, reply: @escaping (Error?) -> Void)
@@ -31,7 +31,7 @@ public enum HelperProtocolVersion {
     /// M1 — external activity ping. `source` is an `AgentTrace.id` (e.g. `"claude"`,
     /// `"codex"`) or a free-form hook label. The daemon sanitizes the value, then
     /// fans it out as a Darwin notification on
-    /// `com.jadhvank.eclam.activity.<source>` so the app can react without
+    /// `com.kairong.argus.activity.<source>` so the app can react without
     /// keeping a long-lived XPC subscription. ADR-0006 §G.
     func pingActivity(source: String, reply: @escaping (Error?) -> Void)
 
@@ -50,7 +50,7 @@ public enum HelperProtocolVersion {
     func lastTripReason(reply: @escaping (String?, Error?) -> Void)
 
     /// v0.3.2 — publish the current "actively-working" agent set so out-of-band
-    /// CLI calls (`eclam status --json`) can read it without polling the
+    /// CLI calls (`argus status --json`) can read it without polling the
     /// filesystem themselves. The app calls this whenever its
     /// `StateStore.activeAgents` set changes (debounced 250ms). IDs include
     /// both `AgentTrace.id` values and synthetic `session:<name>` entries from
@@ -70,11 +70,11 @@ public enum HelperProtocolVersion {
 }
 
 public enum HelperServiceName {
-    public static let mach = "com.jadhvank.eclam.helper"
+    public static let mach = "com.kairong.argus.helper"
 
     /// Prefix for Darwin notifications fanned out per `pingActivity` source.
     /// Concrete name is `<prefix>.<sanitized-source>`. ADR-0006 §G.
-    public static let activityNotifyPrefix = "com.jadhvank.eclam.activity"
+    public static let activityNotifyPrefix = "com.kairong.argus.activity"
 
     /// Hard cap on the sanitized source length. A rogue same-user XPC caller
     /// could otherwise hand `pingActivity` a megabyte-long string that the

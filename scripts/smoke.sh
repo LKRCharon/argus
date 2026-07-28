@@ -11,8 +11,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-APP="$ROOT/build/ElectronicClam.app"
-BIN="$APP/Contents/MacOS/ElectronicClam"
+APP="$ROOT/build/Argus.app"
+BIN="$APP/Contents/MacOS/Argus"
 
 # ── 1. 빌드 ──────────────────────────────────────────────────────────────────
 echo "==> [smoke] 빌드 시작"

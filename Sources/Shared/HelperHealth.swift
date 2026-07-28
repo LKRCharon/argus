@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pure helper-health verdict — maps the daemon's registration state plus an
-/// XPC reachability probe into what `eclam status` prints and exits with.
+/// XPC reachability probe into what `argus status` prints and exits with.
 ///
 /// ADR-0033 §Decision left the "registered but dead" case to the registration/
 /// onboarding UI, but `SMAppService.status == .enabled` reflects *registration
@@ -25,7 +25,7 @@ public struct HelperHealthVerdict: Equatable {
     /// registration string, unchanged from the pre-liveness behaviour so
     /// existing consumers keep working.
     public let raw: String
-    /// Human-readable value for `eclam status` text mode. Identical to `raw`
+    /// Human-readable value for `argus status` text mode. Identical to `raw`
     /// except for the enabled-but-unreachable case, which appends the repair
     /// hint.
     public let human: String
@@ -35,9 +35,9 @@ public struct HelperHealthVerdict: Equatable {
     /// Process exit code. `0` ok / `2` enabled-but-unreachable. Mirrors the
     /// `on`/`off`/`watch` convention (HelpCommand EXIT CODES).
     ///
-    /// NOTE: the non-enabled states keep exit `0` deliberately. `eclam status`
+    /// NOTE: the non-enabled states keep exit `0` deliberately. `argus status`
     /// is a *read* command that has historically always exited 0, and CI's
-    /// `smoke.sh` runs `eclam status` on a runner where the daemon is never
+    /// `smoke.sh` runs `argus status` on a runner where the daemon is never
     /// registered (→ `.notRegistered`) and fails on any non-zero exit. Only the
     /// new dead-but-`.enabled` case — which cannot arise without a registered
     /// daemon — earns a non-zero code.
@@ -54,7 +54,7 @@ public struct HelperHealthVerdict: Equatable {
 public enum HelperHealth {
     /// The honest-status hint appended to `enabled` when the daemon is
     /// registered but does not answer XPC. Public so a test can assert on it.
-    public static let unreachableHint = "unreachable — run 'eclam repair'"
+    public static let unreachableHint = "unreachable — run 'argus repair'"
 
     /// Pure mapping. `reachable` is the result of an XPC liveness probe (only
     /// meaningful, and only supplied, when `reg == .enabled`).

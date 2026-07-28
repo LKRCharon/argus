@@ -12,7 +12,7 @@ import Foundation
 /// 만료 시각이 없는(논리상 도달 불가) 경우에도 크래시 대신 `nil` 폴백으로 안전하게
 /// 처리해, 리팩터·오용 시에도 지뢰가 되지 않는다.
 enum HoldState: Equatable {
-    /// 만료 없는 hold (`eclam on --forever`).
+    /// 만료 없는 hold (`argus on --forever`).
     case forever
     /// 주어진 unix epoch(초)에 만료되는 유한 hold.
     case until(epoch: Double)

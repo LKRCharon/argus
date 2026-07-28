@@ -5,7 +5,7 @@ import Foundation
 /// in `AgentDetector` on the app side. The daemon side never sees this struct.
 public struct AgentTrace: Codable, Equatable, Hashable {
     /// Stable lowercase key, e.g. `"claude"`. Used for UserDefaults keys,
-    /// Darwin notify name (`com.jadhvank.eclam.activity.<id>`) and as
+    /// Darwin notify name (`com.kairong.argus.activity.<id>`) and as
     /// the wire `source` string passed to `pingActivity`.
     public let id: String
 
@@ -117,6 +117,19 @@ public extension AgentTrace {
             hookKey: nil,
             comm: "agy"
         ),
+        // v0.6.x — promoted from CustomizeOnly after live verification (2026-07-28):
+        // the agentlink transcript watcher runs on this exact glob and streamed
+        // thousands of events end-to-end, so "path detection unverified" no longer
+        // holds. Electron main process reports comm "Electron"; LaxProcessAlive
+        // has a path-based special case (`contains("/Qoder.app/")`).
+        AgentTrace(
+            id: "qoder",
+            label: "Qoder",
+            globPattern: "~/.qoder/projects/*/transcript/*.jsonl",
+            freshness: 60,
+            hookKey: nil,
+            comm: "Qoder"
+        ),
     ]
 
     /// Customize-only entries (no default check). ADR-0006 §B.
@@ -195,6 +208,25 @@ public extension AgentTrace {
             freshness: 90,
             hookKey: nil,
             comm: "cursor-agent"
+        ),
+        // Qoder legacy — pre-migration path. Kept for sessions started before the
+        // Qoder update that moved to `~/.qoder/projects/`. Same comm (same app).
+        AgentTrace(
+            id: "qoder-legacy",
+            label: "Qoder (legacy)",
+            globPattern: "~/.qoder/cache/projects/*/conversation-history/*/*.jsonl",
+            freshness: 60,
+            hookKey: nil,
+            comm: "Qoder"
+        ),
+        // QoderWork — work/enterprise variant of Qoder. Flat `.jsonl` per session.
+        AgentTrace(
+            id: "qoderwork",
+            label: "QoderWork",
+            globPattern: "~/.qoderwork/projects/*/*.jsonl",
+            freshness: 60,
+            hookKey: nil,
+            comm: nil
         ),
     ]
 

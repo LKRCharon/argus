@@ -1,4 +1,4 @@
-/* Electronic Clam — Español. ADR-0011.
+/* Argus — Español. ADR-0011.
    NEEDS HUMAN REVIEW — machine-assisted draft, not yet proofread by a native speaker. */
 
 /* Common */
@@ -50,7 +50,7 @@
 
 
 /* Settings + tabs */
-"settings.title" = "Ajustes de Electronic Clam";
+"settings.title" = "Ajustes de Argus";
 "tab.general" = "General";
 "tab.agents" = "Agentes";
 "tab.remote" = "Remoto";
@@ -61,14 +61,14 @@
 "general.version" = "Versión %@";
 "general.support" = "☕ Invítame a un café";
 "general.language" = "Idioma";
-"general.statusCard.on" = "Electronic Clam — Activado · sin dormir";
-"general.statusCard.off" = "Electronic Clam — Desactivado · duerme normal";
+"general.statusCard.on" = "Argus — Activado · sin dormir";
+"general.statusCard.off" = "Argus — Desactivado · duerme normal";
 "general.statusCard.helper" = "Asistente: %@";
 "general.menuBarTheme" = "Icono de la barra de menús";
 "general.startup" = "Inicio";
 "general.openAtLogin" = "Abrir al iniciar sesión";
-"general.tip.openAtLogin" = "Inicia Electronic Clam automáticamente al iniciar sesión, para que siempre vigile desde la barra de menús. También puedes gestionarlo en Ajustes del Sistema → General → Ítems de inicio de sesión.";
-"general.openAtLogin.needsApproval" = "Electronic Clam está desactivado en Ajustes del Sistema → General → Ítems de inicio de sesión. Actívalo ahí para que se inicie al iniciar sesión.";
+"general.tip.openAtLogin" = "Inicia Argus automáticamente al iniciar sesión, para que siempre vigile desde la barra de menús. También puedes gestionarlo en Ajustes del Sistema → General → Ítems de inicio de sesión.";
+"general.openAtLogin.needsApproval" = "Argus está desactivado en Ajustes del Sistema → General → Ítems de inicio de sesión. Actívalo ahí para que se inicie al iniciar sesión.";
 "general.updates" = "Actualizaciones";
 "general.checkForUpdates" = "Buscar actualizaciones…";
 "general.autoCheckUpdates" = "Buscar automáticamente";
@@ -82,7 +82,7 @@
 "update.later" = "Más tarde";
 "update.failed" = "No se pudieron buscar actualizaciones";
 "update.failed.body" = "Comprueba tu conexión a internet e inténtalo de nuevo.";
-"update.notify.body" = "Electronic Clam %@ está disponible — abre Ajustes para actualizar.";
+"update.notify.body" = "Argus %@ está disponible — abre Ajustes para actualizar.";
 "theme.system" = "Sistema";
 "theme.light" = "Claro";
 "theme.dark" = "Oscuro";
@@ -94,7 +94,7 @@
 "agents.section.watched" = "Agentes vigilados";
 "agents.section.hooks" = "Instalar hooks";
 "agents.section.hooksAdvanced" = "Hooks de agente (opcional)";
-"agents.hooks.caption" = "Electronic Clam detecta los agentes automáticamente observando sus registros de sesión: no se necesita ningún hook. Los hooks solo hacen que la detección sea instantánea y añaden un respaldo cuando el acceso a archivos está restringido.";
+"agents.hooks.caption" = "Argus detecta los agentes automáticamente observando sus registros de sesión: no se necesita ningún hook. Los hooks solo hacen que la detección sea instantánea y añaden un respaldo cuando el acceso a archivos está restringido.";
 "agents.watched.caption" = "Detectados automáticamente observando el registro de sesión de cada agente.";
 "agents.pollNote" = "La detección se actualiza cada 5 segundos aproximadamente (30 s con la pantalla bloqueada), así que un agente recién iniciado puede tardar unos segundos en aparecer. Los agentes con un hook instalado se registran al instante.";
 "agents.col.agent" = "Agente";
@@ -111,8 +111,8 @@
 "agents.uninstallAll" = "Desinstalar todos los hooks";
 "agents.uninstall" = "Desinstalar";
 "agents.add" = "Añadir";
-"agents.uninstallAll.title" = "¿Desinstalar todos los hooks de Electronic Clam?";
-"agents.uninstallAll.body" = "Elimina las entradas de hook de Electronic Clam de ~/.claude/settings.json, ~/.codex/config.toml y ~/.hermes/config.yaml. El resto de tus ajustes se conservan.";
+"agents.uninstallAll.title" = "¿Desinstalar todos los hooks de Argus?";
+"agents.uninstallAll.body" = "Elimina las entradas de hook de Argus de ~/.claude/settings.json, ~/.codex/config.toml y ~/.hermes/config.yaml. El resto de tus ajustes se conservan.";
 "agents.uninstallFail" = "No se pudieron desinstalar algunos hooks";
 "agents.couldNotInstall" = "No se pudo instalar el hook de %@";
 "agents.couldNotUninstall" = "No se pudo desinstalar el hook de %@";
@@ -121,14 +121,14 @@
 "agents.ph.id" = "id (p. ej. my-agent)";
 "agents.ph.label" = "Etiqueta (p. ej. My Agent)";
 "agents.ph.glob" = "Glob (p. ej. ~/.my-agent/logs/*.log)";
-"agents.codexTrust" = "Tras instalar, ejecuta /hooks en la CLI de Codex para confiar en este hook.\nDeberás volver a confiar cuando Electronic Clam actualice el código del hook.";
+"agents.codexTrust" = "Tras instalar, ejecuta /hooks en la CLI de Codex para confiar en este hook.\nDeberás volver a confiar cuando Argus actualice el código del hook.";
 "agents.hermesTrust" = "Tras instalar, aprueba el aviso del hook la próxima vez que ejecutes Hermes\n(o configura hooks_auto_accept: true en ~/.hermes/config.yaml).";
 
 /* Remote pane (2-tier UI: master checkbox + radios) */
 "remote.master" = "Contar las sesiones remotas como actividad";
 "remote.optNeverIdle" = "Mantener despierto incluso inactivo (seguir conectado)";
 "remote.optIdleSleep" = "Permitir dormir tras una inactividad de:";
-"remote.help" = "Cuando te conectas a este Mac por SSH, VNC o Compartir Pantalla, Electronic Clam lo mantiene despierto para que la sesión no se interrumpa.";
+"remote.help" = "Cuando te conectas a este Mac por SSH, VNC o Compartir Pantalla, Argus lo mantiene despierto para que la sesión no se interrumpa.";
 "remote.channels" = "Canales detectados";
 "remote.noneDetected" = "(ninguno detectado actualmente)";
 "remote.tip.master" = "Las sesiones remotas se detectan mediante aserciones de pmset, who(1), la CLI de Tailscale, Claude Code y Codex remote-control, y daemons de control remoto conocidos. Desactívalo para ignorar por completo las conexiones remotas.";
@@ -204,7 +204,7 @@
 "reason.watchdog" = "Watchdog del ayudante";
 
 /* Notifications */
-"notify.release.title" = "Electronic Clam liberó la suspensión automáticamente";
+"notify.release.title" = "Argus liberó la suspensión automáticamente";
 "notify.batteryLow" = "Batería baja";
 "notify.thermalSerious" = "Térmico grave";
 "notify.thermalCritical" = "Térmico crítico";
@@ -261,26 +261,26 @@
 "end.unknown" = "finalizado";
 
 /* ADR-0038 — control de ubicación de instalación (un paquete en cuarentena/trasladado no puede registrar el ayudante) */
-"installgate.title" = "Mueve Electronic Clam a tu carpeta de Aplicaciones";
-"installgate.message.quarantined" = "Electronic Clam se está ejecutando desde una ubicación de descarga, así que macOS no deja que arranque su ayudante en segundo plano. Muévelo a la carpeta de Aplicaciones y ábrelo desde ahí.";
-"installgate.message.translocated" = "macOS está ejecutando Electronic Clam desde una ubicación temporal de solo lectura. Muévelo a la carpeta de Aplicaciones y vuelve a abrirlo para que su ayudante pueda arrancar.";
+"installgate.title" = "Mueve Argus a tu carpeta de Aplicaciones";
+"installgate.message.quarantined" = "Argus se está ejecutando desde una ubicación de descarga, así que macOS no deja que arranque su ayudante en segundo plano. Muévelo a la carpeta de Aplicaciones y ábrelo desde ahí.";
+"installgate.message.translocated" = "macOS está ejecutando Argus desde una ubicación temporal de solo lectura. Muévelo a la carpeta de Aplicaciones y vuelve a abrirlo para que su ayudante pueda arrancar.";
 "installgate.openApps" = "Abrir la carpeta Aplicaciones";
 "installgate.later" = "Más tarde";
 
 /* ADR-0039 — nota de estado de instalación en Ajustes → General (split-brain / ubicación / versión desfasada) */
-"installhealth.quarantined" = "Electronic Clam se está ejecutando desde una ubicación de descarga, así que macOS no deja que arranque su ayudante. Muévelo a la carpeta de Aplicaciones y vuelve a abrirlo.";
-"installhealth.translocated" = "macOS está ejecutando Electronic Clam desde una ubicación temporal de solo lectura. Muévelo a la carpeta de Aplicaciones y vuelve a abrirlo.";
-"installhealth.outside" = "Electronic Clam se está ejecutando fuera de la carpeta Aplicaciones, lo que puede impedir que su ayudante arranque de forma fiable. Muévelo a Aplicaciones y vuelve a abrirlo.";
-"installhealth.copies" = "Se encontraron varias copias de Electronic Clam. Conserva solo la de Aplicaciones y elimina el resto:";
+"installhealth.quarantined" = "Argus se está ejecutando desde una ubicación de descarga, así que macOS no deja que arranque su ayudante. Muévelo a la carpeta de Aplicaciones y vuelve a abrirlo.";
+"installhealth.translocated" = "macOS está ejecutando Argus desde una ubicación temporal de solo lectura. Muévelo a la carpeta de Aplicaciones y vuelve a abrirlo.";
+"installhealth.outside" = "Argus se está ejecutando fuera de la carpeta Aplicaciones, lo que puede impedir que su ayudante arranque de forma fiable. Muévelo a Aplicaciones y vuelve a abrirlo.";
+"installhealth.copies" = "Se encontraron varias copias de Argus. Conserva solo la de Aplicaciones y elimina el resto:";
 "installhealth.skew" = "La app en ejecución (%1$@) no coincide con el ayudante registrado (%2$@) — probablemente copias sobrantes. Usa Reinstalar asistente o elimina las copias extra de arriba.";
 "installhealth.spawnFailed" = "El ayudante en segundo plano no pudo arrancar (un error de configuración). Prueba Reinstalar asistente; si persiste, reinicia tu Mac.";
 
 /* ADR-0039 — último recurso resetbtm, mostrado cuando Reinstalar asistente sigue fallando */
-"resetbtm.note" = "El ayudante sigue sin responder. Puede que un registro en segundo plano obsoleto esté vinculado a una copia eliminada o duplicada. Como último recurso, abre Terminal y ejecuta “sudo sfltool resetbtm”, luego reinicia tu Mac y vuelve a abrir Electronic Clam. Esto restablece los ítems de inicio de sesión de todas las apps.";
+"resetbtm.note" = "El ayudante sigue sin responder. Puede que un registro en segundo plano obsoleto esté vinculado a una copia eliminada o duplicada. Como último recurso, abre Terminal y ejecuta “sudo sfltool resetbtm”, luego reinicia tu Mac y vuelve a abrir Argus. Esto restablece los ítems de inicio de sesión de todas las apps.";
 
 /* ADR-0018 — incorporación de aprobación en el primer arranque */
 "onboarding.title" = "Se necesita aprobación para mantener tu Mac despierto";
-"onboarding.message" = "Electronic Clam necesita que permitas su ayudante en segundo plano en Ajustes del Sistema → General → Ítems de inicio de sesión. Ábrelo ahora y activa Electronic Clam.";
+"onboarding.message" = "Argus necesita que permitas su ayudante en segundo plano en Ajustes del Sistema → General → Ítems de inicio de sesión. Ábrelo ahora y activa Argus.";
 "onboarding.openSettings" = "Abrir Ajustes del Sistema";
 "onboarding.later" = "Más tarde";
 
@@ -310,7 +310,7 @@
 /* Hover tooltips (Safety·Agents) + keys missed by code↔lproj drift — 2026-06-11 */
 "agents.tip.hookOptional" = "Omite el hook si el paso de confianza resulta engorroso — la vigilancia de archivos sigue detectando el agente.";
 "agents.tip.lax" = "Mantiene el Mac despierto mientras el proceso de un agente vigilado siga vivo — incluso durante esperas largas, como aguardar la respuesta del modelo.";
-"agents.tip.pattern" = "La ruta de archivo que Electronic Clam vigila para saber que este agente está trabajando. ~/ es tu carpeta personal.";
+"agents.tip.pattern" = "La ruta de archivo que Argus vigila para saber que este agente está trabajando. ~/ es tu carpeta personal.";
 "agents.tip.strict" = "Cuenta un agente como activo solo mientras su registro de sesión cambia de verdad; un agente terminado o inactivo deja de mantener el Mac despierto.";
 "history.timeline" = "Últimas 24 horas";
 "menu.blankDisplays" = "Apagar pantalla — seguir trabajando";
@@ -320,7 +320,7 @@
 "safety.tip.cooldown" = "El 'enfriamiento' es una pausa de 5 minutos después de que una protección deja dormir el Mac, para que no se reactive al instante. '—' significa que ninguna protección ha actuado en esta sesión.";
 "safety.tip.currentState" = "Una lectura en vivo de lo que ven las protecciones ahora mismo.";
 "safety.tip.lastRelease" = "El motivo más reciente por el que una protección dejó dormir el Mac en esta sesión. '(ninguno)' significa que nunca tuvieron que intervenir.";
-"safety.tip.master" = "El interruptor maestro de todas las protecciones. Encendido, Electronic Clam vuelve a dejar dormir el Mac en cuanto se cruza un límite — batería, temperatura o tiempo despierto.";
+"safety.tip.master" = "El interruptor maestro de todas las protecciones. Encendido, Argus vuelve a dejar dormir el Mac en cuanto se cruza un límite — batería, temperatura o tiempo despierto.";
 "safety.tip.maxDuration" = "Deja dormir el Mac tras mantenerlo despierto este tiempo seguido. 'Ilimitada' no pone tope. No se aplica en modo Desktop (corriente + tapa abierta + pantalla externa).";
 "safety.tip.thermalCutoff" = "Deja dormir el Mac al alcanzar esta etapa de calor. Las etapas más bajas duermen antes y de forma más segura; la temperatura real se muestra abajo en 'Estado actual'.";
 
@@ -328,7 +328,7 @@
 "general.helperUnavailable.note" = "Tras una actualización, macOS puede negarse a relanzar el antiguo asistente (limitación de firma ad-hoc). Haz clic en Reinstalar asistente; si sigue sin funcionar, reinicia tu Mac.";
 
 /* Hover tooltips — General pane (permission section) */
-"general.tip.permissionStatus" = "Indica si macOS permite ejecutar el asistente en segundo plano de Electronic Clam. El asistente es quien realiza el control real del reposo.";
+"general.tip.permissionStatus" = "Indica si macOS permite ejecutar el asistente en segundo plano de Argus. El asistente es quien realiza el control real del reposo.";
 "general.tip.permissionButton" = "Gestiona o repara el permiso del asistente — abre Ajustes del Sistema o reintenta el registro, según el estado de arriba.";
 "general.tip.reinstallHelper" = "Anula el registro del asistente en segundo plano y lo vuelve a registrar. Úsalo cuando el asistente deje de responder tras una actualización o el estado del permiso parezca atascado. macOS puede pedirte que lo apruebes de nuevo.";
 "general.tip.exportDiagnostics" = "Guarda un paquete de diagnóstico (registros recientes, ajustes, estado del asistente) en tu escritorio — útil al informar de un error.";
@@ -348,14 +348,14 @@
 "agents.tip.detectNow" = "Ejecuta una pasada de detección y muestra exactamente qué archivo coincidió con cada agente (o por qué no). Misma salida que `eclam debug agents`.";
 
 /* proposal §5 — 첫 승인 후 1회 안내 */
-"onboarding.enabled.title" = "Electronic Clam está listo";
+"onboarding.enabled.title" = "Argus está listo";
 "onboarding.enabled.body" = "Ejecuta un agente de código (Claude Code, Codex…) — el punto del menú se pone verde mientras trabaja y tu Mac sigue despierto. Haz clic en la concha para alternar.";
 
 /* ADR-0028 — Notificaciones de Telegram (pestaña + panel) */
 "tab.notifications" = "Notificaciones";
 "telegram.privacy" = "Desactivado por defecto. Al activarlo, los mensajes de estado van solo a la API de Telegram usando un token de bot que tú creas y posees — nunca se envía nada al desarrollador ni a ningún otro servidor. El token se guarda localmente con permisos de archivo solo para tu usuario.";
 "telegram.master" = "Enviar estado a mi bot de Telegram";
-"telegram.tip.master" = "El interruptor principal. Apagado significa que Electronic Clam no envía nada por la red. Los campos de configuración y el botón de prueba siguen usables para verificar la conexión primero.";
+"telegram.tip.master" = "El interruptor principal. Apagado significa que Argus no envía nada por la red. Los campos de configuración y el botón de prueba siguen usables para verificar la conexión primero.";
 "telegram.setup.help" = "Configuración: ① En Telegram, escribe a @BotFather → /newbot y copia el token. ② Envía cualquier mensaje a tu nuevo bot. ③ Pega el token abajo y pulsa Detectar.";
 "telegram.tokenLabel" = "Token del bot";
 "telegram.tip.token" = "El token que te dio @BotFather. Autentica *tu* bot — mantenlo privado. Se guarda solo en este Mac (archivo legible solo por tu usuario) y nunca se registra en logs.";
@@ -378,7 +378,7 @@
 "telegram.error.notConfigured" = "Introduce primero un token de bot y un ID de chat.";
 "telegram.error.badToken" = "Eso no parece un token de bot (se espera 123456:ABC…).";
 "telegram.error.noUpdates" = "No se encontraron mensajes. Envía cualquier mensaje a tu bot en Telegram y vuelve a intentarlo.";
-"telegram.test" = "🐚 Electronic Clam — mensaje de prueba. Las notificaciones están conectadas.";
+"telegram.test" = "🐚 Argus — mensaje de prueba. Las notificaciones están conectadas.";
 "telegram.start.agent" = "🟢 Despierto — %@ está trabajando";
 "telegram.start.remote" = "🟢 Despierto — sesión remota (%@)";
 "telegram.start.generic" = "🟢 Despierto — manteniendo el Mac activo";
@@ -399,11 +399,11 @@
 /* ADR-0037 — protección de bloqueo con tapa cerrada · vigilancia de VPN · modo de pantalla apagada (vdisplay) */
 "general.sessions" = "Sesiones";
 "general.clamshellGuard" = "Evitar el bloqueo con la tapa cerrada (mantener la VPN)";
-"general.tip.clamshellGuard" = "Cuando tu Mac sigue despierto con la tapa cerrada y sin pantalla externa, Electronic Clam mantiene viva una pantalla virtual invisible para que macOS no bloquee la pantalla — un bloqueo cortaría sesiones VPN como las de FortiClient. No aparece ninguna ventana y apenas consume energía. Desactivado por defecto.";
+"general.tip.clamshellGuard" = "Cuando tu Mac sigue despierto con la tapa cerrada y sin pantalla externa, Argus mantiene viva una pantalla virtual invisible para que macOS no bloquee la pantalla — un bloqueo cortaría sesiones VPN como las de FortiClient. No aparece ninguna ventana y apenas consume energía. Desactivado por defecto.";
 "general.vpnNotify" = "Avisar cuando la VPN se desconecte (Telegram + local)";
-"general.tip.vpnNotify" = "Mientras se mantiene el Mac despierto, Electronic Clam vigila tu VPN con scutil y te avisa si se desconecta — una alerta local más Telegram si lo has configurado. Nunca reconecta automáticamente (FortiClient necesita inicio de sesión SAML). Independiente de la protección con la tapa cerrada. Desactivado por defecto.";
+"general.tip.vpnNotify" = "Mientras se mantiene el Mac despierto, Argus vigila tu VPN con scutil y te avisa si se desconecta — una alerta local más Telegram si lo has configurado. Nunca reconecta automáticamente (FortiClient necesita inicio de sesión SAML). Independiente de la protección con la tapa cerrada. Desactivado por defecto.";
 "general.vpnService" = "Servicio VPN";
-"general.tip.vpnService" = "Elige tu servicio VPN (tal como lo ve macOS en Ajustes → Red). El de FortiClient suele ser \"VPN\". Electronic Clam lo vigila con scutil y, si se cae, te avisa para volver a autenticarte — nunca reconecta automáticamente (se requiere inicio de sesión SAML). Usa Actualizar si tu VPN aún no aparece.";
+"general.tip.vpnService" = "Elige tu servicio VPN (tal como lo ve macOS en Ajustes → Red). El de FortiClient suele ser \"VPN\". Argus lo vigila con scutil y, si se cae, te avisa para volver a autenticarte — nunca reconecta automáticamente (se requiere inicio de sesión SAML). Usa Actualizar si tu VPN aún no aparece.";
 "general.vpnRefresh" = "Actualizar";
 "general.tip.vpnRefresh" = "Vuelve a buscar servicios VPN — útil si tu app de VPN estaba cerrada cuando abriste esto.";
 "general.vpnServiceNote" = "Elige la VPN que vigilar y luego activa las notificaciones arriba. Te avisará si se cae (también por Telegram, si lo has configurado). Sin reconexión automática.";
@@ -416,5 +416,63 @@
 
 /* ADR-0037 — notificaciones de desconexión de VPN (local + Telegram) */
 "notify.vpnDropped.title" = "VPN desconectada";
-"notify.vpnDropped.body" = "%@ necesita volver a autenticarse (SAML/SSO). Electronic Clam no reconectará automáticamente — abre FortiClient e inicia sesión de nuevo.";
+"notify.vpnDropped.body" = "%@ necesita volver a autenticarse (SAML/SSO). Argus no reconectará automáticamente — abre FortiClient e inicia sesión de nuevo.";
 "telegram.vpn.dropped" = "🔌 VPN desconectada (%@) — FortiClient necesita volver a autenticarse (SAML). Sin reconexión automática.";
+
+/* Menu — uptime line (shown while awake, no cap set) */
+"status.uptime" = "⏱ despierto %@";
+
+/* UI redesign — pane titles & card headings */
+"agents.title" = "Agentes";
+"general.statusCard.idle" = "No se detecta actividad de agentes";
+"general.statusCard.reason" = "Un agente está trabajando — el reposo está bloqueado";
+"history.title" = "Historial";
+"remote.title" = "Acceso remoto";
+"remote.card.channels" = "Canales detectados";
+"safety.title" = "Seguridad";
+"safety.card.state" = "Estado actual";
+"safety.card.battery" = "Batería";
+"safety.card.thermal" = "Temperatura";
+"safety.card.duration" = "Tiempo despierto";
+"safety.card.release" = "Última liberación";
+"telegram.title" = "Notificaciones";
+"telegram.card.credentials" = "Credenciales del bot";
+"telegram.card.events" = "Eventos";
+
+/* Sync pane — agentlink remote sync */
+"tab.sync" = "Sincronizar";
+"sync.title" = "Sincronización remota";
+"sync.subtitle" = "Refleja las sesiones de los agentes en tu teléfono y aprueba llamadas a herramientas de forma remota. Cifrado de extremo a extremo — el relay solo ve texto cifrado.";
+"sync.relayURL" = "URL del relay";
+"sync.start" = "Iniciar vigilancia";
+"sync.stop" = "Detener vigilancia";
+"sync.state.connected" = "Conectado";
+"sync.state.connecting" = "Conectando…";
+"sync.state.offline" = "Sin conexión";
+"sync.sessions" = "%d sesión(es) activa(s)";
+"sync.noSessions" = "No hay sesiones activas";
+"sync.pairing" = "Emparejamiento";
+"sync.pairing.help" = "Genera un código y luego introdúcelo en Argus en tu teléfono (o escanea el QR). De un solo uso, caduca en 5 minutos.";
+"sync.pair" = "Emparejar un dispositivo…";
+"sync.generating" = "Generando…";
+"sync.codeHint" = "Introduce este código en Argus en tu teléfono";
+"sync.codeHint.countdown" = "Introduce este código en Argus en tu teléfono · caduca en %@";
+"sync.paired" = "Emparejado";
+"sync.devices" = "Dispositivos emparejados";
+"sync.noDevices" = "Aún no hay dispositivos emparejados.";
+"sync.forget" = "Eliminar dispositivo";
+"sync.forget.confirm" = "¿Eliminar este dispositivo?";
+"sync.forget.body" = "El teléfono necesitará un nuevo código de emparejamiento para volver a conectarse.";
+"sync.hook" = "Hook de aprobación de Qoder";
+"sync.hook.help" = "Pega esto en la sección hooks de ~/.qoder/settings.json para que las solicitudes de aprobación lleguen a tu teléfono.";
+"sync.copyHook" = "Copiar";
+
+/* Sync pane — local daemon prerequisites */
+"sync.daemon" = "Daemon local";
+"sync.daemon.help" = "El daemon de sincronización se ejecuta desde tu copia de agentlink mediante el runtime Bun. Ambos deben existir en este Mac.";
+"sync.bun" = "Bun";
+"sync.bun.missing" = "no encontrado — brew install oven-sh/bun/bun";
+"sync.projectDir" = "Carpeta del proyecto";
+"sync.choose" = "Elegir…";
+"sync.err.bunMissing" = "No se encontró el runtime Bun. Instálalo (brew install oven-sh/bun/bun) o colócalo en ~/.bun/bin/bun.";
+"sync.err.projectMissing" = "No se encontró el proyecto agentlink en %@ — elige su carpeta en la sección Daemon local de abajo.";

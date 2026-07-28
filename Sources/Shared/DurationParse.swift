@@ -1,4 +1,4 @@
-/// ADR-0025 — `eclam on --for <dur>` 의 기간 파서/포매터.
+/// ADR-0025 — `argus on --for <dur>` 의 기간 파서/포매터.
 ///
 /// stdlib-only(no Foundation): `scripts/test.sh` 가 이 파일을 테스트와 함께
 /// 단독 컴파일한다 (`Tests/DurationParseTests.swift`).

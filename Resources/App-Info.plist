@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Electronic Clam</string>
+    <string>Argus</string>
     <key>CFBundleDisplayName</key>
-    <string>Electronic Clam</string>
+    <string>Argus</string>
     <key>CFBundleIdentifier</key>
-    <string>com.jadhvank.eclam</string>
+    <string>com.kairong.argus</string>
     <key>CFBundleExecutable</key>
-    <string>ElectronicClam</string>
+    <string>Argus</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleLocalizations</key>
@@ -35,6 +35,6 @@
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSHumanReadableCopyright</key>
-    <string>© 2026 Electronic Clam</string>
+    <string>© 2026 Argus</string>
 </dict>
 </plist>

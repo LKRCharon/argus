@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build ElectronicClam.app + ElectronicClamHelper daemon + eclam-hook trampoline.
+# Build Argus.app + ArgusHelper daemon + argus-hook trampoline.
 # Developer ID signed by default (ADR-0020 §③). ADR-0002 §1 layout, §7 codesign
 # order. ADR-0006 §E hook binary.
 set -euo pipefail
@@ -19,21 +19,21 @@ TS_FLAG=(--timestamp)
 
 # ADR-0023 — the helper enforces an XPC caller code-signing requirement (Team ID
 # + app/hook identifiers). Ad-hoc builds have no Team ID and a churning cdhash, so
-# compile the helper with -DECLAM_DEV_ADHOC to skip the check and keep the local
+# compile the helper with -DARGUS_DEV_ADHOC to skip the check and keep the local
 # CLI/hook talking to the helper. Developer ID builds enforce it.
 HELPER_DEFINES=()
-[[ "$SIGN_ID" == "-" ]] && HELPER_DEFINES=(-DECLAM_DEV_ADHOC)
+[[ "$SIGN_ID" == "-" ]] && HELPER_DEFINES=(-DARGUS_DEV_ADHOC)
 
-APP="$ROOT/build/ElectronicClam.app"
+APP="$ROOT/build/Argus.app"
 MACOS_DIR="$APP/Contents/MacOS"
 RES_DIR="$APP/Contents/Resources"
 LD_DIR="$APP/Contents/Library/LaunchDaemons"
 
 SHARED_SRC=("$ROOT/Sources/Shared"/*.swift)
-# ADR-0007 — CLI handlers live under ElectronicClamApp/CLICommands/.
-APP_SRC=("$ROOT/Sources/ElectronicClamApp"/*.swift "$ROOT/Sources/ElectronicClamApp/CLICommands"/*.swift)
-HELPER_SRC=("$ROOT/Sources/ElectronicClamHelper"/*.swift)
-HOOK_SRC=("$ROOT/Sources/ElectronicClamHook"/*.swift)
+# ADR-0007 — CLI handlers live under ArgusApp/CLICommands/.
+APP_SRC=("$ROOT/Sources/ArgusApp"/*.swift "$ROOT/Sources/ArgusApp/CLICommands"/*.swift)
+HELPER_SRC=("$ROOT/Sources/ArgusHelper"/*.swift)
+HOOK_SRC=("$ROOT/Sources/ArgusHook"/*.swift)
 
 TARGET="arm64-apple-macos13.0"   # TODO universal: add x86_64-apple-macos13.0 and lipo
 
@@ -50,13 +50,16 @@ echo "==> Compiling helper"
 swiftc -O -target "$TARGET" \
     ${HELPER_DEFINES[@]+"${HELPER_DEFINES[@]}"} \
     -framework Foundation -framework IOKit -framework Security \
-    -o "$MACOS_DIR/ElectronicClamHelper" \
+    -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info -Xlinker /tmp/ArgusHelper-Info.plist \
+    -o "$MACOS_DIR/ArgusHelper" \
     "${HELPER_SRC[@]}" "${SHARED_SRC[@]}"
+
+# Embed helper Info.plist via -sectcreate (SMJobBless requires CFBundleIdentifier in __TEXT,__info)
 
 echo "==> Compiling hook (no AppKit)"
 swiftc -O -target "$TARGET" \
     -framework Foundation \
-    -o "$MACOS_DIR/eclam-hook" \
+    -o "$MACOS_DIR/argus-hook" \
     "${HOOK_SRC[@]}" "${SHARED_SRC[@]}"
 
 # ADR-0037 S1 — ObjC shim for the private CGVirtualDisplay SPI (clamshell lock
@@ -68,7 +71,7 @@ echo "==> Compiling virtual-display ObjC shim (ADR-0037)"
 VD_SHIM_O="$ROOT/build/VirtualDisplayShim.o"
 xcrun clang -c -fobjc-arc -target "$TARGET" \
     -o "$VD_SHIM_O" \
-    "$ROOT/Sources/ElectronicClamApp/VirtualDisplayShim.m"
+    "$ROOT/Sources/ArgusApp/VirtualDisplayShim.m"
 
 echo "==> Compiling app"
 # ADR-0037 S1 — link the shim .o, import its clean header as the Swift bridging
@@ -76,8 +79,8 @@ echo "==> Compiling app"
 swiftc -O -target "$TARGET" \
     -framework AppKit -framework Foundation -framework ServiceManagement -framework IOKit \
     -framework CoreGraphics \
-    -import-objc-header "$ROOT/Sources/ElectronicClamApp/VirtualDisplayShim.h" \
-    -o "$MACOS_DIR/ElectronicClam" \
+    -import-objc-header "$ROOT/Sources/ArgusApp/VirtualDisplayShim.h" \
+    -o "$MACOS_DIR/Argus" \
     "${APP_SRC[@]}" "${SHARED_SRC[@]}" \
     "$VD_SHIM_O"
 # 링크 완료 — 중간 .o 는 이미 앱 바이너리에 링크됐으므로 제거한다. 산출물 폴더
@@ -86,8 +89,8 @@ rm -f "$VD_SHIM_O"
 
 echo "==> Assembling bundle"
 cp "$ROOT/Resources/App-Info.plist" "$APP/Contents/Info.plist"
-cp "$ROOT/Resources/com.jadhvank.eclam.helper.plist" \
-    "$LD_DIR/com.jadhvank.eclam.helper.plist"
+cp "$ROOT/Resources/com.kairong.argus.helper.plist" \
+    "$LD_DIR/com.kairong.argus.helper.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # Menu bar status glyphs (clam art): 3 states (off/bolt/remote) x 2 themes
@@ -129,22 +132,22 @@ fi
 # Info.plist) otherwise get an ad-hoc identifier with a content-derived hash
 # suffix that changes every rebuild, drifting the daemon's Designated Requirement
 # and tripping the SMAppService LWCR on upgrade (Quinn/DTS guidance). The helper
-# identifier must match its LaunchDaemon Label (com.jadhvank.eclam.helper).
+# identifier must match its LaunchDaemon Label (com.kairong.argus.helper).
 echo "==> Codesigning daemon (ADR-0002 §7 order) — $SIGN_ID"
 codesign --force --sign "$SIGN_ID" ${TS_FLAG[@]+"${TS_FLAG[@]}"} \
-    --identifier com.jadhvank.eclam.helper --options runtime \
-    "$MACOS_DIR/ElectronicClamHelper"
+    --identifier com.kairong.argus.helper --options runtime \
+    "$MACOS_DIR/ArgusHelper"
 
 echo "==> Codesigning hook trampoline"
 codesign --force --sign "$SIGN_ID" ${TS_FLAG[@]+"${TS_FLAG[@]}"} \
-    --identifier com.jadhvank.eclam.hook --options runtime \
-    "$MACOS_DIR/eclam-hook"
+    --identifier com.kairong.argus.hook --options runtime \
+    "$MACOS_DIR/argus-hook"
 
 # Seal the bundle WITHOUT --deep: a deep re-sign would re-sign the helper/hook
 # above with default (hash-suffixed) identifiers, undoing the pinning. Signing
-# the bundle non-deep signs the main executable (it inherits com.jadhvank.eclam
+# the bundle non-deep signs the main executable (it inherits com.kairong.argus
 # from Info.plist) and seals the already-signed nested binaries as-is. ADR-0020.
-echo "==> Sealing app bundle (main exe = com.jadhvank.eclam, nested ids preserved)"
+echo "==> Sealing app bundle (main exe = com.kairong.argus, nested ids preserved)"
 codesign --force --sign "$SIGN_ID" ${TS_FLAG[@]+"${TS_FLAG[@]}"} --options runtime "$APP"
 
 echo "==> Verifying signature"

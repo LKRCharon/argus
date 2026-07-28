@@ -21,7 +21,7 @@ trap 'rm -rf "$TMP"' EXIT
 echo "==> Compiling policy tests"
 swiftc -target "$TARGET" \
     -o "$TMP/eclam_policytests" \
-    "$ROOT/Sources/ElectronicClamApp/SafetyPolicy.swift" \
+    "$ROOT/Sources/ArgusApp/SafetyPolicy.swift" \
     "$ROOT/Tests/PolicyTests.swift"
 echo "==> Running policy tests"
 "$TMP/eclam_policytests"
@@ -49,7 +49,7 @@ if [ -f "$ROOT/Tests/HelperCallerIdentityTests.swift" ]; then
     swiftc -target "$TARGET" \
         -framework Foundation -framework Security \
         -o "$TMP/eclam_calleridtests" \
-        "$ROOT/Sources/ElectronicClamHelper/HelperCallerIdentity.swift" \
+        "$ROOT/Sources/ArgusHelper/HelperCallerIdentity.swift" \
         "$ROOT/Tests/HelperCallerIdentityTests.swift"
     echo "==> Running helper caller identity tests"
     "$TMP/eclam_calleridtests"
@@ -63,7 +63,7 @@ if [ -f "$ROOT/Tests/PathingTests.swift" ]; then
     echo "==> Compiling pathing tests"
     swiftc -target "$TARGET" \
         -o "$TMP/eclam_pathingtests" \
-        "$ROOT/Sources/ElectronicClamApp/ClaudeWorkspacePathing.swift" \
+        "$ROOT/Sources/ArgusApp/ClaudeWorkspacePathing.swift" \
         "$ROOT/Tests/PathingTests.swift"
     echo "==> Running pathing tests"
     "$TMP/eclam_pathingtests"
@@ -92,8 +92,8 @@ if [ -f "$ROOT/Tests/WeeklySummaryTests.swift" ]; then
     swiftc -target "$TARGET" \
         -framework Foundation \
         -o "$TMP/eclam_weeklysummarytests" \
-        "$ROOT/Sources/ElectronicClamApp/SafetyPolicy.swift" \
-        "$ROOT/Sources/ElectronicClamApp/AwakeEpisode.swift" \
+        "$ROOT/Sources/ArgusApp/SafetyPolicy.swift" \
+        "$ROOT/Sources/ArgusApp/AwakeEpisode.swift" \
         "$ROOT/Tests/WeeklySummaryTests.swift"
     echo "==> Running weekly summary tests"
     "$TMP/eclam_weeklysummarytests"
@@ -109,7 +109,7 @@ if [ -f "$ROOT/Tests/HookConfigEditingTests.swift" ]; then
     swiftc -target "$TARGET" \
         -framework Foundation \
         -o "$TMP/eclam_hookconfigtests" \
-        "$ROOT/Sources/ElectronicClamApp/HookConfigEditing.swift" \
+        "$ROOT/Sources/ArgusApp/HookConfigEditing.swift" \
         "$ROOT/Tests/HookConfigEditingTests.swift"
     echo "==> Running hook config editing tests"
     "$TMP/eclam_hookconfigtests"
@@ -125,7 +125,7 @@ if [ -f "$ROOT/Tests/AgentActivityTests.swift" ]; then
     swiftc -target "$TARGET" \
         -framework Foundation \
         -o "$TMP/eclam_agentactivitytests" \
-        "$ROOT/Sources/ElectronicClamApp/AgentActivity.swift" \
+        "$ROOT/Sources/ArgusApp/AgentActivity.swift" \
         "$ROOT/Tests/AgentActivityTests.swift"
     echo "==> Running agent activity tests"
     "$TMP/eclam_agentactivitytests"
@@ -141,7 +141,7 @@ if [ -f "$ROOT/Tests/ClaudeRemoteDetectTests.swift" ]; then
     swiftc -target "$TARGET" \
         -framework Foundation \
         -o "$TMP/eclam_clauderemotetests" \
-        "$ROOT/Sources/ElectronicClamApp/ClaudeRemoteDetect.swift" \
+        "$ROOT/Sources/ArgusApp/ClaudeRemoteDetect.swift" \
         "$ROOT/Tests/ClaudeRemoteDetectTests.swift"
     echo "==> Running claude remote detect tests"
     "$TMP/eclam_clauderemotetests"
@@ -156,7 +156,7 @@ if [ -f "$ROOT/Tests/CodexRemoteDetectTests.swift" ]; then
     swiftc -target "$TARGET" \
         -framework Foundation \
         -o "$TMP/eclam_codexremotetests" \
-        "$ROOT/Sources/ElectronicClamApp/CodexRemoteDetect.swift" \
+        "$ROOT/Sources/ArgusApp/CodexRemoteDetect.swift" \
         "$ROOT/Tests/CodexRemoteDetectTests.swift"
     echo "==> Running codex remote detect tests"
     "$TMP/eclam_codexremotetests"
@@ -171,9 +171,9 @@ if [ -f "$ROOT/Tests/TelegramSupportTests.swift" ]; then
     swiftc -target "$TARGET" \
         -framework Foundation \
         -o "$TMP/eclam_telegramtests" \
-        "$ROOT/Sources/ElectronicClamApp/SafetyPolicy.swift" \
-        "$ROOT/Sources/ElectronicClamApp/AwakeEpisode.swift" \
-        "$ROOT/Sources/ElectronicClamApp/TelegramSupport.swift" \
+        "$ROOT/Sources/ArgusApp/SafetyPolicy.swift" \
+        "$ROOT/Sources/ArgusApp/AwakeEpisode.swift" \
+        "$ROOT/Sources/ArgusApp/TelegramSupport.swift" \
         "$ROOT/Tests/TelegramSupportTests.swift"
     echo "==> Running telegram support tests"
     "$TMP/eclam_telegramtests"
@@ -236,8 +236,8 @@ if [ -f "$ROOT/Tests/LaunchctlInspectTests.swift" ]; then
     swiftc -target "$TARGET" \
         -framework Foundation \
         -o "$TMP/eclam_launchctlinspecttests" \
-        "$ROOT/Sources/ElectronicClamApp/LaunchctlInspect.swift" \
-        "$ROOT/Sources/ElectronicClamApp/Subprocess.swift" \
+        "$ROOT/Sources/ArgusApp/LaunchctlInspect.swift" \
+        "$ROOT/Sources/ArgusApp/Subprocess.swift" \
         "$ROOT/Tests/LaunchctlInspectTests.swift"
     echo "==> Running launchctl inspect tests"
     "$TMP/eclam_launchctlinspecttests"
