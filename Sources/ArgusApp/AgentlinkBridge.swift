@@ -28,6 +28,21 @@ final class AgentlinkBridge {
     /// Whether the daemon is currently running.
     var isRunning: Bool { process?.isRunning ?? false }
 
+    /// Persisted "user wants sync on" flag — the daemon is restarted at launch
+    /// when this is set, so the Qoder approval hook always has a listener.
+    private static let autoStartKey = "AgentlinkAutoStart"
+    static var autoStartEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: autoStartKey) }
+        set { UserDefaults.standard.set(newValue, forKey: autoStartKey) }
+    }
+
+    /// True once the user asked for sync and until they stop it; drives the
+    /// crash-restart watchdog (a daemon that dies on its own comes back).
+    private var wantRunning = false
+    /// Backoff for repeated crash restarts, so a permanently broken setup does
+    /// not spawn a process every second.
+    private var restartDelay: TimeInterval = 2
+
     init() {
         relayURL = UserDefaults.standard.string(forKey: "AgentlinkRelayURL") ?? "wss://relay.limen.codes/ws"
     }
@@ -106,6 +121,8 @@ final class AgentlinkBridge {
             onStateChange?()
             return
         }
+        wantRunning = true
+        AgentlinkBridge.autoStartEnabled = true
         let p = AgentlinkBridge.makeDaemonProcess(arguments: ["watch"], relayURL: relayURL)
 
         let pipe = Pipe()
@@ -129,9 +146,14 @@ final class AgentlinkBridge {
         p.terminationHandler = { [weak self] proc in
             self?.log.notice("daemon exited (code \(proc.terminationStatus))")
             DispatchQueue.main.async {
-                self?.connectionState = "disconnected"
-                self?.process = nil
-                self?.onStateChange?()
+                guard let self = self else { return }
+                self.connectionState = "disconnected"
+                self.process = nil
+                self.onStateChange?()
+                // The daemon exits on relay drop by design, and the Qoder
+                // approval hook needs a listener on 9876 whenever the IDE is
+                // up — bring it back unless the user asked for it to stop.
+                if self.wantRunning { self.scheduleRestart() }
             }
         }
 
@@ -143,18 +165,57 @@ final class AgentlinkBridge {
             // A successful start invalidates whatever failed before — without
             // this the old message stayed on screen forever.
             lastError = nil
+            restartDelay = 2
             log.info("daemon started (pid \(p.processIdentifier))")
             onStateChange?()
         } catch {
             log.error("failed to start daemon: \(error.localizedDescription, privacy: .public)")
             lastError = "Failed to start: \(error.localizedDescription)"
             onStateChange?()
+            if wantRunning { scheduleRestart() }
         }
+    }
+
+    /// Restart after a growing delay (2s → 60s cap). Cancels any pending one.
+    private func scheduleRestart() {
+        watchdogTimer?.cancel()
+        let delay = restartDelay
+        restartDelay = min(restartDelay * 2, 60)
+        log.notice("daemon restart scheduled in \(delay, privacy: .public)s")
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + delay)
+        timer.setEventHandler { [weak self] in
+            guard let self = self, self.wantRunning, !self.isRunning else { return }
+            self.start()
+        }
+        timer.resume()
+        watchdogTimer = timer
+    }
+
+    /// Launch-time restore: bring the daemon back when the user had sync on.
+    /// Called from AppDelegate so the approval hook is never left unanswered.
+    func startIfPreviouslyRunning() {
+        guard AgentlinkBridge.autoStartEnabled, !isRunning else { return }
+        guard AgentlinkBridge.preflightError() == nil else {
+            log.notice("auto-start skipped: agentlink prerequisites missing")
+            return
+        }
+        log.info("auto-starting agentlink daemon (was running last session)")
+        start()
     }
 
     /// Stop the daemon process.
     func stop() {
-        guard let p = process, p.isRunning else { return }
+        // Explicit stop: no restart, and no auto-start next launch.
+        wantRunning = false
+        AgentlinkBridge.autoStartEnabled = false
+        watchdogTimer?.cancel()
+        watchdogTimer = nil
+        guard let p = process, p.isRunning else {
+            connectionState = "disconnected"
+            onStateChange?()
+            return
+        }
         p.terminate()
         // Give it 2s to clean up, then SIGKILL
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak self] in
@@ -163,6 +224,25 @@ final class AgentlinkBridge {
         }
         connectionState = "disconnected"
         onStateChange?()
+    }
+
+    /// Quit-time teardown: kill the daemon without clearing the auto-start
+    /// preference, so sync comes back on the next launch. An orphaned watch
+    /// process would hold the relay channel slot and make the next one fail.
+    func shutdownForQuit() {
+        wantRunning = false
+        watchdogTimer?.cancel()
+        watchdogTimer = nil
+        guard let p = process, p.isRunning else { return }
+        p.terminate()
+        // Brief synchronous wait: the process must be gone before we exit, or
+        // it survives us and keeps the channel occupied.
+        let deadline = Date().addingTimeInterval(1.0)
+        while p.isRunning && Date() < deadline {
+            usleep(50_000)
+        }
+        if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+        process = nil
     }
 
     private func handleStructuredOutput(_ output: AgentlinkDaemonOutput) {

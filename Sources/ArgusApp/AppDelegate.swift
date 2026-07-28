@@ -259,8 +259,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { UpdateChecker.checkInBackgroundIfDue() }
 
         // Remote sync bridge. Constructed eagerly (the Sync pane holds a
-        // reference) but it does not spawn the daemon until the user starts it.
-        self.agentlinkBridge = AgentlinkBridge()
+        // reference); it re-spawns the daemon at launch only when the user had
+        // sync running before, so the Qoder approval hook always has a listener
+        // on 9876 instead of a dead port.
+        let syncBridge = AgentlinkBridge()
+        self.agentlinkBridge = syncBridge
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            syncBridge.startIfPreviouslyRunning()
+        }
 
         // Layout debugging: `Argus --open-settings <index>` opens the settings
         // window at launch, so the panes' constraints can be exercised without
@@ -296,6 +302,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingActiveAgentsPush = nil
         // ADR-0013 — close the ongoing awake episode as `appQuit` and flush to disk.
         history.noteAppQuit()
+        // Kill the agentlink daemon rather than orphaning it: a leftover watch
+        // process keeps the relay channel slot, so the next launch would fail
+        // with "channel full". `autoStartEnabled` is untouched, so quitting with
+        // sync on still brings it back next launch.
+        agentlinkBridge?.shutdownForQuit()
         // Synchronous restore, 200ms per attempt, ≤2 attempts (ADR-0002 §8
         // path 1; retry covers a stale/nil XPC connection at quit).
         bridge?.shutdownAndRestore(timeout: 0.2)
