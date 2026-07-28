@@ -209,11 +209,14 @@ Not fixed, deliberately deferred — do not "discover" these again from scratch.
   mid-transition, and `manualOverrideOff` (not persisted) makes the header claim
   a state the assertion does not hold. `argus status` is the source of truth
   while debugging. A clean relaunch clears it.
+- The phone-approval path is wired but **unexercised**: this machine runs Qoder
+  with full permissions, so the IDE never emits `PermissionRequest` at all. A
+  hook that never fires is not evidence of a broken hook. Verifying it means
+  first switching Qoder back to a mode that asks. What *was* verified: an
+  unreachable hook does not block the IDE, so leaving the config registered is
+  harmless.
 - Codex approvals never reach the phone: the hook path is Qoder-only, and Codex
   has no HTTP hooks — it needs the app-server route.
-- Whether Qoder blocks or fails open when a `PermissionRequest` hook cannot be
-  reached is unverified. Rollback if the IDE hangs:
-  `cp ~/.argus-backup/qoder-settings.before-hook.json ~/.qoder/settings.json`.
 
 ---
 
