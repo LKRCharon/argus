@@ -483,3 +483,4 @@
 "inject.err.notRunning" = "Qoder is not running on this Mac";
 "inject.err.noPermission" = "Argus needs Accessibility permission to type into Qoder (System Settings → Privacy & Security → Accessibility)";
 "inject.err.noQuestWindow" = "Qoder's Quest window could not be brought forward";
+"inject.err.notFrontmost" = "Qoder did not come to the front, so the message was not typed (try again with Qoder visible)";

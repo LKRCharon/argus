@@ -267,18 +267,141 @@ unsteerable and uninterruptible.
 
 ---
 
+# Hard-won lessons
+
+Each of these cost real debugging time or shipped a broken behaviour. They are
+not general programming advice — every line is something this codebase got wrong.
+
+## Cross-repo contracts
+
+These must be changed in lockstep or the phone silently drops data.
+
+**Channel message kinds.** Adding or renaming a kind means editing three places:
+`serve.ts` (send/receive), `RelayClient.kt` (`when` branch *and* a sender), and
+this list. A kind that only one side knows about is a bug, not a feature flag.
+
+- daemon → phone: `agent-event`, `input-ack`, `permission-request`,
+  `session-list`, `codex-thread-list`, `codex-resumed`, `codex-event`,
+  `codex-error`, `cloud-session-url`
+- phone → daemon: `user-input`, `permission-response`, `list-sessions`,
+  `new-session`, `remote-control`, `cloud-session`, `codex-threads`,
+  `codex-resume`, `codex-input`, `codex-interrupt`
+
+**`agent-event.event` type enum — the phone renders nothing else:**
+`text{text}`, `user-text{text}`, `thinking{text}`, `tool-call{name, summary}`,
+`tool-result{name, summary}`, `turn-done{reason}`, `error{message}`.
+Every producer (transcript normaliser, ACP mapping, any future agent) must emit
+exactly these. Inventing synonyms (`agent-text`, `tool-use`) made an entire
+feature look implemented while the phone discarded every reply. Error text lives
+in `message`, not `text`.
+
+**Session id per agent:**
+- Qoder IDE task: transcript basename minus `.jsonl`
+- Qoder ACP: the uuid from `session/new`
+- Codex: **the app-server threadId, i.e. the trailing uuid of
+  `rollout-<timestamp>-<threadId>.jsonl`** — never the whole basename. Using the
+  basename gave every Codex session two ids: two cards on the phone, and the one
+  with the content could not accept input because `thread/resume` rejects it.
+
+**requestId prefixes route approvals:** `hook-` / `acp-` / `codex-`. A new
+approval source needs a new prefix. `optionId` is passed through untouched by the
+phone — hook and Codex use `allow`/`deny`, ACP uses its native
+`proceed_once`/`proceed_always`/`cancel`.
+
+**Codex turn state:** daemon's `activeTurns` cleanup set and the phone's
+"mark done" set must match: `turn/completed`, `turn/aborted`, `turn/failed`.
+A turn interrupted on the desktop ends as `aborted`, and a stale id wedges every
+later message into a steer that cannot succeed.
+
+---
+
+## macOS (Swift/AppKit)
+
+- `scripts/build.sh` passes no `-swift-version`, so Swift 6.3 compiles in **Swift 5
+  mode with data-race diagnostics off**. Compiling clean says nothing about
+  concurrency safety.
+- Before touching `self.process`, check `proc === self.process`. On a quick
+  stop→start the old process exits *after* the new one is stored; clearing
+  unconditionally orphans the new daemon and spawns a third.
+- The `asyncAfter` SIGKILL fallback in `stop()` needs its own identity check — it
+  does not go through `terminationHandler`, so fixing one does not fix the other.
+- `FileHandle.readabilityHandler` must be set to nil on EOF (empty data), or the
+  handler and everything it captured survive every daemon restart.
+- `NSPasteboard.general` is "one thread at a time" (Apple's Thread Safety
+  Summary). The injection queue and any UI copy button must not touch it
+  concurrently.
+- macOS 14 activation is **cooperative**: `activate()` is a request the system may
+  refuse. Verify `frontmostApplication` before posting CGEvents, or the keystrokes
+  land in whatever app is actually in front — pasting a prompt into a terminal and
+  pressing Return.
+- Convergence logic that does not need the helper must run **before**
+  `guard case .enabled = store.registration`. On a machine without an approved
+  helper, everything after that guard never executes — which is how
+  `manualOverrideOff` could never clear itself.
+- `registerIfNeeded` blocks up to ~16s on its `.enabled` path (2×3s XPC probe +
+  10s re-register loop). Never call helper setup from the launch main thread.
+- `Process.launchPath` / `launch()` are deprecated (macOS 27). Use
+  `executableURL` + `run()`.
+
+## Android (Kotlin/Compose)
+
+- `EncryptedFile.openFileOutput()` throws if the file exists. Write `.tmp` then
+  `renameTo`; delete-then-write loses the whole cache if it dies mid-write.
+- `security-crypto` is fully deprecated by Google (1.1.0 is the last release).
+  Do not build new persistence on `EncryptedFile` / `EncryptedSharedPreferences`.
+- `EncryptedSharedPreferences.create` throws on a restored device — the Keystore
+  key does not travel with a backup. Guard it and keep `allowBackup="false"`, or
+  the app crash-loops after a phone migration.
+- Debounced disk writes that reset on every event never fire during a burst,
+  which is exactly when the data matters. Always pair a debounce with a maximum
+  delay.
+- `clientSeq` / `relayClient` are read and written by the main thread, IO
+  coroutines and the OkHttp reader. Do not extend the reconnect logic without
+  making that access single-threaded.
+- Kotlin 2.0.20+ enables strong skipping, which compares unstable params by
+  `===`. Returning a fresh `List` with identical contents from a hot path (e.g.
+  `buildFeed`) defeats it and recomposes everything downstream.
+- `LazyColumn` without stable keys: the 500-event cap shifts indices, and
+  `remember`ed expand state migrates to a different card.
+- `RelayClient.send*` returns silently when `chan == null`. Messages sent during a
+  reconnect vanish while the echo bubble spins forever.
+- Overlays render inside `MainSheet` only, so setting `overlay` while the detail
+  screen is open does nothing visible until the user navigates back.
+
+## agentlink (TypeScript/Bun)
+
+- Every async producer must send through the one serialising chain. Sealing is
+  async, so parallel sends deliver streamed text out of order — the chain
+  originally covered only the transcript path.
+- Caching a client instance across a socket close means every later call fails
+  forever. Re-run `start()` (it is a no-op while connected) instead of returning
+  the cached object.
+- `readFileSync` then slicing reads the *whole* file first. 313 transcripts /
+  460MB were read synchronously on every list refresh; `openSync` + `readSync` of
+  the first 256KB plus an mtime-keyed title cache took it from ~100ms to ~5ms.
+- ACP: each session is a live child process. Cap the pool, drop entries when the
+  agent exits, and kill them all in `stop()`.
+- ACP: a session whose agent has died must be refused explicitly. Falling through
+  to keystroke injection runs the prompt in whatever conversation the IDE has
+  open, and reports success.
+- An `initialize` timeout leaves a live process behind a permanently rejected
+  `ready` promise. Kill the process on failure so the caller can retry.
+
+---
+
 # Known issues
 
 Not fixed, deliberately deferred — do not "discover" these again from scratch.
 
 - **Menu header text and the Keep Mac Awake checkmark can disagree with the
   real keep-awake state** (observed 2026-07-28 while exercising the manual
-  toggle). `enabledHeader()` and `toggle.state` are derived from
-  `store.manualToggle` / `store.shouldKeepAwake`, while the assertion is owned
-  by `ActivityAssertion` after `convergeNow()` — the three can drift apart
-  mid-transition, and `manualOverrideOff` (not persisted) makes the header claim
-  a state the assertion does not hold. `argus status` is the source of truth
-  while debugging. A clean relaunch clears it.
+  toggle). Half of this is now fixed: the `manualOverrideOff` auto-clear ran
+  after the helper guard, so on a machine without an approved helper it never
+  cleared at all. What remains is presentational — `enabledHeader()` and
+  `toggle.state` derive from store fields while the assertion is owned by
+  `ActivityAssertion`, so the three can still read differently mid-transition,
+  and `manualOverrideOff` is not persisted across a relaunch. `argus status` is
+  the source of truth while debugging.
 - The phone-approval path is wired but **unexercised**: this machine runs Qoder
   with full permissions, so the IDE never emits `PermissionRequest` at all. A
   hook that never fires is not evidence of a broken hook. Verifying it means

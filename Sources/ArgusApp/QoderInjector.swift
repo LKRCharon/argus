@@ -22,6 +22,7 @@ enum QoderInjector {
         case notRunning
         case noAccessibilityPermission
         case questWindowUnavailable
+        case activationRefused
 
         var errorDescription: String? {
             switch self {
@@ -32,6 +33,9 @@ enum QoderInjector {
                            "Argus needs Accessibility permission to type into Qoder (System Settings → Privacy & Security → Accessibility)")
             case .questWindowUnavailable:
                 return NSL("inject.err.noQuestWindow", "Qoder's Quest window could not be brought forward")
+            case .activationRefused:
+                return NSL("inject.err.notFrontmost",
+                           "Qoder did not come to the front, so the message was not typed (try again with Qoder visible)")
             }
         }
     }
@@ -81,6 +85,16 @@ enum QoderInjector {
         // Activation and the window coming forward are both async; without a
         // settle window the keystrokes land in whatever was focused before.
         usleep(700_000)
+
+        // macOS 14 made activation cooperative: `activate()` is a request the
+        // system may refuse (AppKit release notes for macOS 14). Without this
+        // check a refused activation means Cmd+V and Return go to whatever app
+        // is actually frontmost — pasting an agent prompt into a terminal or a
+        // chat window and pressing Return.
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+            log.error("injection aborted: Qoder did not come to the front")
+            throw Failure.activationRefused
+        }
 
         let pasteboard = NSPasteboard.general
         // `changeCount` guards the restore below: the user can copy something

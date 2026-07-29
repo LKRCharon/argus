@@ -481,3 +481,4 @@
 "inject.err.notRunning" = "这台 Mac 上没有运行 Qoder";
 "inject.err.noPermission" = "Argus 需要辅助功能权限才能向 Qoder 输入（系统设置 → 隐私与安全性 → 辅助功能）";
 "inject.err.noQuestWindow" = "无法唤出 Qoder 的 Quest 窗口";
+"inject.err.notFrontmost" = "Qoder 没有回到前台，消息未输入（请让 Qoder 可见后重试）";

@@ -147,6 +147,13 @@ final class AgentlinkBridge {
             self?.log.notice("daemon exited (code \(proc.terminationStatus))")
             DispatchQueue.main.async {
                 guard let self = self else { return }
+                // Identity check: on a quick stop->start the old process exits
+                // *after* the new one is stored, and clearing unconditionally
+                // orphaned the new daemon and then spawned a third.
+                guard proc === self.process else {
+                    self.log.info("ignoring exit of a superseded daemon")
+                    return
+                }
                 self.connectionState = "disconnected"
                 self.process = nil
                 self.onStateChange?()
@@ -216,11 +223,19 @@ final class AgentlinkBridge {
             onStateChange?()
             return
         }
+        let dying = p
         p.terminate()
         // Give it 2s to clean up, then SIGKILL
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak self] in
-            if p.isRunning { kill(p.processIdentifier, SIGKILL) }
-            DispatchQueue.main.async { self?.process = nil }
+            if dying.isRunning { kill(dying.processIdentifier, SIGKILL) }
+            DispatchQueue.main.async {
+                // Same identity check as terminationHandler, and it needs its own:
+                // this block does not go through that handler, so fixing one does
+                // not fix the other. Restarting within 2s would otherwise have its
+                // process reference wiped by this late cleanup.
+                guard let self = self, dying === self.process else { return }
+                self.process = nil
+            }
         }
         connectionState = "disconnected"
         onStateChange?()

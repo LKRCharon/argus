@@ -481,3 +481,4 @@
 "inject.err.notRunning" = "この Mac で Qoder が起動していません";
 "inject.err.noPermission" = "Qoder に入力するにはアクセシビリティ権限が必要です（システム設定 → プライバシーとセキュリティ → アクセシビリティ）";
 "inject.err.noQuestWindow" = "Qoder の Quest ウインドウを前面に出せませんでした";
+"inject.err.notFrontmost" = "Qoder が前面に来なかったため入力されませんでした（Qoder を表示してから再試行）";

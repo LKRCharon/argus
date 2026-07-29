@@ -444,6 +444,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // state: detection and the user-level assertion do not need the daemon.
         detector?.setTraces(store.tracesToWatch())
 
+        // ADR-0010/0014 — `manualOverrideOff` suppresses the *current* auto
+        // signals (agent/remote) the user just clicked away. Once those have all
+        // cleared it has nothing left to suppress, so clear it (per its contract,
+        // StateStore.swift) and let future activity wake the Mac again.
+        //
+        // This must run *before* reading `shouldKeepAwake` and before the helper
+        // guard below: the user-level assertion does not need the helper, so on a
+        // machine without an approved helper everything after the guard never
+        // executes — the override would then never clear and agent activity could
+        // never wake the Mac again until relaunch.
+        if store.manualOverrideOff && !store.manualToggle
+            && store.activeAgents.isEmpty
+            && !(store.remoteCountsAsActivity && store.remoteActive) {
+            store.setManualOverrideOff(false)
+        }
+
         // Primary keep-awake path: user-level ProcessInfo activity. Always applied,
         // even when the privileged helper is unavailable (ad-hoc builds, pending
         // approval). The helper, when reachable, additionally flips the system-wide
@@ -458,16 +474,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The rest of convergence writes to the privileged helper; skip when it is
         // not reachable (the assertion above already holds sleep open).
         guard case .enabled = store.registration else { return }
-
-        // ADR-0010/0014 — `manualOverrideOff` suppresses the *current* auto
-        // signals (agent/remote) the user just clicked away. Once those have all
-        // cleared it has nothing left to suppress, so clear it (per its contract,
-        // StateStore.swift) and let future activity wake the Mac again.
-        if store.manualOverrideOff && !store.manualToggle
-            && store.activeAgents.isEmpty
-            && !(store.remoteCountsAsActivity && store.remoteActive) {
-            store.setManualOverrideOff(false)
-        }
 
         let target = store.shouldKeepAwake
         // heartbeat 게이트 미러를 매 수렴마다 갱신 — helper watchdog 무장 조건
