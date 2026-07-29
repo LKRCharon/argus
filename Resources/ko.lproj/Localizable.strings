@@ -481,3 +481,4 @@
 "inject.err.noPermission" = "Qoder에 입력하려면 손쉬운 사용 권한이 필요합니다 (시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용)";
 "inject.err.noQuestWindow" = "Qoder의 Quest 창을 앞으로 가져올 수 없습니다";
 "inject.err.notFrontmost" = "Qoder가 앞으로 나오지 않아 입력되지 않았습니다 (Qoder를 표시한 뒤 다시 시도)";
+"inject.ok" = "Qoder에 입력했습니다";

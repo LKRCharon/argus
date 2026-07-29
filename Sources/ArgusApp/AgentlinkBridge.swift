@@ -264,10 +264,12 @@ final class AgentlinkBridge {
     /// Sync pane shows it) instead of vanishing — a silent no-op here would look
     /// exactly like a delivered message. The injector runs on its own serial
     /// queue, so this returns straight away.
-    private func injectIntoIDE(_ text: String) {
+    private func injectIntoIDE(_ text: String, session: String) {
         guard QoderInjector.isQoderRunning else {
             log.notice("injection skipped: Qoder not running")
-            lastError = QoderInjector.Failure.notRunning.localizedDescription
+            let message = QoderInjector.Failure.notRunning.localizedDescription
+            lastError = message
+            reportInjection(session: session, ok: false, note: message)
             onStateChange?()
             return
         }
@@ -276,11 +278,31 @@ final class AgentlinkBridge {
             if let error = error {
                 self.log.error("injection failed: \(error.localizedDescription, privacy: .public)")
                 self.lastError = error.localizedDescription
+                self.reportInjection(session: session, ok: false, note: error.localizedDescription)
             } else {
                 self.lastError = nil
+                self.reportInjection(session: session, ok: true, note: NSL("inject.ok", "Typed into Qoder"))
             }
             self.onStateChange?()
         }
+    }
+
+    /// Tell the daemon what actually happened, so it can correct the phone's
+    /// provisional "typing…" acknowledgement. Without this a failed injection
+    /// looked like a delivered message on the phone.
+    private func reportInjection(session: String, ok: Bool, note: String) {
+        guard !session.isEmpty, !hookSecret.isEmpty,
+              let url = URL(string: "http://127.0.0.1:\(hookPort)/inject-result") else { return }
+        let secret = hookSecret
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 3
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(secret, forHTTPHeaderField: "X-Agentlink-Secret")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "sessionId": session, "ok": ok, "note": note,
+        ])
+        URLSession.shared.dataTask(with: req).resume()
     }
 
     private func handleStructuredOutput(_ output: AgentlinkDaemonOutput) {
@@ -302,7 +324,7 @@ final class AgentlinkBridge {
                 // injection is the only way into the conversation the user is
                 // actually looking at.
                 if let text = output.text, !text.isEmpty {
-                    self.injectIntoIDE(text)
+                    self.injectIntoIDE(text, session: output.session ?? "")
                 }
             default:
                 break

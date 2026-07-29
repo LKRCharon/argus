@@ -368,6 +368,18 @@ later message into a steer that cannot succeed.
 - Overlays render inside `MainSheet` only, so setting `overlay` while the detail
   screen is open does nothing visible until the user navigates back.
 
+## relay
+
+- Buffered frames must record **which side** queued them. Draining the buffer to
+  whoever joins next hands a reconnecting client its own backlog, and since
+  delivery empties the buffer, the real recipient never sees it.
+- Neither object identity nor IP identifies a side: a reconnect is a new object,
+  and both peers are 127.0.0.1 in tests / share an address behind one NAT. Assign
+  a free slot on join and release it on close.
+- `join-chan` needs the same rate limit as `join-pair`, and the sweep must delete
+  empty channels — otherwise any client can mint unbounded permanent `Chan`
+  objects with random tokens.
+
 ## agentlink (TypeScript/Bun)
 
 - Every async producer must send through the one serialising chain. Sealing is
