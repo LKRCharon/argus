@@ -354,10 +354,20 @@ later message into a steer that cannot succeed.
   overwrite, which is what forced the old delete-then-write dance, and an
   interrupted write left a truncated file that fails to decrypt and gets deleted
   — losing everything.
-- Changing this layer requires the instrumented tests
-  (`./gradlew connectedDebugAndroidTest`): `AndroidKeyStore` has no JVM
+- Run instrumented tests with `scripts/test-device.sh`, never
+  `./gradlew connectedDebugAndroidTest`. The Gradle task **uninstalls the app**
+  when it finishes and AGP offers no way to disable it (issuetracker 37077961),
+  which wipes the device identity and every pairing — running the tests used to
+  silently cost a re-pair each time. The script installs both APKs and drives
+  `am instrument` directly, leaving the data alone.
+- Changing this layer requires those tests: `AndroidKeyStore` has no JVM
   implementation, so a unit test only proves it compiles, and a mistake here
   silently costs the user their identity and pairings.
+- Overwrite-installing (`adb install -r`) does **not** clear app data; only an
+  uninstall does. If a reinstall appears to lose the pairing, something is
+  uninstalling — do not go looking for a storage location that survives
+  uninstalls, because on Android there isn't one worth using (external storage
+  would put the identity key where other apps can read it).
 - `EncryptedSharedPreferences.create` throws on a restored device — the Keystore
   key does not travel with a backup. Guard it and keep `allowBackup="false"`, or
   the app crash-loops after a phone migration.
