@@ -197,6 +197,60 @@ a bypass around the user's own confirmation dialog. Observe with `{}` instead.
 
 ---
 
+## Why the two agents are driven differently
+
+The phone reaches Codex and Qoder through completely different mechanisms. This
+is forced by their architectures, not a matter of taste — both were established
+by probing the real binaries (2026-07-29).
+
+| | Codex | Qoder |
+|---|---|---|
+| Core service | `app-server` — **owns** the sessions, `--listen ws://IP:PORT` exposes them | `qoder-ide-server` — the **IDE** serves, the CLI connects to it (`getIdeServerHost` → 127.0.0.1) |
+| Session ownership | The server holds threads; any client can `thread/resume` one | The IDE process owns them |
+| Protocol | 141 JSON-RPC client methods; `app-server generate-json-schema --out DIR` dumps them | No session protocol; the IDE server only shares editor context |
+| Phone route | Speak app-server directly (list / resume / turn / approvals) | Keystroke injection — the only way in |
+| Mid-turn control | `turn/steer`, `turn/interrupt` | Not possible; injection cannot reach a running turn |
+
+Both CLIs advertise near-identical commands (`remote-control`, `--teleport`,
+`--remote-session`, `--remote`), which makes them look equivalent. They are not.
+Qoder's CLI is a Gemini CLI fork (`GEMINI_CLI`, `gemini-ide-server`,
+`geminiignore` all appear in the binary) and inherits Gemini's IDE-companion
+model: the editor feeds context to the CLI, it does not host shareable sessions.
+
+### Codex app-server specifics
+
+- **`thread/list` needs `sourceKinds`.** Omitted, it returns only "interactive
+  sources" and answers with zero rows on a machine full of sessions. Pass
+  `["cli", "vscode", "exec", "appServer"]`.
+- **The Codex desktop app tags its threads `vscode`, not `appServer`.** The app
+  (`/Applications/ChatGPT.app`, bundle id `com.openai.codex`) is a VS Code shell:
+  app-server's userAgent carries `vscode/1.106.3` even for a hand-rolled probe,
+  and the app ships a `codex_vscode_copilot` originator for the real extension.
+  Accurate data — do not filter it out as noise.
+- Originator is two-layered: `Codex Desktop` towards the ChatGPT backend,
+  `vscode` towards the local app-server, switched by
+  `CODEX_INTERNAL_ORIGINATOR_OVERRIDE`.
+- The app bundles its own binary at `Contents/Resources/codex` (0.146.0-alpha),
+  usually newer than an npm-installed CLI. Prefer it.
+- `codex remote-control start` is **not** the way in: it demands a standalone
+  install at `~/.codex/packages/standalone/current/codex`, and the feature is
+  gated server-side (`isEligible` / `reason` come back over a heartbeat, so most
+  accounts see `remoteControl/status/changed: disabled`). `app-server --listen`
+  needs neither, which is why Argus drives that instead.
+- Approvals arrive as server→client **requests** (`item/*/requestApproval`), so
+  they must be answered by id. This is the only approval path that actually
+  reaches the phone.
+
+### Qoder session namespaces
+
+`qodercli --list-sessions` shows CLI sessions only; IDE sessions never appear and
+there is no filter argument that reveals them (checked — unlike Codex, where the
+missing `sourceKinds` was the whole problem). So `--resume` cannot reach the
+conversation on screen, and a phone message would otherwise answer in its own
+separate session.
+
+---
+
 # Known issues
 
 Not fixed, deliberately deferred — do not "discover" these again from scratch.
@@ -215,8 +269,9 @@ Not fixed, deliberately deferred — do not "discover" these again from scratch.
   first switching Qoder back to a mode that asks. What *was* verified: an
   unreachable hook does not block the IDE, so leaving the config registered is
   harmless.
-- Codex approvals never reach the phone: the hook path is Qoder-only, and Codex
-  has no HTTP hooks — it needs the app-server route.
+- Qoder cannot be steered or interrupted mid-turn from the phone. Injection puts
+  text in the input box; it cannot reach a turn that is already running. Codex
+  can, via `turn/steer` / `turn/interrupt`.
 
 ---
 
