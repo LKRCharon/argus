@@ -478,3 +478,8 @@
 "sync.choose" = "Choose…";
 "sync.err.bunMissing" = "Bun runtime not found. Install it (brew install oven-sh/bun/bun) or place it at ~/.bun/bin/bun.";
 "sync.err.projectMissing" = "agentlink project not found at %@ — pick its folder in the Local daemon section below.";
+
+/* Remote message injection into the Qoder IDE */
+"inject.err.notRunning" = "Qoder is not running on this Mac";
+"inject.err.noPermission" = "Argus needs Accessibility permission to type into Qoder (System Settings → Privacy & Security → Accessibility)";
+"inject.err.noQuestWindow" = "Qoder's Quest window could not be brought forward";

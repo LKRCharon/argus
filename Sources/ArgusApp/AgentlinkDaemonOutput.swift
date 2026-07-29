@@ -16,6 +16,8 @@ struct AgentlinkDaemonOutput: Decodable {
     let code: String?
     /// `pair_code` — seconds until the code expires (drives the GUI countdown).
     let ttlSeconds: Int?
+    /// `user_input` — the text the phone sent, for injection into the IDE.
+    let text: String?
     /// `pair_done` — details of the device that just paired.
     let deviceName: String?
     let platform: String?

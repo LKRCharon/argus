@@ -245,6 +245,29 @@ final class AgentlinkBridge {
         process = nil
     }
 
+    /// Types a phone message into Qoder. Failures surface as `lastError` (the
+    /// Sync pane shows it) instead of vanishing — a silent no-op here would look
+    /// exactly like a delivered message. The injector runs on its own serial
+    /// queue, so this returns straight away.
+    private func injectIntoIDE(_ text: String) {
+        guard QoderInjector.isQoderRunning else {
+            log.notice("injection skipped: Qoder not running")
+            lastError = QoderInjector.Failure.notRunning.localizedDescription
+            onStateChange?()
+            return
+        }
+        QoderInjector.send(text) { [weak self] error in
+            guard let self = self else { return }
+            if let error = error {
+                self.log.error("injection failed: \(error.localizedDescription, privacy: .public)")
+                self.lastError = error.localizedDescription
+            } else {
+                self.lastError = nil
+            }
+            self.onStateChange?()
+        }
+    }
+
     private func handleStructuredOutput(_ output: AgentlinkDaemonOutput) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -257,6 +280,15 @@ final class AgentlinkBridge {
                 if let secret = output.secret { self.hookSecret = secret }
             case "error":
                 self.lastError = output.message ?? "unknown error"
+            case "user_input":
+                // A phone message: type it into the IDE's current session rather
+                // than letting it sit in the daemon's inbox. `qodercli --resume`
+                // cannot reach IDE sessions (separate namespaces), so keystroke
+                // injection is the only way into the conversation the user is
+                // actually looking at.
+                if let text = output.text, !text.isEmpty {
+                    self.injectIntoIDE(text)
+                }
             default:
                 break
             }

@@ -476,3 +476,8 @@
 "sync.choose" = "选择…";
 "sync.err.bunMissing" = "未找到 Bun 运行时。请安装(brew install oven-sh/bun/bun)或放到 ~/.bun/bin/bun。";
 "sync.err.projectMissing" = "在 %@ 未找到 agentlink 项目 — 请在下方“本地 daemon”中选择其目录。";
+
+/* Remote message injection into the Qoder IDE */
+"inject.err.notRunning" = "这台 Mac 上没有运行 Qoder";
+"inject.err.noPermission" = "Argus 需要辅助功能权限才能向 Qoder 输入（系统设置 → 隐私与安全性 → 辅助功能）";
+"inject.err.noQuestWindow" = "无法唤出 Qoder 的 Quest 窗口";

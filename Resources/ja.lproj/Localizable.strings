@@ -476,3 +476,8 @@
 "sync.choose" = "選択…";
 "sync.err.bunMissing" = "Bun ランタイムが見つかりません。インストールするか(brew install oven-sh/bun/bun)、~/.bun/bin/bun に配置してください。";
 "sync.err.projectMissing" = "%@ に agentlink プロジェクトが見つかりません — 下の「ローカルデーモン」でフォルダを選択してください。";
+
+/* Remote message injection into the Qoder IDE */
+"inject.err.notRunning" = "この Mac で Qoder が起動していません";
+"inject.err.noPermission" = "Qoder に入力するにはアクセシビリティ権限が必要です（システム設定 → プライバシーとセキュリティ → アクセシビリティ）";
+"inject.err.noQuestWindow" = "Qoder の Quest ウインドウを前面に出せませんでした";
