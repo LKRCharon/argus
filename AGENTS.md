@@ -249,6 +249,22 @@ missing `sourceKinds` was the whole problem). So `--resume` cannot reach the
 conversation on screen, and a phone message would otherwise answer in its own
 separate session.
 
+**Qoder does speak ACP** — `qodercli --acp` is real but undocumented (absent from
+`--help`). It advertises `sessionCapabilities: {list, resume, fork, close,
+delete, additionalDirectories}`, image input, prompt queueing and genuine
+`session/request_permission` calls. Tempting, but tested: `session/list` returns
+only sessions the CLI created itself — the live IDE session is still absent. ACP
+resumes *its own* pool, so it does not replace keystroke injection. It is however
+a better foundation than `qodercli -p` for phone-started sessions, since it
+carries real approvals.
+
+Read `packages/daemon/test/fixtures/` before reverse-engineering either agent:
+`fake-codex-appserver.ts` and `fake-qoder-acp.ts` have been in the repo since the
+project started and document both protocols' message shapes. They are also where
+the `turn/completed` payload shape (`params.turn.id`, *not* `params.turnId`) is
+pinned down — reading the wrong field leaves turns started outside the daemon
+unsteerable and uninterruptible.
+
 ---
 
 # Known issues
