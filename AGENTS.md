@@ -345,10 +345,19 @@ later message into a steer that cannot succeed.
 
 ## Android (Kotlin/Compose)
 
-- `EncryptedFile.openFileOutput()` throws if the file exists. Write `.tmp` then
-  `renameTo`; delete-then-write loses the whole cache if it dies mid-write.
-- `security-crypto` is fully deprecated by Google (1.1.0 is the last release).
-  Do not build new persistence on `EncryptedFile` / `EncryptedSharedPreferences`.
+- Encrypted storage goes through `KeyVault` (AndroidKeyStore AES-256-GCM),
+  because Google deprecated every `security-crypto` API in 1.1.0 — its final
+  release — with the guidance "use Android Keystore directly". Tink is not needed
+  for one seal/open primitive. The old dependency stays only for the one-time
+  migration in `IdentityStore`; do not build anything new on it.
+- Writing encrypted data: `.tmp` then `renameTo`. `EncryptedFile` refused to
+  overwrite, which is what forced the old delete-then-write dance, and an
+  interrupted write left a truncated file that fails to decrypt and gets deleted
+  — losing everything.
+- Changing this layer requires the instrumented tests
+  (`./gradlew connectedDebugAndroidTest`): `AndroidKeyStore` has no JVM
+  implementation, so a unit test only proves it compiles, and a mistake here
+  silently costs the user their identity and pairings.
 - `EncryptedSharedPreferences.create` throws on a restored device — the Keystore
   key does not travel with a backup. Guard it and keep `allowBackup="false"`, or
   the app crash-loops after a phone migration.
