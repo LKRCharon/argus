@@ -477,7 +477,7 @@
 "sync.choose" = "Choose…";
 "sync.err.relayMissing" = "Relay URL is not configured. Enter your relay's wss:// address above.";
 "sync.err.bunMissing" = "Bun runtime not found. Install it (brew install oven-sh/bun/bun) or place it at ~/.bun/bin/bun.";
-"sync.err.projectMissing" = "agentlink project not found at %@ — pick its folder in the Local daemon section below.";
+"sync.err.projectMissing" = "agentlink not found (checked %@). Clone the repo so agentlink/ sits next to the build/ folder, or set the path manually in Settings.";
 
 /* Remote message injection into the Qoder IDE */
 "inject.err.notRunning" = "Qoder is not running on this Mac";

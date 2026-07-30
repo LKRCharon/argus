@@ -475,7 +475,7 @@
 "sync.choose" = "選択…";
 "sync.err.relayMissing" = "リレー URL が未設定です。上の欄にリレーの wss:// アドレスを入力してください。";
 "sync.err.bunMissing" = "Bun ランタイムが見つかりません。インストールするか(brew install oven-sh/bun/bun)、~/.bun/bin/bun に配置してください。";
-"sync.err.projectMissing" = "%@ に agentlink プロジェクトが見つかりません — 下の「ローカルデーモン」でフォルダを選択してください。";
+"sync.err.projectMissing" = "agentlink が見つかりません（確認済み: %@）。agentlink/ が build/ と同階層にあるか確認するか、設定で手動指定してください。";
 
 /* Remote message injection into the Qoder IDE */
 "inject.err.notRunning" = "この Mac で Qoder が起動していません";

@@ -56,12 +56,32 @@ final class AgentlinkBridge {
 
     func getRelayURL() -> String { relayURL }
 
-    /// Where the agentlink monorepo lives, and which bun runs it. Set via
-    /// defaults (Settings -> Remote Sync -> Choose…); empty until the user picks
-    /// a checkout, which `preflightError()` reports as not-configured.
+    /// Where the agentlink source lives. Resolution order:
+    /// 1. UserDefaults override (legacy Settings > Remote Sync > Choose)
+    /// 2. `agentlink/` next to the source checkout (monorepo layout)
+    /// 3. `Contents/Resources/agentlink/` inside the app bundle
+    /// Empty string only if none of the above exist.
     static func projectDir() -> String {
-        let dir = UserDefaults.standard.string(forKey: "AgentlinkProjectDir") ?? ""
-        return (dir as NSString).expandingTildeInPath
+        // Manual override (for development or non-standard layouts)
+        if let manual = UserDefaults.standard.string(forKey: "AgentlinkProjectDir"),
+           !manual.isEmpty {
+            return (manual as NSString).expandingTildeInPath
+        }
+        // Monorepo: app lives at <repo>/build/Argus.app or /Applications/Argus.app
+        // built from <repo>; the source checkout has agentlink/ at the repo root.
+        if let exec = Bundle.main.executablePath {
+            // <repo>/build/Argus.app/Contents/MacOS/Argus -> <repo>/agentlink
+            let repo = ((((exec as NSString)
+                .deletingLastPathComponent as NSString)  // MacOS
+                .deletingLastPathComponent as NSString)  // Contents
+                .deletingLastPathComponent as NSString)  // Argus.app
+                .deletingLastPathComponent              // build
+            let candidate = repo + "/agentlink"
+            if FileManager.default.fileExists(atPath: candidate + "/packages/daemon/src/index.ts") {
+                return candidate
+            }
+        }
+        return ""
     }
 
     static func bunPath() -> String? {
@@ -105,8 +125,8 @@ final class AgentlinkBridge {
         }
         if projectDir().isEmpty || !FileManager.default.fileExists(atPath: daemonEntry()) {
             return NSLf("sync.err.projectMissing",
-                        "agentlink project not found at %@ — pick its folder in the Local daemon section below.",
-                        projectDir())
+                        "agentlink not found (checked %@). Clone the repo so agentlink/ sits next to the build/ folder, or set the path manually in Settings.",
+                        projectDir().isEmpty ? "<no path>" : projectDir())
         }
         return nil
     }

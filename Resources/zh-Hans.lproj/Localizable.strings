@@ -475,7 +475,7 @@
 "sync.choose" = "选择…";
 "sync.err.relayMissing" = "尚未配置中继地址。请在上方输入你的中继 wss:// 地址。";
 "sync.err.bunMissing" = "未找到 Bun 运行时。请安装(brew install oven-sh/bun/bun)或放到 ~/.bun/bin/bun。";
-"sync.err.projectMissing" = "在 %@ 未找到 agentlink 项目 — 请在下方“本地 daemon”中选择其目录。";
+"sync.err.projectMissing" = "未找到 agentlink（已检查 %@）。请确保 agentlink/ 目录位于 build/ 同级，或在设置中手动指定路径。";
 
 /* Remote message injection into the Qoder IDE */
 "inject.err.notRunning" = "这台 Mac 上没有运行 Qoder";

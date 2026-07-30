@@ -474,7 +474,7 @@
 "sync.choose" = "선택…";
 "sync.err.relayMissing" = "릴레이 URL이 설정되지 않았습니다. 위에 릴레이의 wss:// 주소를 입력하세요.";
 "sync.err.bunMissing" = "Bun 런타임을 찾을 수 없습니다. 설치하거나(brew install oven-sh/bun/bun) ~/.bun/bin/bun에 두세요.";
-"sync.err.projectMissing" = "%@에서 agentlink 프로젝트를 찾을 수 없습니다 — 아래 '로컬 데몬'에서 폴더를 선택하세요.";
+"sync.err.projectMissing" = "agentlink를 찾을 수 없습니다(확인됨: %@). agentlink/가 build/와 같은 레벨에 있는지 확인하거나 설정에서 직접 지정하세요.";
 
 /* Remote message injection into the Qoder IDE */
 "inject.err.notRunning" = "이 Mac에서 Qoder가 실행되지 않았습니다";

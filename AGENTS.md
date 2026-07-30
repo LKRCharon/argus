@@ -6,8 +6,8 @@ product; read the section for whichever one you are touching.
 | Repo | Path | Stack |
 |---|---|---|
 | Argus (this repo) | this checkout | Swift / AppKit, no SwiftUI, no SPM manifest — `scripts/build.sh` drives swiftc directly |
+| agentlink | `agentlink/` in this repo | TypeScript / Bun workspaces (daemon + wire + relay) |
 | Android client | a sibling checkout (`android/`) | Kotlin / Compose, Gradle (`./gradlew`) |
-| agentlink | a local checkout, path configured in Settings → Remote Sync | TypeScript / Bun workspaces (daemon + wire + relay + PWA) |
 
 Stack is Swift, Kotlin and TypeScript. Do not introduce another language —
 including throwaway scripts for editing source. Batch edits belong in the
