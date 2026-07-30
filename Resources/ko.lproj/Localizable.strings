@@ -347,7 +347,7 @@
 
 /* proposal §5 — 첫 승인 후 1회 안내 */
 "onboarding.enabled.title" = "Argus 준비 완료";
-"onboarding.enabled.body" = "코딩 에이전트(Claude Code, Codex…)를 돌려보세요 — 작업 중엔 메뉴의 점이 초록색이 되고 Mac이 깨어있습니다. 조개를 클릭하면 언제든 토글됩니다.";
+"onboarding.enabled.body" = "코딩 에이전트(Claude Code, Codex…)를 돌려보세요 — 작업 중엔 메뉴 아이콘이 초록색이 되고 Mac이 깨어있습니다. 아이콘을 클릭하면 메뉴가 열립니다.";
 
 /* ADR-0028 — 텔레그램 알림 (탭 + 패널) */
 "tab.notifications" = "알림";

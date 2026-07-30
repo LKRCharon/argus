@@ -10,12 +10,11 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://www.apple.com/macos/)
 [![Language](https://img.shields.io/badge/Swift-AppKit%20%2B%20IOKit-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.7.0-yellow)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.7.3-yellow)](CHANGELOG.md)
 
 <!-- i18n-langbar -->
 [English](README.md) · [한국어](README.ko.md) · [中文](README.zh-CN.md) · **日本語** · [Español](README.es.md)
 
-![Argus メニューのデモ](docs/assets/argus-menu-demo.gif)
 
 </div>
 
@@ -38,7 +37,6 @@
 
 ### エージェントが働く間だけ起こしておく
 
-![エージェント検知のデモ](docs/assets/argus-demo-agents.gif)
 
 シンプルです — エージェントを止めずに働かせ続けること。
 
@@ -54,7 +52,6 @@
 
 ### 安全ガード
 
-![安全ガードのデモ](docs/assets/argus-demo-safety.gif)
 
 クラムシェルモードでバッグに入れたまま重いワークロードを走らせるのは発熱リスクです。Argus は温度とバッテリーを見ていて、危険になったら Mac をスリープさせます:
 
@@ -67,7 +64,6 @@ AC を抜いてフタを閉じてバッグに入れた状態では、より慎�
 
 ### リモート活動の検知
 
-![リモート検知のデモ](docs/assets/argus-demo-remote.gif)
 
 Argus はリモートで Mac を使っている間はスリープさせません。SSH・画面共有・Tailscale・既知のリモート操作 App を検知します。デフォルトはシンプルで、つながっている間は起きたままです。
 
@@ -94,7 +90,7 @@ open /Applications/Argus.app
 
 ## Usage
 
-メニューバーのアイコンを**左クリック**すると保持のオン/オフが切り替わります。**右クリック**で全メニューが開きます。
+アイコンを**クリック**するとメニューが開きます。
 
 アイコンは貝殻の形で、状態によって 3 つに変わります:輪郭だけの貝殻(スリープ中)、塗りつぶし + 稲妻(自分で起こしている)、塗りつぶし + リモート印(エージェント・リモートセッション・安全ガードが自動で起こしている)。
 

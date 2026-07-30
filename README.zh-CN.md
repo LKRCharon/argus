@@ -10,12 +10,11 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://www.apple.com/macos/)
 [![Language](https://img.shields.io/badge/Swift-AppKit%20%2B%20IOKit-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.7.0-yellow)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.7.3-yellow)](CHANGELOG.md)
 
 <!-- i18n-langbar -->
 [English](README.md) · [한국어](README.ko.md) · **中文** · [日本語](README.ja.md) · [Español](README.es.md)
 
-![Argus 菜单演示](docs/assets/argus-menu-demo.gif)
 
 </div>
 
@@ -38,7 +37,6 @@
 
 ### 代理感知的保持唤醒
 
-![代理感知检测演示](docs/assets/argus-demo-agents.gif)
 
 道理很简单:让你的代理不被打断地持续工作。
 
@@ -54,7 +52,6 @@
 
 ### 安全防护
 
-![安全防护演示](docs/assets/argus-demo-safety.gif)
 
 在合盖(clamshell)模式下把 Mac 放进包里跑重负载,是有发热风险的。Argus 会盯着温度和电量,情况危险时就让 Mac 睡眠:
 
@@ -67,7 +64,6 @@
 
 ### 远程活动感知
 
-![远程感知演示](docs/assets/argus-demo-remote.gif)
 
 当你远程使用这台 Mac 时,Argus 不会让它睡眠。它能检测 SSH、屏幕共享、Tailscale 以及已知的远程控制 App。默认很简单:只要你还连着就保持唤醒。
 
@@ -94,7 +90,7 @@ open /Applications/Argus.app
 
 ## Usage
 
-**左键点击**菜单栏图标可切换保持唤醒。**右键点击**打开完整菜单。
+**点击**菜单栏图标打开菜单。
 
 图标是一个蛤壳,有三种状态:空壳(睡眠中)、实心壳 + 闪电(你正手动保持唤醒)、实心壳 + 远程标记(代理、远程会话或安全防护正在自动保持唤醒)。
 

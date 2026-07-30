@@ -10,12 +10,11 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://www.apple.com/macos/)
 [![Language](https://img.shields.io/badge/Swift-AppKit%20%2B%20IOKit-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.7.0-yellow)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.7.3-yellow)](CHANGELOG.md)
 
 <!-- i18n-langbar -->
 [English](README.md) · **한국어** · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md)
 
-![Argus menu demo](docs/assets/argus-menu-demo.gif)
 
 </div>
 
@@ -38,7 +37,6 @@
 
 ### 에이전트가 일하는 동안 Mac은 깨워두기
 
-![Agent-aware detection demo](docs/assets/argus-demo-agents.gif)
 
 핵심은 하나입니다 — 에이전트가 멈추지 않고 일하게 두는 것.
 
@@ -54,7 +52,6 @@
 
 ### 위험할 땐 알아서 잠들기
 
-![Safety guard demo](docs/assets/argus-demo-safety.gif)
 
 클램쉘 모드로 가방에 넣고 무거운 작업을 돌리면 발열이 위험할 수 있습니다. Argus는 온도와 배터리를 지켜보다가, 위험해지면 깨우는 걸 멈추고 Mac을 sleep 모드로 보냅니다:
 
@@ -67,7 +64,6 @@ AC가 빠지고 덮개까지 닫혀 가방에 들어간 상태라면 더 깐깐�
 
 ### 원격 활동 인지
 
-![Remote awareness demo](docs/assets/argus-demo-remote.gif)
 
 다른 기기에서 이 Mac에 접속해 쓰는 동안엔 잠들지 않습니다. SSH, 화면 공유, Tailscale, 알려진 원격 제어 앱을 감지합니다. 기본값은 "접속해 있는 한 깨어있기"입니다.
 
@@ -96,7 +92,7 @@ open /Applications/Argus.app
 
 ## Usage
 
-메뉴 바 아이콘을 **좌클릭**하면 깨어있기가 토글됩니다. **우클릭**하면 전체 메뉴가 열립니다.
+메뉴 바 아이콘을 **클릭**하면 메뉴가 열립니다.
 
 아이콘은 조개껍데기 모양이고 상태에 따라 셋으로 바뀝니다 — 빈 껍데기는 자는 중, 채워진 껍데기+번개는 직접 깨워둔 것, 채워진 껍데기+원격 표시는 자동(에이전트·원격·안전 가드)으로 깨워둔 것.
 

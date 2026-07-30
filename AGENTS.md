@@ -55,7 +55,9 @@ does not mean the layout is right — screenshot it.
   (now `ARGUS_SIGN_ID`). The only remaining `eclam` literals are the two
   pre-rename migration fallbacks (`AwakeHistory`, `ExternalTraces`) and the
   README origin note crediting the upstream fork.
-- Menu bar icon: SF Symbol `link` (asleep) / `link.circle.fill` (awake). No
+- Menu bar icon: custom clam-shell PNG (three states: off/bolt/remote, light
+  and dark variants as template images). Click opens the menu; the manual
+  keep-awake toggle lives inside it as "Keep Mac Awake" (Cmd+K). No
   sponsorship or donation entry points.
 
 ### AppKit specifics that bit us

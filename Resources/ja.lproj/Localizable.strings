@@ -348,7 +348,7 @@
 
 /* proposal §5 — 첫 승인 후 1회 안내 */
 "onboarding.enabled.title" = "Argus の準備ができました";
-"onboarding.enabled.body" = "コーディングエージェント(Claude Code、Codex…)を動かしてみてください — 動作中はメニューのドットが緑になり、Mac は起きたままです。シェルをクリックすればいつでも切り替えられます。";
+"onboarding.enabled.body" = "コーディングエージェント(Claude Code、Codex…)を動かしてみてください — 動作中はメニューアイコンが緑になり、Mac は起きたままです。アイコンをクリックするとメニューが開きます。";
 
 /* ADR-0028 — Telegram 通知 (タブ + パネル) */
 "tab.notifications" = "通知";

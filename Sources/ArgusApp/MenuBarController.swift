@@ -31,13 +31,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
-    /// ADR-0014 — left-click toggles the effective awake state (no double-click).
-    /// Right-click pops the menu. We do NOT permanently assign `statusItem.menu`
-    /// so AppKit doesn't auto-pop on left click; right-click is handled by an
-    /// NSEvent local monitor (the button's `.rightMouseUp` action routing is
-    /// unreliable across macOS versions — ADR-0010 §A½ mechanism retained).
+    /// Standard status-item behavior: any click opens the menu (statusItem.menu
+    /// is permanently assigned). The old ADR-0014 left-click-toggles model is
+    /// retired — the manual keep-awake toggle now lives inside the menu as the
+    /// "Keep Mac Awake" item (toggleTapped).
     private let menu = NSMenu()
-    private var rightClickMonitor: Any?
 
     /// ADR-0037 §#8 — "어둡게(dim)" 모드 컨트롤러. 밝기 floor + display-sleep 방지
     /// assertion 을 잡고 사용자 복귀 시 자동 복원한다. dim 동안에만 타이머가 돈다.
@@ -46,76 +44,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func installMenu() {
         menu.delegate = self
         menu.autoenablesItems = false
-        // Left-click: button action.
-        statusItem.button?.target = self
-        statusItem.button?.action = #selector(buttonClicked)
-        statusItem.button?.sendAction(on: [.leftMouseUp])
-
-        // Right-click: NSEvent local monitor scoped to our status button's
-        // window. We must temporarily install `statusItem.menu` and call
-        // performClick so AppKit handles positioning, dismissal, and keyboard
-        // navigation — manually calling `NSMenu.popUp` worked but produced
-        // subtle focus/highlight bugs on Sequoia.
-        rightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseUp) { [weak self] event in
-            guard let self = self,
-                  let button = self.statusItem.button,
-                  event.window === button.window else { return event }
-            self.popMenu()
-            return nil
-        }
-    }
-
-    private func popMenu() {
-        // Populate before showing: rebuildMenu() writes into statusItem.menu,
-        // so install first (the old order made this call a silent no-op and
-        // relied on menuWillOpen's refresh to fill the menu).
+        // Standard macOS pattern: assigning the menu makes any click on the
+        // status button open it (AppKit handles positioning, dismissal, and
+        // keyboard navigation). menuWillOpen refreshes contents before display.
         statusItem.menu = menu
-        rebuildMenu()
-        statusItem.button?.performClick(nil)
-        // Detach after the run loop spins so AppKit finishes the popup, but
-        // before the next click. async-on-main is the right hop.
-        DispatchQueue.main.async { [weak self] in
-            self?.statusItem.menu = nil
-        }
-    }
-
-    @objc private func buttonClicked() {
-        // Right-click / ctrl-click pops the menu (ADR-0010 §A½). macOS sometimes
-        // fires this with currentEvent==nil (synthetic clicks); treat as left.
-        if let event = NSApp.currentEvent,
-           event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
-            popMenu()
-            return
-        }
-        toggleAwake()
-    }
-
-    /// ADR-0014 — a single left-click toggles the *effective* awake state,
-    /// regardless of why it is awake. No double-click, so the click is instant.
-    ///   asleep         → awake (manual)
-    ///   awake (manual) → asleep
-    ///   awake (auto)   → asleep (the agent/remote auto-signal is suppressed)
-    private func toggleAwake() {
-        guard isEnabled else {
-            // Helper not approved → open settings rather than silently failing.
-            openSettingsTapped()
-            return
-        }
-        if store.shouldKeepAwake {
-            // Awake by any cause → the user wants sleep now. setManualOverrideOff
-            // clears manualToggle too and suppresses agent/remote auto-signals.
-            store.setManualOverrideOff(true)
-        } else {
-            // Asleep → the user wants awake now.
-            store.setManualOverrideOff(false)
-            store.setManualToggle(true)
-        }
-        // ADR-0025 — '지금 재워' 의도면 CLI TTL hold 도 취소 (helper 는 hold
-        // 중의 off 쓰기를 무시하므로 cancel 이 선행해야 실제로 잠들 수 있다).
-        if !store.shouldKeepAwake && store.cliHoldActive {
-            bridge.cancelHold()
-        }
-        bridge.setSleepDisabled(store.shouldKeepAwake) { _ in }
     }
 
     // MARK: - Rendering
@@ -133,7 +65,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     ///   bolt   — filled shell + lightning (the user is holding sleep open)
     ///   remote — filled shell + remote (an automatic signal is holding it)
     private enum GlyphState: String { case off, bolt, remote }
-    // Argus — menu bar uses SF Symbols instead of bundled PNGs
 
     private func renderStatusButton() {
         guard let button = statusItem.button else { return }
@@ -198,7 +129,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                     theme: StateStore.MenuBarTheme,
                                     fallbackSymbol: String,
                                     accessibility: String) -> NSImage? {
-        // Argus — menu bar icon uses SF Symbols (auto-tint, no bundled PNGs)
+        // Bundled clam art (Resources/clam-<state>-<variant>.png, generated by
+        // scripts/make-menubar-icons.py at 144px tall so Retina stays crisp;
+        // NSImage downscales to statusIconHeight points here).
+        let variant = (theme == .dark) ? "dark" : "light"
+        if let url = Bundle.main.url(forResource: "clam-\(state.rawValue)-\(variant)",
+                                     withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            image.isTemplate = (theme == .system)
+            image.accessibilityDescription = accessibility
+            let aspect = image.size.width / max(image.size.height, 1)
+            image.size = NSSize(width: statusIconHeight * aspect, height: statusIconHeight)
+            return image
+        }
+        // SF Symbol fallback if the bundled asset is missing.
         if let image = NSImage(systemSymbolName: fallbackSymbol, accessibilityDescription: accessibility) {
             image.isTemplate = true
             let aspect = image.size.width / max(image.size.height, 1)
@@ -214,7 +158,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func rebuildMenu() {
-        guard let menu = statusItem.menu else { return }
+        let menu = self.menu
         menu.removeAllItems()
 
         // 1. Status header + 1½. ADR-0017 guard status — ONE view-backed item.
@@ -225,13 +169,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(makeStatusHeaderViewItem())
         menu.addItem(.separator())
 
-        // 2. Keep Mac Awake — primary toggle with checkmark.
+        // 2. Keep Mac Awake — primary toggle with checkmark. The check reflects
+        // the *effective* awake state (manual or auto), because toggleTapped
+        // flips that effective state — same contract the old status-button
+        // click had (ADR-0014 semantics, relocated into the menu).
         let toggle = NSMenuItem(
             title: NSL("menu.keepAwake", "Keep Mac Awake"),
             action: #selector(toggleTapped),
             keyEquivalent: "k")
         toggle.target = self
-        toggle.state = (store.manualToggle && isEnabled) ? .on : .off
+        toggle.state = (store.shouldKeepAwake && isEnabled) ? .on : .off
         toggle.isEnabled = canToggle
         menu.addItem(toggle)
 
@@ -633,18 +580,30 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // MARK: - Actions
 
+    /// Toggles the *effective* awake state, regardless of why it is awake
+    /// (formerly the status-button left-click, ADR-0014):
+    ///   asleep         → awake (manual)
+    ///   awake (manual) → asleep
+    ///   awake (auto)   → asleep (the agent/remote auto-signal is suppressed)
     @objc private func toggleTapped() {
         // If helper is not enabled, surface a fix path based on current state.
         switch store.registration {
         case .enabled:
-            // Flip the user's intent; the convergence engine in AppDelegate
-            // does the XPC write (debounced).
-            store.setManualToggle(!store.manualToggle)
-            // ADR-0025 — 토글을 꺼서 effective 의도가 '재워'가 됐다면 CLI
-            // hold 도 취소 (toggleAwake 와 같은 규칙).
+            if store.shouldKeepAwake {
+                // Awake by any cause → the user wants sleep now. setManualOverrideOff
+                // clears manualToggle too and suppresses agent/remote auto-signals.
+                store.setManualOverrideOff(true)
+            } else {
+                // Asleep → the user wants awake now.
+                store.setManualOverrideOff(false)
+                store.setManualToggle(true)
+            }
+            // ADR-0025 — '지금 재워' 의도면 CLI TTL hold 도 취소 (helper 는 hold
+            // 중의 off 쓰기를 무시하므로 cancel 이 선행해야 실제로 잠들 수 있다).
             if !store.shouldKeepAwake && store.cliHoldActive {
                 bridge.cancelHold()
             }
+            bridge.setSleepDisabled(store.shouldKeepAwake) { _ in }
             refresh()
         case .requiresApproval:
             HelperRegistration.openLoginItemsSettings()

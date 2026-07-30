@@ -348,7 +348,7 @@
 
 /* proposal §5 — 첫 승인 후 1회 안내 */
 "onboarding.enabled.title" = "Argus 已就绪";
-"onboarding.enabled.body" = "运行一个编码代理(Claude Code、Codex…)— 工作时菜单圆点会变绿,Mac 保持唤醒。随时点击贝壳即可切换。";
+"onboarding.enabled.body" = "运行一个编码代理(Claude Code、Codex…)— 工作时菜单图标变绿,Mac 保持唤醒。点击图标打开菜单。";
 
 /* ADR-0028 — Telegram 通知 (标签页 + 面板) */
 "tab.notifications" = "通知";

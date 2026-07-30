@@ -10,12 +10,10 @@ It detects *work*, not just a running process.
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://www.apple.com/macos/)
 [![Language](https://img.shields.io/badge/Swift-AppKit%20%2B%20IOKit-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.7.0-yellow)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.7.3-yellow)](CHANGELOG.md)
 
 <!-- i18n-langbar -->
 **English** · [한국어](README.ko.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md)
-
-![Argus menu demo](docs/assets/argus-menu-demo.gif)
 
 </div>
 
@@ -38,8 +36,6 @@ The goal is to keep your agent working — **safely** — without interruption. 
 
 ### Agent-aware keep-awake
 
-![Agent-aware detection demo](docs/assets/argus-demo-agents.gif)
-
 The point is simple: let your agent keep working, uninterrupted.
 
 So the toggle tracks whether the agent is *working right now*, not whether a process exists. While it works, the Mac stays awake; when it stops, the hold releases (**Strict** mode). A **Lax** mode that simply stays awake while the process is alive is also available.
@@ -54,8 +50,6 @@ By default agents are detected by polling their session logs (~5 s, ~30 s while 
 
 ### Safety guards
 
-![Safety guard demo](docs/assets/argus-demo-safety.gif)
-
 Running a heavy workload in clamshell mode inside a bag is a thermal risk. Argus watches temperature and battery, and lets the Mac sleep when things get risky:
 
 - **Battery** — the threshold depends on your setup: 30% with the lid closed and no external display, 10% otherwise (adjustable). A weak or unstable AC connection counts as battery.
@@ -66,8 +60,6 @@ Running a heavy workload in clamshell mode inside a bag is a thermal risk. Argus
 With AC unplugged and the lid closed in a bag it judges more conservatively, then clears automatically once things are safe again. You can opt into a notification when it puts the Mac to sleep.
 
 ### Remote-activity awareness
-
-![Remote awareness demo](docs/assets/argus-demo-remote.gif)
 
 Argus won't sleep while you're using the Mac remotely. It detects SSH, screen sharing, Tailscale, and known remote-control apps. The default is simple: stay awake as long as you're connected.
 
@@ -96,9 +88,7 @@ Turn on **Argus Helper** in **System Settings → General → Login Items & Exte
 
 ## Usage
 
-**Left-click** the menu bar icon to toggle keep-awake. **Right-click** opens the full menu.
-
-The icon is a clam shell with three states: an outline shell (asleep), a filled shell + bolt (you're holding it awake), and a filled shell + remote mark (an agent, remote session, or safety hold is keeping it awake automatically).
+**Click** the menu bar icon to open the menu. The icon is a clam shell with three states: outline (asleep), filled + bolt (manually holding awake), filled + remote mark (automatic hold from an agent or remote session).
 
 ### Menu
 
@@ -134,7 +124,7 @@ argus help
 - Reads file clocks, not file contents.
 - No telemetry, no tracking, no analytics.
 - XPC caller verification is enforced.
-- Developer ID signed + Apple notarized.
+- Developer ID signed + Apple notarized (when applicable).
 - Tokens stay local.
 - Sleep is always restored on exit or crash.
 - One permission path (`SMAppService`).
@@ -150,7 +140,7 @@ See [Security & privacy](docs/security.md) for details.
 
 ## Tech stack
 
-- **Language / UI:** Swift + AppKit (`NSStatusItem`, `LSUIElement` menu bar app — no Dock).
+- **Language / UI:** Swift + AppKit + SwiftUI (`NSStatusItem`, `LSUIElement` menu bar app — no Dock).
 - **Power control:** IOKit SPI — `IOPMSetSystemPowerSetting("SleepDisabled")` via an `@_silgen_name` binding.
 - **Privilege separation:** an `SMAppService` daemon talking to the app over `NSXPCConnection` (mach service).
 - **Build:** direct `swiftc` (no SwiftPM), **no external dependencies**.

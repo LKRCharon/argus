@@ -348,7 +348,7 @@
 
 /* proposal §5 — 첫 승인 후 1회 안내 */
 "onboarding.enabled.title" = "Argus está listo";
-"onboarding.enabled.body" = "Ejecuta un agente de código (Claude Code, Codex…) — el punto del menú se pone verde mientras trabaja y tu Mac sigue despierto. Haz clic en la concha para alternar.";
+"onboarding.enabled.body" = "Ejecuta un agente de código (Claude Code, Codex…) — el icono del menú se pone verde mientras trabaja y tu Mac sigue despierto. Haz clic en el icono para abrir el menú.";
 
 /* ADR-0028 — Notificaciones de Telegram (pestaña + panel) */
 "tab.notifications" = "Notificaciones";

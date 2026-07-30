@@ -10,12 +10,11 @@ Detecta el *trabajo*, no solo un proceso en ejecución.
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://www.apple.com/macos/)
 [![Language](https://img.shields.io/badge/Swift-AppKit%20%2B%20IOKit-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.7.0-yellow)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.7.3-yellow)](CHANGELOG.md)
 
 <!-- i18n-langbar -->
 [English](README.md) · [한국어](README.ko.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · **Español**
 
-![Demostración del menú de Argus](docs/assets/argus-menu-demo.gif)
 
 </div>
 
@@ -38,7 +37,6 @@ El objetivo es que tu agente siga trabajando — de forma **segura** — sin int
 
 ### Mantener despierto según el agente
 
-![Demostración de la detección de agentes](docs/assets/argus-demo-agents.gif)
 
 Es simple: deja que tu agente siga trabajando sin interrupciones.
 
@@ -54,7 +52,6 @@ Por defecto, los agentes se detectan sondeando sus registros de sesión (~5 s, ~
 
 ### Protecciones de seguridad
 
-![Demostración de las protecciones](docs/assets/argus-demo-safety.gif)
 
 Ejecutar una carga pesada en modo clamshell dentro de una mochila es un riesgo térmico. Argus vigila la temperatura y la batería, y deja dormir el Mac cuando la cosa se pone peligrosa:
 
@@ -67,7 +64,6 @@ Con la corriente desconectada y la tapa cerrada en una mochila, juzga con más c
 
 ### Detección de actividad remota
 
-![Demostración de la consciencia remota](docs/assets/argus-demo-remote.gif)
 
 Argus no duerme mientras usas el Mac en remoto. Detecta SSH, compartir pantalla, Tailscale y apps de control remoto conocidas. Por defecto es simple: permanece despierto mientras estés conectado.
 
@@ -94,7 +90,7 @@ Activa **Argus Helper** en **System Settings → General → Login Items & Exten
 
 ## Usage
 
-**Haz clic izquierdo** en el icono de la barra de menús para alternar el modo despierto. **Haz clic derecho** para abrir el menú completo.
+**Clic** en el icono de la barra de menus para abrir el menu.
 
 El icono es una almeja con tres estados: concha en contorno (durmiendo), concha rellena + rayo (lo mantienes despierto tú) y concha rellena + marca remota (un agente, una sesión remota o una protección lo mantiene despierto automáticamente).
 
