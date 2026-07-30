@@ -497,3 +497,12 @@
 "monitor.noAgents" = "実行中なし";
 "monitor.remote" = "リモートセッション";
 "monitor.noRemote" = "リモート接続なし";
+"monitor.codex" = "Codex 利用枠";
+"monitor.codex.apiKey" = "API キーログイン — トークン従量課金でプラン枠なし";
+"monitor.codex.none" = "使用量のスナップショットはまだありません";
+"monitor.codex.weekly" = "週単位";
+"monitor.codex.monthly" = "月単位";
+"monitor.codex.windowHours" = "%d 時間ウィンドウ";
+"monitor.codex.resets" = "%@ 後にリセット";
+"monitor.codex.asOf" = "%@ 前の値";
+"monitor.codex.credits" = "クレジット %@";

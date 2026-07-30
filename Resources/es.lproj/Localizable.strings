@@ -497,3 +497,12 @@
 "monitor.noAgents" = "Ninguno en ejecución";
 "monitor.remote" = "Sesiones remotas";
 "monitor.noRemote" = "Sin conexiones remotas";
+"monitor.codex" = "Cuota de Codex";
+"monitor.codex.apiKey" = "Sesión con clave API — se cobra por token, sin cuota de plan";
+"monitor.codex.none" = "Aún no hay registro de uso";
+"monitor.codex.weekly" = "Semanal";
+"monitor.codex.monthly" = "Mensual";
+"monitor.codex.windowHours" = "ventana de %d h";
+"monitor.codex.resets" = "se reinicia en %@";
+"monitor.codex.asOf" = "hace %@";
+"monitor.codex.credits" = "créditos %@";

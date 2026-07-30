@@ -496,3 +496,12 @@
 "monitor.noAgents" = "실행 중 없음";
 "monitor.remote" = "원격 세션";
 "monitor.noRemote" = "원격 연결 없음";
+"monitor.codex" = "Codex 사용량";
+"monitor.codex.apiKey" = "API 키 로그인 — 토큰 종량 과금, 플랜 한도 없음";
+"monitor.codex.none" = "아직 사용량 스냅샷이 없습니다";
+"monitor.codex.weekly" = "주간";
+"monitor.codex.monthly" = "월간";
+"monitor.codex.windowHours" = "%d시간 윈도우";
+"monitor.codex.resets" = "%@ 후 초기화";
+"monitor.codex.asOf" = "%@ 전 기준";
+"monitor.codex.credits" = "항목 %@";

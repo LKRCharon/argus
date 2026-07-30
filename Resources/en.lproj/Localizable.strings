@@ -499,3 +499,12 @@
 "monitor.noAgents" = "None running";
 "monitor.remote" = "Remote sessions";
 "monitor.noRemote" = "No remote connections";
+"monitor.codex" = "Codex quota";
+"monitor.codex.apiKey" = "API key sign-in — billed per token, no plan quota";
+"monitor.codex.none" = "No usage snapshot recorded yet";
+"monitor.codex.weekly" = "Weekly";
+"monitor.codex.monthly" = "Monthly";
+"monitor.codex.windowHours" = "%dh window";
+"monitor.codex.resets" = "resets in %@";
+"monitor.codex.asOf" = "as of %@ ago";
+"monitor.codex.credits" = "credits %@";

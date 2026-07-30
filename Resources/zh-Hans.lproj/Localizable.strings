@@ -497,3 +497,12 @@
 "monitor.noAgents" = "暂无运行中的 agent";
 "monitor.remote" = "远程会话";
 "monitor.noRemote" = "暂无远程连接";
+"monitor.codex" = "Codex 额度";
+"monitor.codex.apiKey" = "API key 登录 — 按 token 计费,无套餐额度";
+"monitor.codex.none" = "尚未记录到用量快照";
+"monitor.codex.weekly" = "周额度";
+"monitor.codex.monthly" = "月额度";
+"monitor.codex.windowHours" = "%d 小时窗口";
+"monitor.codex.resets" = "%@ 后重置";
+"monitor.codex.asOf" = "%@ 前的数据";
+"monitor.codex.credits" = "余额 %@";

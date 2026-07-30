@@ -100,6 +100,7 @@ private struct MonitorRootView: View {
                     batteryCard
                 }
                 agentsCard
+                codexCard
                 remoteCard
             }
             .padding(16)
@@ -334,6 +335,111 @@ private struct MonitorRootView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(c.card, in: RoundedRectangle(cornerRadius: MonitorRadius.card))
         .overlay(RoundedRectangle(cornerRadius: MonitorRadius.card).strokeBorder(cardBorder, lineWidth: 0.5))
+    }
+
+    // MARK: Codex quota
+
+    /// Hidden entirely when Codex is not installed — a dashboard should not
+    /// advertise a tool the user does not have.
+    @ViewBuilder private var codexCard: some View {
+        if case .noCodex = model.codexQuota {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Label(NSL("monitor.codex", "Codex quota"), systemImage: "gauge.with.needle")
+                        .font(.subheadline)
+                        .foregroundStyle(c.textSecondary)
+                    Spacer()
+                    if case .quota(let snap) = model.codexQuota, let plan = snap.plan {
+                        Text(plan.uppercased())
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(c.accentStroke)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(c.accentFill, in: Capsule())
+                    }
+                }
+                codexBody
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(c.card, in: RoundedRectangle(cornerRadius: MonitorRadius.card))
+            .overlay(RoundedRectangle(cornerRadius: MonitorRadius.card).strokeBorder(cardBorder, lineWidth: 0.5))
+        }
+    }
+
+    @ViewBuilder private var codexBody: some View {
+        switch model.codexQuota {
+        case .noCodex:
+            EmptyView()
+        case .apiKeyMode:
+            Text(NSL("monitor.codex.apiKey", "API key sign-in — billed per token, no plan quota"))
+                .font(.callout)
+                .foregroundStyle(c.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        case .noSnapshot:
+            Text(NSL("monitor.codex.none", "No usage snapshot recorded yet"))
+                .font(.callout)
+                .foregroundStyle(c.textTertiary)
+        case .quota(let snap):
+            VStack(alignment: .leading, spacing: 10) {
+                quotaBar(snap.primary)
+                if let secondary = snap.secondary { quotaBar(secondary) }
+                HStack(spacing: 8) {
+                    // The percentage is whatever Codex last wrote, which can be
+                    // hours old — saying so is the difference between a
+                    // dashboard and a guess.
+                    Text(NSLf("monitor.codex.asOf", "as of %@ ago",
+                              CodexQuota.shortDuration(Date().timeIntervalSince(snap.capturedAt))))
+                        .font(.caption)
+                        .foregroundStyle(c.textTertiary)
+                    if let credits = snap.creditBalance {
+                        Text(NSLf("monitor.codex.credits", "credits %@", credits))
+                            .font(.caption)
+                            .foregroundStyle(c.textTertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func quotaBar(_ w: CodexQuota.Window) -> some View {
+        let fraction = min(1, max(0, w.usedPercent / 100))
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(CodexQuota.windowLabel(minutes: w.windowMinutes))
+                    .font(.callout)
+                    .foregroundStyle(c.textPrimary)
+                Spacer()
+                Text("\(Int(w.usedPercent.rounded()))%")
+                    .font(.system(.callout, design: .monospaced).weight(.medium))
+                    .foregroundStyle(quotaColor(w.usedPercent))
+                if let resets = w.resetsAt, resets > Date() {
+                    Text(NSLf("monitor.codex.resets", "resets in %@",
+                              CodexQuota.shortDuration(resets.timeIntervalSinceNow)))
+                        .font(.caption)
+                        .foregroundStyle(c.textTertiary)
+                }
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(c.sheet)
+                    Capsule()
+                        .fill(quotaColor(w.usedPercent))
+                        .frame(width: max(fraction > 0 ? 3 : 0, geo.size.width * fraction))
+                }
+            }
+            .frame(height: 6)
+        }
+    }
+
+    /// Status colours are reserved for status: a quota is only amber/red when it
+    /// is actually close to biting.
+    private func quotaColor(_ percent: Double) -> Color {
+        if percent >= 95 { return c.danger }
+        if percent >= 80 { return c.statusAmber }
+        return c.accentStroke
     }
 
     // MARK: Remote channels

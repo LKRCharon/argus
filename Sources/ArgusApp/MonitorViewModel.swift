@@ -41,6 +41,13 @@ final class MonitorViewModel: ObservableObject {
     @Published private(set) var activeAgents: [String] = []
     @Published private(set) var remoteChannels: [String] = []
 
+    /// Codex plan usage. Refreshed far more slowly than the sensors: it comes
+    /// from reading transcript tails off disk, and a quota that moves once per
+    /// turn has no business being polled every second.
+    @Published private(set) var codexQuota: CodexQuota.State = .noCodex
+    private var lastQuotaScan: Date?
+    private static let quotaInterval: TimeInterval = 60
+
     private let store: StateStore
     private let menuBar: MenuBarController
     private var timer: Timer?
@@ -95,6 +102,19 @@ final class MonitorViewModel: ObservableObject {
         samples = store.thermalHistory
         activeAgents = store.activeAgents.sorted()
         remoteChannels = store.remoteChannels.sorted()
+        refreshCodexQuotaIfDue()
+    }
+
+    /// Scans at most once a minute, and once immediately on the first refresh so
+    /// the card is populated by the time the window draws.
+    private func refreshCodexQuotaIfDue() {
+        if let last = lastQuotaScan, Date().timeIntervalSince(last) < Self.quotaInterval { return }
+        lastQuotaScan = Date()
+        // Disk work stays off the main thread; the assignment comes back to it.
+        Task.detached(priority: .utility) {
+            let state = CodexQuota.current()
+            await MainActor.run { [weak self] in self?.codexQuota = state }
+        }
     }
 
     /// H:MM:SS under an hour becomes MM:SS — matches the history pane's clock.
