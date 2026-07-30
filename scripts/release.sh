@@ -34,22 +34,33 @@ echo "==> Building"
 "$ROOT/scripts/build.sh"
 
 echo "==> Verifying signature"
-codesign --verify --deep --strict "$APP"
+if [[ "${ARGUS_SKIP_NOTARIZE:-0}" == "1" ]]; then
+  codesign --verify --strict "$APP"   # --deep rejects ad-hoc nested binaries
+else
+  codesign --verify --deep --strict "$APP"
+fi
 
 echo "==> Zipping for notarization (ditto)"
 rm -f "$ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
-echo "==> Notarizing (notarytool submit --wait, profile: $NOTARY_PROFILE)"
-xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+# ARGUS_SKIP_NOTARIZE=1 publishes an ad-hoc build without notarization or
+# stapling — for maintainers without a Developer ID certificate. Gatekeeper
+# will warn on first launch; the release notes must say so.
+if [[ "${ARGUS_SKIP_NOTARIZE:-0}" == "1" ]]; then
+  echo "==> Skipping notarization (ARGUS_SKIP_NOTARIZE=1) — ad-hoc release"
+else
+  echo "==> Notarizing (notarytool submit --wait, profile: $NOTARY_PROFILE)"
+  xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
 
-echo "==> Stapling the ticket to the app + Gatekeeper assessment"
-xcrun stapler staple "$APP"
-spctl -a -vvv -t install "$APP"
+  echo "==> Stapling the ticket to the app + Gatekeeper assessment"
+  xcrun stapler staple "$APP"
+  spctl -a -vvv -t install "$APP"
 
-echo "==> Re-zipping the stapled app for distribution"
-rm -f "$ZIP"
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+  echo "==> Re-zipping the stapled app for distribution"
+  rm -f "$ZIP"
+  ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+fi
 
 SHA="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
 echo "==> sha256: $SHA"
