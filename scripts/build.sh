@@ -42,6 +42,27 @@ rm -rf "$ROOT/build"
 mkdir -p "$MACOS_DIR" "$RES_DIR" "$LD_DIR"
 
 echo "==> Compiling helper"
+# The daemon's embedded Info.plist (SMJobBless reads CFBundleIdentifier from
+# __TEXT,__info). Generate it next to the build products: this used to come
+# from /tmp, i.e. whatever stale copy happened to survive there — the build
+# embedded a three-day-old plist and a cleaned /tmp would have failed it.
+HELPER_INFO_PLIST="$ROOT/build/ArgusHelper-Info.plist"
+cat > "$HELPER_INFO_PLIST" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.kairong.argus.helper</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>ArgusHelper</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+</dict>
+</plist>
+PLIST
 # IOKit: PowerController binds IOPMSetSystemPowerSetting / IOPMCopySystemPowerSettings
 # (SleepDisabled SPI) via @_silgen_name; the framework must be linked (ADR-0001).
 # Security: HelperCallerIdentity uses SecCode/SecRequirement to identify the XPC
@@ -50,7 +71,7 @@ echo "==> Compiling helper"
 swiftc -O -target "$TARGET" \
     ${HELPER_DEFINES[@]+"${HELPER_DEFINES[@]}"} \
     -framework Foundation -framework IOKit -framework Security \
-    -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info -Xlinker /tmp/ArgusHelper-Info.plist \
+    -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info -Xlinker "$HELPER_INFO_PLIST" \
     -o "$MACOS_DIR/ArgusHelper" \
     "${HELPER_SRC[@]}" "${SHARED_SRC[@]}"
 
