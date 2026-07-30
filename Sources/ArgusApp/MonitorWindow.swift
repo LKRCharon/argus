@@ -7,10 +7,9 @@ import Charts
 /// chart, live agent list, guard state) trapped inside Settings — those are
 /// things you glance at, not things you configure, so they live here instead.
 ///
-/// Design follows the 2025-era menu-bar-monitor idiom (Pulse, iStat Menus 7,
-/// Sensei): material backdrop, rounded cards, gradient-filled area chart, a
-/// ring gauge for the bounded value, threshold colours as the only loud
-/// colours, monospaced digits so a ticking number never shifts the layout.
+/// Styling follows the Android app's control-center language (MonitorTheme is
+/// a hex-for-hex port of ui/theme/Theme.kt): solid sheet surface, rounded
+/// cards, ONE accent, pills for entities, SF Symbols instead of emoji.
 
 // MARK: - Window controller
 
@@ -74,11 +73,28 @@ final class MonitorWindowController: NSWindowController, NSWindowDelegate {
 
 private struct MonitorRootView: View {
     @ObservedObject var model: MonitorViewModel
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var palette: MonitorPalette {
+        colorScheme == .dark ? .dark : .light
+    }
+
+    /// Android compensates same-hex surfaces with elevation shadows; flat macOS
+    /// gets a hairline instead, or light-mode cards blur into the sheet.
+    private var cardBorder: Color { palette.textPrimary.opacity(0.07) }
+
+    /// Cards read the same palette. Do NOT store this as @Environment injected
+    /// inside our own body: a stored environment property resolves from the
+    /// *parent* (NSHostingController, which injects nothing), so it silently
+    /// kept the .dark default and light mode rendered dark cards on a light
+    /// background. An injected value only reaches a child subtree.
+    private var c: MonitorPalette { palette }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                statusCard
+                statusCapsule
+                guardCard
                 HStack(alignment: .top, spacing: 12) {
                     thermalCard
                     batteryCard
@@ -91,61 +107,106 @@ private struct MonitorRootView: View {
             .padding(.top, 12)
         }
         .scrollContentBackground(.hidden)
-        .background(.regularMaterial)
+        .background(palette.sheet)
         .frame(minWidth: 340)
     }
 
-    // MARK: Status card
+    // MARK: Status capsule (pill-first, like Android's StatusCapsule)
 
-    private var statusCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: 10, height: 10)
-                Text(model.headline)
-                    .font(.headline)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                if !model.elapsedText.isEmpty {
-                    Text(model.elapsedText)
-                        .font(.system(.title3, design: .monospaced).weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText())
-                        .animation(.default, value: model.elapsedText)
-                }
-            }
-            if !model.guardLines.isEmpty {
-                Divider()
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(model.guardLines, id: \.self) { line in
-                        Text(line)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+    private var statusCapsule: some View {
+        return HStack(alignment: .center, spacing: 10) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 9, height: 9)
+            Text(model.headline)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(c.textPrimary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if !model.elapsedText.isEmpty {
+                Text(model.elapsedText)
+                    .font(.system(.body, design: .monospaced).weight(.medium))
+                    .foregroundStyle(c.textSecondary)
+                    .contentTransition(.numericText())
+                    .animation(.default, value: model.elapsedText)
             }
         }
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(c.card, in: RoundedRectangle(cornerRadius: MonitorRadius.card))
+        .overlay(RoundedRectangle(cornerRadius: MonitorRadius.card).strokeBorder(cardBorder, lineWidth: 0.5))
     }
 
     private var dotColor: Color {
         switch model.dotState {
-        case .holding: return .green
-        case .attention: return .orange
-        case .idle: return .gray
+        case .holding: return c.statusGreen
+        case .attention: return c.statusAmber
+        case .idle: return c.textTertiary
         }
     }
 
-    // MARK: Thermal card (gradient area chart)
+    // MARK: Guard rows — SF Symbols, never emoji
+
+    private var guardCard: some View {
+        let rows = model.guardLines.map(Self.splitSymbol)
+        return Group {
+            if rows.isEmpty {
+                EmptyView()
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(rows, id: \.self) { row in
+                        HStack(spacing: 8) {
+                            if let symbol = row.symbol {
+                                Image(systemName: symbol)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(row.isWarning ? c.statusAmber : c.textSecondary)
+                                    .frame(width: 16, alignment: .center)
+                            }
+                            Text(row.text)
+                                .font(.callout)
+                                .foregroundStyle(row.isWarning ? c.textPrimary : c.textSecondary)
+                            Spacer()
+                        }
+                    }
+                }
+                .padding(12)
+                .background(c.card, in: RoundedRectangle(cornerRadius: MonitorRadius.card))
+        .overlay(RoundedRectangle(cornerRadius: MonitorRadius.card).strokeBorder(cardBorder, lineWidth: 0.5))
+            }
+        }
+    }
+
+    /// A guard row's identity: the icon + the text (text alone can repeat —
+    /// e.g. a calm and a warning battery line can share wording in edge cases).
+    private struct GuardRow: Hashable {
+        let symbol: String?
+        let text: String
+        let isWarning: Bool
+    }
+
+    /// Strip the leading status emoji (menu strings carry them as markers) and
+    /// map it to an SF Symbol via the same table the menu uses.
+    private static func splitSymbol(_ line: String) -> GuardRow {
+        guard let first = line.first, let name = MonitorSymbols.name(for: first) else {
+            return GuardRow(symbol: nil, text: line, isWarning: false)
+        }
+        // The warning mark is appended at the END of the line ("🔋 15% · guard
+        // 20% ⚠️"), not at the front — checking the first character never fired
+        // and left the emoji inline in the text.
+        let isWarning = line.contains("⚠️")
+        let rest = line.dropFirst().drop(while: { $0 == " " })
+        let text = rest.replacingOccurrences(of: " ⚠️", with: "")
+        return GuardRow(symbol: name, text: text, isWarning: isWarning)
+    }
+
+    // MARK: Thermal card (gradient area chart, accent-tinted)
 
     private var thermalCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 8) {
             Label(NSL("monitor.temperature", "Temperature"), systemImage: "thermometer.medium")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(c.textSecondary)
             if model.samples.count > 1 {
                 Chart(model.samples, id: \.at) { s in
                     if let cpu = s.cpuC {
@@ -168,7 +229,7 @@ private struct MonitorRootView: View {
             } else {
                 Text(NSL("monitor.collecting", "Collecting…"))
                     .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(c.textTertiary)
                     .frame(maxWidth: .infinity, minHeight: 96)
             }
             HStack(spacing: 12) {
@@ -179,32 +240,38 @@ private struct MonitorRootView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(c.card, in: RoundedRectangle(cornerRadius: MonitorRadius.card))
+        .overlay(RoundedRectangle(cornerRadius: MonitorRadius.card).strokeBorder(cardBorder, lineWidth: 0.5))
     }
 
-    /// Nominal stays orange (temperature's colour); pressure turns the whole
-    /// card red so the glance answer changes before any number is read.
+    /// The single accent is the baseline; thermal pressure escalates to amber
+    /// then danger — status colours stay reserved for status.
     private var thermalAccent: Color {
-        model.thermalLevel >= 2 ? .red : .orange
+        if model.thermalLevel >= 3 { return c.danger }
+        if model.thermalLevel >= 2 { return c.statusAmber }
+        return c.accentStroke
     }
 
     private func tempChip(_ label: String, _ value: Double?) -> some View {
-        HStack(spacing: 4) {
-            Text(label).font(.caption).foregroundStyle(.tertiary)
+        return HStack(spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(c.textTertiary)
             Text(value.map { String(format: "%.0f°", $0) } ?? "—")
                 .font(.system(.callout, design: .rounded).monospacedDigit())
+                .foregroundStyle(c.textPrimary)
         }
     }
 
     // MARK: Battery ring
 
     private var batteryCard: some View {
-        VStack(spacing: 10) {
+        return VStack(spacing: 10) {
             Label(NSL("monitor.battery", "Battery"), systemImage: "battery.75percent")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(c.textSecondary)
             ZStack {
-                Circle().stroke(.quaternary, lineWidth: 9)
+                // Track in sheet (not card): a card-coloured track on a card
+                // background is invisible, leaving the arc floating on nothing.
+                Circle().stroke(c.sheet, lineWidth: 9)
                 if let pct = model.batteryPercent {
                     Circle()
                         .trim(from: 0, to: CGFloat(pct) / 100)
@@ -214,80 +281,84 @@ private struct MonitorRootView: View {
                         .animation(.easeInOut(duration: 0.4), value: pct)
                     Text("\(pct)%")
                         .font(.system(.title3, design: .rounded).weight(.semibold).monospacedDigit())
+                        .foregroundStyle(c.textPrimary)
                 } else {
                     Text("—")
                         .font(.title3)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(c.textTertiary)
                 }
             }
             .frame(width: 92, height: 92)
             Text(NSLf("monitor.guardAt", "guard %d%%", model.batteryLowThreshold))
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(c.textTertiary)
         }
         .padding(12)
         .frame(maxWidth: .infinity)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(c.card, in: RoundedRectangle(cornerRadius: MonitorRadius.card))
+        .overlay(RoundedRectangle(cornerRadius: MonitorRadius.card).strokeBorder(cardBorder, lineWidth: 0.5))
     }
 
     private func batteryColor(_ pct: Int) -> Color {
-        if pct <= 10 { return .red }
-        if pct <= model.batteryLowThreshold { return .orange }
-        return .green
+        if pct <= 10 { return c.danger }
+        if pct <= model.batteryLowThreshold { return c.statusAmber }
+        return c.statusGreen
     }
 
-    // MARK: Agents
+    // MARK: Agents (pills)
 
     private var agentsCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 8) {
             Label(NSL("monitor.activeAgents", "Active agents"), systemImage: "cpu")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(c.textSecondary)
             if model.activeAgents.isEmpty {
                 Text(NSL("monitor.noAgents", "None running"))
                     .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(c.textTertiary)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) {
                     ForEach(model.activeAgents, id: \.self) { name in
                         HStack(spacing: 6) {
-                            Circle().fill(.green).frame(width: 6, height: 6)
-                            Text(name).font(.callout).lineLimit(1)
+                            Circle().fill(c.statusGreen).frame(width: 6, height: 6)
+                            Text(name).font(.callout).foregroundStyle(c.textPrimary).lineLimit(1)
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(.quaternary.opacity(0.5), in: Capsule())
+                        .background(c.sheet, in: Capsule())
                     }
                 }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(c.card, in: RoundedRectangle(cornerRadius: MonitorRadius.card))
+        .overlay(RoundedRectangle(cornerRadius: MonitorRadius.card).strokeBorder(cardBorder, lineWidth: 0.5))
     }
 
     // MARK: Remote channels
 
     private var remoteCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(NSL("monitor.remote", "Remote sessions"), systemImage: "network")
+        return VStack(alignment: .leading, spacing: 8) {
+            Label(NSL("monitor.remote", "Remote sessions"), systemImage: "antenna.radiowaves.left.and.right")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(c.textSecondary)
             if model.remoteChannels.isEmpty {
                 Text(NSL("monitor.noRemote", "No remote connections"))
                     .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(c.textTertiary)
             } else {
                 ForEach(model.remoteChannels, id: \.self) { channel in
-                    HStack(spacing: 6) {
-                        Circle().fill(.green).frame(width: 6, height: 6)
-                        Text(channel).font(.callout).lineLimit(1)
+                    HStack(spacing: 8) {
+                        Circle().fill(c.statusGreen).frame(width: 6, height: 6)
+                        Text(channel).font(.callout).foregroundStyle(c.textPrimary).lineLimit(1)
                     }
                 }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(c.card, in: RoundedRectangle(cornerRadius: MonitorRadius.card))
+        .overlay(RoundedRectangle(cornerRadius: MonitorRadius.card).strokeBorder(cardBorder, lineWidth: 0.5))
     }
 }
