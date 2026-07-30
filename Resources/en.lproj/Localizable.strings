@@ -486,3 +486,16 @@
 "inject.err.noQuestWindow" = "Qoder's Quest window could not be brought forward";
 "inject.err.notFrontmost" = "Qoder did not come to the front, so the message was not typed (try again with Qoder visible)";
 "inject.ok" = "Typed into Qoder";
+
+/* Monitor window (SwiftUI dashboard) */
+"menu.monitor" = "Monitor…";
+"monitor.title" = "Monitor";
+"monitor.temperature" = "Temperature";
+"monitor.collecting" = "Collecting…";
+"monitor.batt" = "Batt";
+"monitor.battery" = "Battery";
+"monitor.guardAt" = "guard %d%%";
+"monitor.activeAgents" = "Active agents";
+"monitor.noAgents" = "None running";
+"monitor.remote" = "Remote sessions";
+"monitor.noRemote" = "No remote connections";

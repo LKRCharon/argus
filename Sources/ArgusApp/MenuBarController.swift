@@ -9,6 +9,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let store: StateStore
     private let bridge: HelperBridge
     private let onOpenSettings: () -> Void
+    private var onOpenMonitor: () -> Void = {}
     private let onOpenAgentsPane: () -> Void
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -16,11 +17,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     init(store: StateStore,
          bridge: HelperBridge,
          onOpenSettings: @escaping () -> Void,
-         onOpenAgentsPane: @escaping () -> Void) {
+         onOpenAgentsPane: @escaping () -> Void,
+         onOpenMonitor: @escaping () -> Void) {
         self.store = store
         self.bridge = bridge
         self.onOpenSettings = onOpenSettings
         self.onOpenAgentsPane = onOpenAgentsPane
+        self.onOpenMonitor = onOpenMonitor
         super.init()
         // `store.onChange` is owned by AppDelegate (it forwards to refresh()
         // and the convergence engine). We just install our menu here.
@@ -205,7 +208,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return nil
     }
 
-    private var isEnabled: Bool {
+    var isEnabled: Bool {
         if case .enabled = store.registration { return true }
         return false
     }
@@ -246,6 +249,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         blank.target = self
         blank.isEnabled = canToggle
         menu.addItem(blank)
+
+        // Monitor — the SwiftUI dashboard: status, thermal, battery, agents.
+        // Status lives here, not buried in Settings (the pane audit showed
+        // nearly everything stateful was trapped inside the settings window).
+        let monitor = NSMenuItem(
+            title: NSL("menu.monitor", "Monitor…"),
+            action: #selector(openMonitorTapped),
+            keyEquivalent: "m")
+        monitor.target = self
+        menu.addItem(monitor)
 
         menu.addItem(.separator())
 
@@ -300,7 +313,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     /// At-a-glance state color for the header dot.
-    private func statusDotColor() -> NSColor {
+    /// Internal: the monitor window consumes the very same verdict — deriving
+    /// its own half-copy diverged on CLI holds (sleepDisabled) and on
+    /// not-yet-approved installs.
+    func statusDotColor() -> NSColor {
         guard case .enabled = store.registration else { return .systemOrange } // needs attention
         if store.helperUnreachable { return .systemOrange }                     // P1-a — dead-but-enabled
         if store.safetyRelease != nil { return .systemOrange }                  // guard released
@@ -309,7 +325,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     /// Six-case mapping per ADR-0005 §2, extended for ADR-0006 §A activity text.
-    private func headerString(for status: StateStore.RegistrationView, sleepDisabled: Bool)
+    /// Internal: registration-gated headline (the monitor window must not
+    /// say "Asleep when idle" on a machine that has never approved the helper).
+    func headerString(for status: StateStore.RegistrationView, sleepDisabled: Bool)
         -> (text: String, symbol: String)
     {
         switch status {
@@ -328,7 +346,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     /// Nine-case priority per ADR-0004 §"헤더 표시" + ADR-0008 + ADR-0005 §2.
     /// First match wins. Safety releases pre-empt every awake reason.
-    private func enabledHeader() -> String {
+    /// Internal (not private): the monitor window reads the same headline so
+    /// it can never disagree with the menu bar about why we are awake.
+    func enabledHeader() -> String {
         // 0. P1-a — registered (.enabled) but the helper isn't answering XPC.
         // Pre-empts every "Awake — …" line below, which would otherwise claim
         // we're holding sleep open while the daemon is actually dead (the silent
@@ -463,7 +483,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return out
     }
 
-    private func guardStatusLines() -> [String] {
+    /// Internal: the monitor window shows the same guard lines as the menu.
+    func guardStatusLines() -> [String] {
         let s = store.safetySettings
         var lines: [String] = []
 
@@ -632,6 +653,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func openSettingsTapped() {
         onOpenSettings()
+    }
+
+    @objc private func openMonitorTapped() {
+        onOpenMonitor()
     }
 
     /// Backlog #8 — blank all displays (built-in + external) while the Mac keeps

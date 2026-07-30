@@ -16,6 +16,7 @@ enum HelpCommand: CLISubcommand {
       argus session stop <name>
       argus session list [--json]
       argus debug [agents] [--json]
+      argus monitor                        (open the monitor window)
       argus help
 
     EXIT CODES:

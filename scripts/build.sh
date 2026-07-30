@@ -79,6 +79,7 @@ echo "==> Compiling app"
 swiftc -O -target "$TARGET" \
     -framework AppKit -framework Foundation -framework ServiceManagement -framework IOKit \
     -framework CoreGraphics \
+    -framework SwiftUI -framework Charts \
     -import-objc-header "$ROOT/Sources/ArgusApp/VirtualDisplayShim.h" \
     -o "$MACOS_DIR/Argus" \
     "${APP_SRC[@]}" "${SHARED_SRC[@]}" \

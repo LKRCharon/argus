@@ -484,3 +484,16 @@
 "inject.err.noQuestWindow" = "无法唤出 Qoder 的 Quest 窗口";
 "inject.err.notFrontmost" = "Qoder 没有回到前台，消息未输入（请让 Qoder 可见后重试）";
 "inject.ok" = "已输入到 Qoder";
+
+/* Monitor window (SwiftUI dashboard) */
+"menu.monitor" = "监控…";
+"monitor.title" = "监控";
+"monitor.temperature" = "温度";
+"monitor.collecting" = "正在采集…";
+"monitor.batt" = "电池";
+"monitor.battery" = "电池";
+"monitor.guardAt" = "保护阈值 %d%%";
+"monitor.activeAgents" = "活跃 agent";
+"monitor.noAgents" = "暂无运行中的 agent";
+"monitor.remote" = "远程会话";
+"monitor.noRemote" = "暂无远程连接";

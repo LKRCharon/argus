@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController?
     private var bridge: HelperBridge?
     private var settingsWindow: SettingsWindowController?
+    private var monitorWindow: MonitorWindowController?
     private var detector: AgentDetector?
     private var remoteWatcher: RemoteWatcher?
     private var safetyMonitor: SafetyMonitor?
@@ -169,7 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store: store,
             bridge: bridge,
             onOpenSettings: { [weak self] in self?.openSettings() },
-            onOpenAgentsPane: { [weak self] in self?.openSettings(pane: .agents) })
+            onOpenAgentsPane: { [weak self] in self?.openSettings(pane: .agents) },
+            onOpenMonitor: { [weak self] in self?.openMonitor() })
         self.menuBar = menuBar
 
         // ADR-0028 — Telegram 상태 푸시. History 의 에피소드 탭이 유일한
@@ -178,6 +180,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TelegramNotifier.shared.configure(store: store)
         history.onEpisodeStart = { TelegramNotifier.shared.episodeStarted($0) }
         history.onEpisodeEnd = { TelegramNotifier.shared.episodeEnded($0) }
+
+        // `argus monitor` → open the dashboard. Distributed because the CLI is
+        // a separate process with no channel into the GUI.
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(openMonitor),
+            name: Notification.Name("com.kairong.argus.openMonitor"),
+            object: nil)
 
         // Wire detector → store.
         let detector = AgentDetector()
@@ -359,6 +369,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                       onRelocalize: { [weak self] in self?.relocalize() })
         }
         settingsWindow?.show(pane: pane)
+    }
+
+    /// The SwiftUI dashboard. Needs the menu bar for the shared headline /
+    /// guard-line wording, so it can only be built once the menu exists.
+    /// Also reachable as `argus monitor` (status-item menus are invisible to
+    /// System Events, so the CLI is the only scriptable way in).
+    @objc func openMonitor() {
+        guard let menuBar else { return }
+        if monitorWindow == nil {
+            monitorWindow = MonitorWindowController(store: store, menuBar: menuBar)
+        }
+        monitorWindow?.show()
     }
 
     /// ADR-0011 §C v3 — re-render the UI in the newly-selected language without

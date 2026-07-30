@@ -19,6 +19,7 @@ enum CLI {
         case "watch":   return WatchCommand.run(args: Array(args.dropFirst()))
         case "session": return SessionCommand.run(args: Array(args.dropFirst()))
         case "debug":   return DebugCommand.run(args: Array(args.dropFirst()))
+        case "monitor": return MonitorCommand.run(args: Array(args.dropFirst()))
         case "help", "-h", "--help":
             HelpCommand.printUsage()
             return 0

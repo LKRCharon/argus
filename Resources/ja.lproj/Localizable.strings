@@ -484,3 +484,16 @@
 "inject.err.noQuestWindow" = "Qoder の Quest ウインドウを前面に出せませんでした";
 "inject.err.notFrontmost" = "Qoder が前面に来なかったため入力されませんでした（Qoder を表示してから再試行）";
 "inject.ok" = "Qoder に入力しました";
+
+/* Monitor window (SwiftUI dashboard) */
+"menu.monitor" = "モニター…";
+"monitor.title" = "モニター";
+"monitor.temperature" = "温度";
+"monitor.collecting" = "収集中…";
+"monitor.batt" = "バッテ";
+"monitor.battery" = "バッテリー";
+"monitor.guardAt" = "ガード %d%%";
+"monitor.activeAgents" = "実行中のエージェント";
+"monitor.noAgents" = "実行中なし";
+"monitor.remote" = "リモートセッション";
+"monitor.noRemote" = "リモート接続なし";
