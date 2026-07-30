@@ -1,6 +1,6 @@
 cask "argus" do
   version "0.7.0"
-  sha256 :no_check # placeholder; scripts/release.sh rewrites this to the real digest at release
+  sha256 "b557892708c8006e70604010c9189d2956e35bfb14c70f40fc5f632f14f6cc06"
 
   url "https://github.com/LKRCharon/argus/releases/download/v#{version}/Argus-#{version}.zip"
   name "Argus"
