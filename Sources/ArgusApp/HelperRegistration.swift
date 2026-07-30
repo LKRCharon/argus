@@ -121,7 +121,7 @@ enum HelperRegistration {
     /// ADR-0020 — explicit "Reinstall Helper" repair (Macchiato-style):
     /// `unregister()` then `register()` to rebuild a wedged registration.
     ///
-    /// ⚠️ SUPERSEDED by `forceReregister(timeout:)` (ADR-0036) — do not call.
+    /// WARNING: SUPERSEDED by `forceReregister(timeout:)` (ADR-0036) — do not call.
     /// This one-shot version registers *immediately* after unregister, which
     /// EPERMs until BTM/launchd settles and strands the helper in
     /// `.notRegistered` (live-confirmed 2026-06-24). Kept only so the historical

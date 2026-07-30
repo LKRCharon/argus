@@ -34,13 +34,13 @@
 "header.unknown" = "未知状态";
 
 /* Menu header — reasons */
-"header.guardThermalLabel" = "守护已介入 — 🌡 %@";
-"header.guardThermalCritical" = "守护已介入 — 🌡 严重";
-"header.guardThermalSerious" = "守护已介入 — 🌡 偏高 + 合盖";
-"header.guardBattery" = "守护已介入 — 🔋 %d%%";
-"header.guardBatteryLow" = "守护已介入 — 🔋 电量低";
-"header.guardTimer" = "守护已介入 — ⏱ %d分钟";
-"header.guardTimerPlain" = "守护已介入 — ⏱ 计时器";
+"header.guardThermalLabel" = "守护已介入 — [therm] %@";
+"header.guardThermalCritical" = "守护已介入 — [therm] 严重";
+"header.guardThermalSerious" = "守护已介入 — [therm] 偏高 + 合盖";
+"header.guardBattery" = "守护已介入 — [bat] %d%%";
+"header.guardBatteryLow" = "守护已介入 — [bat] 电量低";
+"header.guardTimer" = "守护已介入 — [timer] %d分钟";
+"header.guardTimerPlain" = "守护已介入 — [timer] 计时器";
 "header.guardWatchdog" = "守护已介入 — Helper 超时";
 "header.awakeRemote" = "唤醒 — 远程会话";
 "header.awakeAgentsCount" = "唤醒 — %d 个代理活动中";
@@ -59,7 +59,6 @@
 
 /* General pane */
 "general.version" = "版本 %@";
-"general.support" = "☕ 请我喝杯咖啡";
 "general.language" = "语言";
 "general.statusCard.on" = "Argus — 已开启 · 保持唤醒";
 "general.statusCard.off" = "Argus — 已关闭 · 正常休眠";
@@ -137,15 +136,15 @@
 "remote.tip.channels" = "当前检测到的远程接入路径（用于诊断显示）。此标签页打开期间每隔数秒刷新。";
 
 /* ADR-0017 — 菜单守护状态 */
-"status.battery" = "🔋 %d%% · 阈值 %d%%%@";
-"status.thermal" = "🌡 %@ · 上限 %@%@";
-"status.timer" = "⏱ %dm · 上限 %dm";
-"status.remoteOff" = "🛰 远程关闭";
-"status.remoteActiveNoExpiry" = "🛰 远程活动 · 不过期";
-"status.remoteIdleActive" = "🛰 空闲 %dm · %dm 后睡眠";
-"status.remoteActiveCap" = "🛰 远程活动 · 空闲 %dm 后睡眠";
-"status.remoteIdleNever" = "🛰 远程 · 不过期";
-"status.remoteIdleCap" = "🛰 远程 · 空闲 %dm 后睡眠";
+"status.battery" = "[bat] %d%% · 阈值 %d%%%@";
+"status.thermal" = "[therm] %@ · 上限 %@%@";
+"status.timer" = "[timer] %dm · 上限 %dm";
+"status.remoteOff" = "[sat] 远程关闭";
+"status.remoteActiveNoExpiry" = "[sat] 远程活动 · 不过期";
+"status.remoteIdleActive" = "[sat] 空闲 %dm · %dm 后睡眠";
+"status.remoteActiveCap" = "[sat] 远程活动 · 空闲 %dm 后睡眠";
+"status.remoteIdleNever" = "[sat] 远程 · 不过期";
+"status.remoteIdleCap" = "[sat] 远程 · 空闲 %dm 后睡眠";
 
 /* Safety pane */
 "safety.master" = "条件变得不安全时自动解除";
@@ -378,23 +377,23 @@
 "telegram.error.notConfigured" = "请先输入机器人令牌和聊天 ID。";
 "telegram.error.badToken" = "这看起来不像机器人令牌 (应为 123456:ABC…)。";
 "telegram.error.noUpdates" = "未找到消息。请先在 Telegram 中给机器人发送任意消息,然后重试。";
-"telegram.test" = "🐚 Argus — 测试消息。通知已连接成功。";
-"telegram.start.agent" = "🟢 唤醒 — %@ 正在工作";
-"telegram.start.remote" = "🟢 唤醒 — 远程会话 (%@)";
-"telegram.start.generic" = "🟢 唤醒 — 保持 Mac 唤醒";
-"telegram.end.agentIdle" = "⚪️ %1$@ 已空闲 — 唤醒持续 %2$@ 后结束";
-"telegram.end.battery" = "🛑 电池防护已允许睡眠 (%1$@) — Mac 可能很快入睡。已唤醒 %2$@";
-"telegram.end.thermal" = "🛑 过热防护已允许睡眠 (%1$@) — Mac 可能很快入睡。已唤醒 %2$@";
-"telegram.end.timer" = "⏱ 已达最长唤醒时间 (%1$@) — 允许睡眠。已唤醒 %2$@";
-"telegram.end.watchdog" = "⚠️ 助手看门狗已触发 — 已恢复睡眠";
-"telegram.end.remoteEnded" = "⚪️ 远程会话结束 (%1$@) — 唤醒持续 %2$@ 后结束";
-"telegram.end.remoteLost" = "⚪️ 远程会话中断 (网络丢失) — 唤醒持续 %@ 后结束";
-"telegram.end.generic" = "⚪️ 唤醒结束 — %@";
+"telegram.test" = "[TEST] Argus — 测试消息。通知已连接成功。";
+"telegram.start.agent" = "[ON] 唤醒 — %@ 正在工作";
+"telegram.start.remote" = "[ON] 唤醒 — 远程会话 (%@)";
+"telegram.start.generic" = "[ON] 唤醒 — 保持 Mac 唤醒";
+"telegram.end.agentIdle" = "[OFF] %1$@ 已空闲 — 唤醒持续 %2$@ 后结束";
+"telegram.end.battery" = "[GUARD] 电池防护已允许睡眠 (%1$@) — Mac 可能很快入睡。已唤醒 %2$@";
+"telegram.end.thermal" = "[GUARD] 过热防护已允许睡眠 (%1$@) — Mac 可能很快入睡。已唤醒 %2$@";
+"telegram.end.timer" = "[TIMER] 已达最长唤醒时间 (%1$@) — 允许睡眠。已唤醒 %2$@";
+"telegram.end.watchdog" = "[WARN] 助手看门狗已触发 — 已恢复睡眠";
+"telegram.end.remoteEnded" = "[OFF] 远程会话结束 (%1$@) — 唤醒持续 %2$@ 后结束";
+"telegram.end.remoteLost" = "[OFF] 远程会话中断 (网络丢失) — 唤醒持续 %@ 后结束";
+"telegram.end.generic" = "[OFF] 唤醒结束 — %@";
 
 /* ADR-0028 §7 — 定期静默摘要 */
 "telegram.evtDigest" = "工作期间定期状态 (静默),间隔";
 "telegram.tip.evtDigest" = "Mac 保持唤醒期间的心跳:按此间隔发送静默状态消息(无声音、无横幅)。如果心跳中断,说明 Mac 或网络出了问题。工作结束立即停止。";
-"telegram.digest" = "📊 仍在唤醒中 — %@";
+"telegram.digest" = "[STATUS] 仍在唤醒中 — %@";
 
 /* ADR-0037 — 合盖锁定防护 · VPN 监视 · 熄屏模式 (vdisplay) */
 "general.sessions" = "会话";
@@ -417,10 +416,10 @@
 /* ADR-0037 — VPN 断开通知 (本地 + Telegram) */
 "notify.vpnDropped.title" = "VPN 已断开";
 "notify.vpnDropped.body" = "%@ 需要重新认证（SAML/SSO）。Argus 不会自动重连 — 请打开 FortiClient 重新登录。";
-"telegram.vpn.dropped" = "🔌 VPN 已断开（%@）— FortiClient 需要重新认证（SAML）。不会自动重连。";
+"telegram.vpn.dropped" = "[VPN] VPN 已断开（%@）— FortiClient 需要重新认证（SAML）。不会自动重连。";
 
 /* Menu — uptime line (shown while awake, no cap set) */
-"status.uptime" = "⏱ 已唤醒 %@";
+"status.uptime" = "[timer] 已唤醒 %@";
 
 /* UI redesign — pane titles & card headings */
 "agents.title" = "代理";

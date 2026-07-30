@@ -92,21 +92,21 @@ enum StatusCommand: CLISubcommand {
             print("login item:  \(loginItem)")
             // ADR-0039 — 문제가 있을 때만 경고 라인 추가(정상 머신은 새 노이즈 없음).
             if let block = block {
-                print("install:     ⚠ \(block.kind.rawValue) — move to /Applications and reopen")
+                print("install:     [!] \(block.kind.rawValue) — move to /Applications and reopen")
             } else if !InstallLocation.isInApplications(Bundle.main.bundlePath) {
-                print("install:     ⚠ running outside /Applications")
+                print("install:     [!] running outside /Applications")
             }
             if job?.spawnFailed == true {
-                print("daemon:      ⚠ spawn failed (exit \(job?.lastExitCode.map(String.init) ?? "?") / EX_CONFIG) — app may be quarantined or outside /Applications")
+                print("daemon:      [!] spawn failed (exit \(job?.lastExitCode.map(String.init) ?? "?") / EX_CONFIG) — app may be quarantined or outside /Applications")
             }
             if copies.count > 1 {
-                print("copies:      ⚠ \(copies.count) installs found (split-brain risk):")
+                print("copies:      [!] \(copies.count) installs found (split-brain risk):")
                 for c in copies {
                     print("               \(c.shortVersion ?? "?")  \(c.path)")
                 }
             }
             if let reg = job?.parentBundleVersion, let appVer = appVer, reg != appVer {
-                print("version:     ⚠ app \(appVer) but registered daemon \(reg) (version skew)")
+                print("version:     [!] app \(appVer) but registered daemon \(reg) (version skew)")
             }
         }
         // 0 ok / 2 enabled-but-unreachable. Non-enabled states stay 0 — see

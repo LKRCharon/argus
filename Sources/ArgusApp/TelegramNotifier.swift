@@ -122,7 +122,7 @@ final class TelegramNotifier {
                                                episodeOngoing: episodeOngoing) else { return }
         let dur = TelegramSupport.formatDuration(
             Date().timeIntervalSince(episodeStartedAt ?? Date()))
-        let head = NSLf("telegram.digest", "📊 Still awake — %@", dur)
+        let head = NSLf("telegram.digest", "[STATUS] Still awake — %@", dur)
         // 무음(silent): 채팅에 쌓이되 알림음·배너 없음. 소리 나는 건 이벤트뿐.
         send(compose(head), silent: true)
     }
@@ -140,11 +140,11 @@ final class TelegramNotifier {
         let head: String
         switch ep.startCause {
         case .agent:
-            head = NSLf("telegram.start.agent", "🟢 Awake — %@ is working", ep.startDetail ?? "agent")
+            head = NSLf("telegram.start.agent", "[ON] Awake — %@ is working", ep.startDetail ?? "agent")
         case .remote:
-            head = NSLf("telegram.start.remote", "🟢 Awake — remote session (%@)", ep.startDetail ?? "?")
+            head = NSLf("telegram.start.remote", "[ON] Awake — remote session (%@)", ep.startDetail ?? "?")
         case .manual, .unknown:
-            head = NSL("telegram.start.generic", "🟢 Awake — keeping the Mac up")
+            head = NSL("telegram.start.generic", "[ON] Awake — keeping the Mac up")
         }
         send(compose(head))
     }
@@ -160,28 +160,28 @@ final class TelegramNotifier {
         let head: String
         switch ep.endReason ?? .unknown {
         case .agentCeased:
-            head = NSLf("telegram.end.agentIdle", "⚪️ %1$@ went idle — awake ended after %2$@",
+            head = NSLf("telegram.end.agentIdle", "[OFF] %1$@ went idle — awake ended after %2$@",
                         ep.endDetail ?? "agent", dur)
         case .batteryLow:
-            head = NSLf("telegram.end.battery", "🛑 Battery guard released sleep (%1$@) — your Mac may sleep soon. Awake %2$@",
+            head = NSLf("telegram.end.battery", "[GUARD] Battery guard released sleep (%1$@) — your Mac may sleep soon. Awake %2$@",
                         ep.endDetail ?? "low", dur)
         case .thermalSerious, .thermalCritical:
-            head = NSLf("telegram.end.thermal", "🛑 Thermal guard released sleep (%1$@) — your Mac may sleep soon. Awake %2$@",
+            head = NSLf("telegram.end.thermal", "[GUARD] Thermal guard released sleep (%1$@) — your Mac may sleep soon. Awake %2$@",
                         ep.endDetail ?? "hot", dur)
         case .timer:
-            head = NSLf("telegram.end.timer", "⏱ Max awake duration reached (%1$@) — sleep allowed. Awake %2$@",
+            head = NSLf("telegram.end.timer", "[TIMER] Max awake duration reached (%1$@) — sleep allowed. Awake %2$@",
                         ep.endDetail ?? dur, dur)
         case .watchdog:
-            head = NSL("telegram.end.watchdog", "⚠️ Helper watchdog tripped — sleep restored")
+            head = NSL("telegram.end.watchdog", "[WARN] Helper watchdog tripped — sleep restored")
         case .remoteEnded:
-            head = NSLf("telegram.end.remoteEnded", "⚪️ Remote session ended (%1$@) — awake ended after %2$@",
+            head = NSLf("telegram.end.remoteEnded", "[OFF] Remote session ended (%1$@) — awake ended after %2$@",
                         ep.endDetail ?? "?", dur)
         case .remoteNetworkLost:
-            head = NSLf("telegram.end.remoteLost", "⚪️ Remote session dropped (network lost) — awake ended after %@", dur)
+            head = NSLf("telegram.end.remoteLost", "[OFF] Remote session dropped (network lost) — awake ended after %@", dur)
         case .manualOff, .forceSleep, .appQuit, .unknown:
             // manualOff/forceSleep/appQuit 은 게이팅에서 .never 로 걸러졌고,
             // 여기 남는 건 unknown 뿐.
-            head = NSLf("telegram.end.generic", "⚪️ Awake ended after %@", dur)
+            head = NSLf("telegram.end.generic", "[OFF] Awake ended after %@", dur)
         }
         send(compose(head))
     }
@@ -202,7 +202,7 @@ final class TelegramNotifier {
         // no-op 한다. 로컬 알림은 VpnWatcher 가 별도로 띄우므로 여기서 안 막힌다.
         log.notice("vpn-drop telegram: isConfigured(master opt-in)=\(self.settings.isConfigured, privacy: .public) — \(self.settings.isConfigured ? "attempting send" : "skipped (configure Telegram to enable)", privacy: .public)")
         let head = NSLf("telegram.vpn.dropped",
-            "🔌 VPN disconnected (%@) — FortiClient needs re-auth (SAML). No auto-reconnect.",
+            "[VPN] VPN disconnected (%@) — FortiClient needs re-auth (SAML). No auto-reconnect.",
             serviceName)
         send(compose(head))
     }
@@ -217,7 +217,7 @@ final class TelegramNotifier {
             completion(NSL("telegram.error.notConfigured", "Enter a bot token and chat ID first."))
             return
         }
-        let head = NSL("telegram.test", "🐚 Argus — test message. Notifications are wired up.")
+        let head = NSL("telegram.test", "[TEST] Argus — test message. Notifications are wired up.")
         send(compose(head), bypassGate: true, completion: completion)
     }
 

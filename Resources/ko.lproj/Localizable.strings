@@ -33,13 +33,13 @@
 "header.unknown" = "알 수 없는 상태";
 
 /* Menu header — reasons */
-"header.guardThermalLabel" = "절전 보호 — 🌡 %@";
-"header.guardThermalCritical" = "절전 보호 — 🌡 위험";
-"header.guardThermalSerious" = "절전 보호 — 🌡 심각 + 덮개";
-"header.guardBattery" = "절전 보호 — 🔋 %d%%";
-"header.guardBatteryLow" = "절전 보호 — 🔋 부족";
-"header.guardTimer" = "절전 보호 — ⏱ %d분";
-"header.guardTimerPlain" = "절전 보호 — ⏱ 타이머";
+"header.guardThermalLabel" = "절전 보호 — [therm] %@";
+"header.guardThermalCritical" = "절전 보호 — [therm] 위험";
+"header.guardThermalSerious" = "절전 보호 — [therm] 심각 + 덮개";
+"header.guardBattery" = "절전 보호 — [bat] %d%%";
+"header.guardBatteryLow" = "절전 보호 — [bat] 부족";
+"header.guardTimer" = "절전 보호 — [timer] %d분";
+"header.guardTimerPlain" = "절전 보호 — [timer] 타이머";
 "header.guardWatchdog" = "절전 보호 — 헬퍼 응답 없음";
 "header.awakeRemote" = "깨어있음 — 원격 세션";
 "header.awakeAgentsCount" = "깨어있음 — 에이전트 %d개 활동";
@@ -58,7 +58,6 @@
 
 /* General pane */
 "general.version" = "버전 %@";
-"general.support" = "☕ 커피 한 잔 후원하기";
 "general.language" = "언어";
 "general.statusCard.on" = "Argus — 켜짐 · 잠들지 않음";
 "general.statusCard.off" = "Argus — 꺼짐 · 평소처럼 잠듦";
@@ -136,15 +135,15 @@
 "remote.tip.channels" = "현재 감지된 원격 접속 경로입니다 (진단용 표시). 이 탭이 열려 있는 동안 몇 초마다 갱신됩니다.";
 
 /* ADR-0017 — 메뉴 가드 상태 블록 */
-"status.battery" = "🔋 %d%% · 가드 %d%%%@";
-"status.thermal" = "🌡 %@ · 기준 %@%@";
-"status.timer" = "⏱ %d분 · 상한 %d분";
-"status.remoteOff" = "🛰 원격 끔";
-"status.remoteActiveNoExpiry" = "🛰 원격 활성 · 만료 없음";
-"status.remoteIdleActive" = "🛰 유휴 %d분 · %d분에 잠";
-"status.remoteActiveCap" = "🛰 원격 활성 · 유휴 %d분 후 잠";
-"status.remoteIdleNever" = "🛰 원격 · 만료 없음";
-"status.remoteIdleCap" = "🛰 원격 · 유휴 %d분 후 잠";
+"status.battery" = "[bat] %d%% · 가드 %d%%%@";
+"status.thermal" = "[therm] %@ · 기준 %@%@";
+"status.timer" = "[timer] %d분 · 상한 %d분";
+"status.remoteOff" = "[sat] 원격 끔";
+"status.remoteActiveNoExpiry" = "[sat] 원격 활성 · 만료 없음";
+"status.remoteIdleActive" = "[sat] 유휴 %d분 · %d분에 잠";
+"status.remoteActiveCap" = "[sat] 원격 활성 · 유휴 %d분 후 잠";
+"status.remoteIdleNever" = "[sat] 원격 · 만료 없음";
+"status.remoteIdleCap" = "[sat] 원격 · 유휴 %d분 후 잠";
 
 /* Safety pane */
 "safety.master" = "조건이 위험해지면 자동 해제";
@@ -377,23 +376,23 @@
 "telegram.error.notConfigured" = "봇 토큰과 채팅 ID를 먼저 입력하세요.";
 "telegram.error.badToken" = "봇 토큰 형식이 아닌 것 같습니다 (예: 123456:ABC…).";
 "telegram.error.noUpdates" = "메시지를 찾지 못했습니다. 텔레그램에서 봇에게 아무 메시지나 보낸 뒤 다시 시도하세요.";
-"telegram.test" = "🐚 Argus — 테스트 메시지. 알림 연결이 완료됐습니다.";
-"telegram.start.agent" = "🟢 깨어있음 — %@ 작업 중";
-"telegram.start.remote" = "🟢 깨어있음 — 원격 세션 (%@)";
-"telegram.start.generic" = "🟢 깨어있음 — Mac을 깨워 둡니다";
-"telegram.end.agentIdle" = "⚪️ %1$@ 유휴 진입 — %2$@ 동안 깨어있다 종료";
-"telegram.end.battery" = "🛑 배터리 가드가 잠을 허용 (%1$@) — Mac이 곧 잠들 수 있습니다. 깨어있던 시간 %2$@";
-"telegram.end.thermal" = "🛑 발열 가드가 잠을 허용 (%1$@) — Mac이 곧 잠들 수 있습니다. 깨어있던 시간 %2$@";
-"telegram.end.timer" = "⏱ 최대 깨어있기 시간 도달 (%1$@) — 잠 허용. 깨어있던 시간 %2$@";
-"telegram.end.watchdog" = "⚠️ 헬퍼 워치독 발동 — 잠 복원됨";
-"telegram.end.remoteEnded" = "⚪️ 원격 세션 종료 (%1$@) — %2$@ 동안 깨어있다 종료";
-"telegram.end.remoteLost" = "⚪️ 원격 세션 끊김 (네트워크 유실) — %@ 동안 깨어있다 종료";
-"telegram.end.generic" = "⚪️ 깨어있기 종료 — %@";
+"telegram.test" = "[TEST] Argus — 테스트 메시지. 알림 연결이 완료됐습니다.";
+"telegram.start.agent" = "[ON] 깨어있음 — %@ 작업 중";
+"telegram.start.remote" = "[ON] 깨어있음 — 원격 세션 (%@)";
+"telegram.start.generic" = "[ON] 깨어있음 — Mac을 깨워 둡니다";
+"telegram.end.agentIdle" = "[OFF] %1$@ 유휴 진입 — %2$@ 동안 깨어있다 종료";
+"telegram.end.battery" = "[GUARD] 배터리 가드가 잠을 허용 (%1$@) — Mac이 곧 잠들 수 있습니다. 깨어있던 시간 %2$@";
+"telegram.end.thermal" = "[GUARD] 발열 가드가 잠을 허용 (%1$@) — Mac이 곧 잠들 수 있습니다. 깨어있던 시간 %2$@";
+"telegram.end.timer" = "[TIMER] 최대 깨어있기 시간 도달 (%1$@) — 잠 허용. 깨어있던 시간 %2$@";
+"telegram.end.watchdog" = "[WARN] 헬퍼 워치독 발동 — 잠 복원됨";
+"telegram.end.remoteEnded" = "[OFF] 원격 세션 종료 (%1$@) — %2$@ 동안 깨어있다 종료";
+"telegram.end.remoteLost" = "[OFF] 원격 세션 끊김 (네트워크 유실) — %@ 동안 깨어있다 종료";
+"telegram.end.generic" = "[OFF] 깨어있기 종료 — %@";
 
 /* ADR-0028 §7 — 주기 무음 다이제스트 */
 "telegram.evtDigest" = "작업 중 주기 상태 (무음), 간격";
 "telegram.tip.evtDigest" = "Mac이 깨어있는 동안의 하트비트: 이 간격으로 무음 상태 메시지(소리·배너 없음)를 보냅니다. 오던 하트비트가 끊기면 Mac이나 네트워크가 죽었다는 신호입니다. 작업이 끝나면 즉시 멈춥니다.";
-"telegram.digest" = "📊 아직 깨어있음 — %@";
+"telegram.digest" = "[STATUS] 아직 깨어있음 — %@";
 
 /* ADR-0037 — 클램쉘 잠금 방지 · VPN 감시 · 화면 끄기 모드 (vdisplay) */
 "general.sessions" = "세션";
@@ -416,10 +415,10 @@
 /* ADR-0037 — VPN 끊김 알림 (로컬 + Telegram) */
 "notify.vpnDropped.title" = "VPN 끊김";
 "notify.vpnDropped.body" = "%@ 재인증이 필요합니다(SAML/SSO). Argus은 자동 재연결하지 않습니다 — FortiClient를 열어 다시 로그인하세요.";
-"telegram.vpn.dropped" = "🔌 VPN 끊김 (%@) — FortiClient 재인증 필요(SAML). 자동 재연결 없음.";
+"telegram.vpn.dropped" = "[VPN] VPN 끊김 (%@) — FortiClient 재인증 필요(SAML). 자동 재연결 없음.";
 
 /* Menu — uptime line (shown while awake, no cap set) */
-"status.uptime" = "⏱ 깨어 있음 %@";
+"status.uptime" = "[timer] 깨어 있음 %@";
 
 /* UI redesign — pane titles & card headings */
 "agents.title" = "에이전트";

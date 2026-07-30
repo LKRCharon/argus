@@ -35,13 +35,13 @@
 /* Menu header — awake/guard reasons (%@ = label, %d = number).
    ADR-0026: guard releases say "Guard active", not "Asleep" — the Mac may
    well be awake under the user; the header reports what the app is doing. */
-"header.guardThermalLabel" = "Guard active — 🌡 %@";
-"header.guardThermalCritical" = "Guard active — 🌡 critical";
-"header.guardThermalSerious" = "Guard active — 🌡 serious + lid";
-"header.guardBattery" = "Guard active — 🔋 %d%%";
-"header.guardBatteryLow" = "Guard active — 🔋 low";
-"header.guardTimer" = "Guard active — ⏱ %dm";
-"header.guardTimerPlain" = "Guard active — ⏱ timer";
+"header.guardThermalLabel" = "Guard active — [therm] %@";
+"header.guardThermalCritical" = "Guard active — [therm] critical";
+"header.guardThermalSerious" = "Guard active — [therm] serious + lid";
+"header.guardBattery" = "Guard active — [bat] %d%%";
+"header.guardBatteryLow" = "Guard active — [bat] low";
+"header.guardTimer" = "Guard active — [timer] %dm";
+"header.guardTimerPlain" = "Guard active — [timer] timer";
 "header.guardWatchdog" = "Guard active — helper timeout";
 "header.awakeRemote" = "Awake — remote session";
 "header.awakeAgentsCount" = "Awake — %d agents active";
@@ -60,7 +60,6 @@
 
 /* General pane */
 "general.version" = "Version %@";
-"general.support" = "☕ Buy me a coffee";
 "general.language" = "Language";
 "general.statusCard.on" = "Argus — On · staying awake";
 "general.statusCard.off" = "Argus — Off · sleeps normally";
@@ -138,15 +137,15 @@
 "remote.tip.channels" = "The remote-access paths currently detected (shown for diagnostics). Refreshes every few seconds while this pane is open.";
 
 /* ADR-0017 — menu guard status block */
-"status.battery" = "🔋 %d%% · guard %d%%%@";
-"status.thermal" = "🌡 %@ · limit %@%@";
-"status.timer" = "⏱ %dm · cap %dm";
-"status.remoteOff" = "🛰 remote off";
-"status.remoteActiveNoExpiry" = "🛰 remote active · no expiry";
-"status.remoteIdleActive" = "🛰 idle %dm · sleep at %dm";
-"status.remoteActiveCap" = "🛰 remote active · sleep after %dm idle";
-"status.remoteIdleNever" = "🛰 remote · no expiry";
-"status.remoteIdleCap" = "🛰 remote · sleep after %dm idle";
+"status.battery" = "[bat] %d%% · guard %d%%%@";
+"status.thermal" = "[therm] %@ · limit %@%@";
+"status.timer" = "[timer] %dm · cap %dm";
+"status.remoteOff" = "[sat] remote off";
+"status.remoteActiveNoExpiry" = "[sat] remote active · no expiry";
+"status.remoteIdleActive" = "[sat] idle %dm · sleep at %dm";
+"status.remoteActiveCap" = "[sat] remote active · sleep after %dm idle";
+"status.remoteIdleNever" = "[sat] remote · no expiry";
+"status.remoteIdleCap" = "[sat] remote · sleep after %dm idle";
 
 /* Safety pane */
 "safety.master" = "Auto-release when conditions become unsafe";
@@ -380,23 +379,23 @@
 "telegram.error.notConfigured" = "Enter a bot token and chat ID first.";
 "telegram.error.badToken" = "That doesn't look like a bot token (expected 123456:ABC…).";
 "telegram.error.noUpdates" = "No messages found. Send any message to your bot in Telegram, then try again.";
-"telegram.test" = "🐚 Argus — test message. Notifications are wired up.";
-"telegram.start.agent" = "🟢 Awake — %@ is working";
-"telegram.start.remote" = "🟢 Awake — remote session (%@)";
-"telegram.start.generic" = "🟢 Awake — keeping the Mac up";
-"telegram.end.agentIdle" = "⚪️ %1$@ went idle — awake ended after %2$@";
-"telegram.end.battery" = "🛑 Battery guard released sleep (%1$@) — your Mac may sleep soon. Awake %2$@";
-"telegram.end.thermal" = "🛑 Thermal guard released sleep (%1$@) — your Mac may sleep soon. Awake %2$@";
-"telegram.end.timer" = "⏱ Max awake duration reached (%1$@) — sleep allowed. Awake %2$@";
-"telegram.end.watchdog" = "⚠️ Helper watchdog tripped — sleep restored";
-"telegram.end.remoteEnded" = "⚪️ Remote session ended (%1$@) — awake ended after %2$@";
-"telegram.end.remoteLost" = "⚪️ Remote session dropped (network lost) — awake ended after %@";
-"telegram.end.generic" = "⚪️ Awake ended after %@";
+"telegram.test" = "[TEST] Argus — test message. Notifications are wired up.";
+"telegram.start.agent" = "[ON] Awake — %@ is working";
+"telegram.start.remote" = "[ON] Awake — remote session (%@)";
+"telegram.start.generic" = "[ON] Awake — keeping the Mac up";
+"telegram.end.agentIdle" = "[OFF] %1$@ went idle — awake ended after %2$@";
+"telegram.end.battery" = "[GUARD] Battery guard released sleep (%1$@) — your Mac may sleep soon. Awake %2$@";
+"telegram.end.thermal" = "[GUARD] Thermal guard released sleep (%1$@) — your Mac may sleep soon. Awake %2$@";
+"telegram.end.timer" = "[TIMER] Max awake duration reached (%1$@) — sleep allowed. Awake %2$@";
+"telegram.end.watchdog" = "[WARN] Helper watchdog tripped — sleep restored";
+"telegram.end.remoteEnded" = "[OFF] Remote session ended (%1$@) — awake ended after %2$@";
+"telegram.end.remoteLost" = "[OFF] Remote session dropped (network lost) — awake ended after %@";
+"telegram.end.generic" = "[OFF] Awake ended after %@";
 
 /* ADR-0028 §7 — periodic silent digest */
 "telegram.evtDigest" = "Periodic status while working (silent), every";
 "telegram.tip.evtDigest" = "A heartbeat while something is keeping the Mac awake: a silent status message (no sound, no banner) at this interval, so a missing heartbeat tells you the Mac or network died. Stops the moment work ends.";
-"telegram.digest" = "📊 Still awake — %@";
+"telegram.digest" = "[STATUS] Still awake — %@";
 
 /* ADR-0037 — clamshell guard · VPN watch · blank-screen mode (vdisplay) */
 "general.sessions" = "Sessions";
@@ -419,10 +418,10 @@
 /* ADR-0037 — VPN-disconnect notifications (local + Telegram) */
 "notify.vpnDropped.title" = "VPN disconnected";
 "notify.vpnDropped.body" = "%@ needs re-auth (SAML/SSO). Argus won't auto-reconnect — open FortiClient and sign in again.";
-"telegram.vpn.dropped" = "🔌 VPN disconnected (%@) — FortiClient needs re-auth (SAML). No auto-reconnect.";
+"telegram.vpn.dropped" = "[VPN] VPN disconnected (%@) — FortiClient needs re-auth (SAML). No auto-reconnect.";
 
 /* Menu — uptime line (shown while awake, no cap set) */
-"status.uptime" = "⏱ awake %@";
+"status.uptime" = "[timer] awake %@";
 
 /* UI redesign — pane titles & card headings */
 "agents.title" = "Agents";

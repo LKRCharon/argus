@@ -26,10 +26,10 @@ public enum AgentMode: String {
 
 /// ADR-0004 — auto-release reason. `nil` ⇒ no safety override active.
 public enum SafetyReason: String, Codable {
-    case batteryLow      // "🔋 18%"
-    case thermalSerious  // "🌡 .serious + lid"
-    case thermalCritical // "🌡 .critical"
-    case timer           // "⏱ 60m"
+    case batteryLow      // "[bat] 18%"
+    case thermalSerious  // "[therm] .serious + lid"
+    case thermalCritical // "[therm] .critical"
+    case timer           // "[timer] 60m"
     case watchdog        // "helper timeout"
 }
 

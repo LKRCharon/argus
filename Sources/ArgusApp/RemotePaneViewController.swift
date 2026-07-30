@@ -4,7 +4,7 @@ import OSLog
 /// Settings → Remote pane. ADR-0008 / ADR-0016 surface.
 ///
 /// Two-tier UI over the single `remoteIdleTimeoutMin` knob (ADR-0016):
-///   ☑ master checkbox  — "count remote sessions as activity" (off ⇒ value 0)
+///   master checkbox  — "count remote sessions as activity" (off ⇒ value 0)
 ///      ◉ never expire  — value `StateStore.remoteIdleNever` (-1)
 ///      ○ idle timeout  — value N minutes, picked from a popup
 /// The data model is untouched; this controller only maps the orthogonal

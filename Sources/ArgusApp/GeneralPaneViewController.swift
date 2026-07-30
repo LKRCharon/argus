@@ -543,7 +543,7 @@ final class GeneralPaneViewController: NSViewController {
         if case .enabled = store.registration { helperUnreachable = store.helperUnreachable }
         helperUnreachableNote.isHidden = !helperUnreachable
         if helperUnreachable {
-            helperUnreachableNote.stringValue = "⚠\u{FE0E} "
+            helperUnreachableNote.stringValue = "[!] "
                 + NSL("permission.helperUnreachable.warning",
                     "The helper is registered but not responding, so the CLI's timed holds will not work.")
         }
@@ -559,7 +559,7 @@ final class GeneralPaneViewController: NSViewController {
         let needsApproval = (status == .requiresApproval)
         loginItemNote.isHidden = !needsApproval
         if needsApproval {
-            loginItemNote.stringValue = "⚠\u{FE0E} " + NSL("general.openAtLogin.needsApproval",
+            loginItemNote.stringValue = "[!] " + NSL("general.openAtLogin.needsApproval",
                 "Argus is turned off in System Settings → General → Login Items. Switch it on there to launch at login.")
         }
     }
@@ -601,7 +601,7 @@ final class GeneralPaneViewController: NSViewController {
     private func renderResetBtmNote(recovered: Bool) {
         resetBtmNote.isHidden = recovered
         guard !recovered else { return }
-        resetBtmNote.stringValue = "⚠\u{FE0E} " + NSL("resetbtm.note",
+        resetBtmNote.stringValue = "[!] " + NSL("resetbtm.note",
             "The helper still isn’t responding. A stale background record may be bound to a removed or duplicate copy. As a last resort, open Terminal and run “sudo sfltool resetbtm”, then restart your Mac and reopen Argus. This resets every app’s login items.")
     }
 

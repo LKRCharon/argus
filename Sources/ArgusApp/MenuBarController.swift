@@ -150,7 +150,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 button.title = ""
             } else {
                 button.image = nil
-                button.title = "⚠"
+                button.title = "!"
             }
             return
         }
@@ -297,11 +297,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// `title` is still set (menus read it for accessibility/searching).
     private func makeStatusHeaderViewItem() -> NSMenuItem {
         let (text, _) = headerString(for: store.registration, sleepDisabled: store.sleepDisabled)
-        // Warning lines (⚠️) get full-contrast labelColor so an active guard
+        // Warning lines ([warn]) get full-contrast labelColor so an active guard
         // doesn't read as a disabled row; calm lines stay secondary.
         let lines: [NSAttributedString] = isEnabled
             ? guardStatusLines().map {
-                Self.symbolize($0, color: $0.contains("⚠️") ? .labelColor : .secondaryLabelColor)
+                Self.symbolize($0, color: $0.contains("[warn]") ? .labelColor : .secondaryLabelColor)
             }
             : []
         let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
@@ -368,24 +368,24 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             case .thermalCritical:
                 // Prefer 5-step label (e.g. "sleeping") when available; fall back to "critical".
                 if let p = store.thermalPressureLevel, p >= 3 {
-                    return NSLf("header.guardThermalLabel", "Guard active — 🌡 %@", SafetyMonitor.thermalPressureLabel(p))
+                    return NSLf("header.guardThermalLabel", "Guard active — [therm] %@", SafetyMonitor.thermalPressureLabel(p))
                 }
-                return NSL("header.guardThermalCritical", "Guard active — 🌡 critical")
+                return NSL("header.guardThermalCritical", "Guard active — [therm] critical")
             case .thermalSerious:
                 // 5-step `.trapping` (level 3) wins over the 4-step `.serious` label.
                 if let p = store.thermalPressureLevel, p >= 3 {
-                    return NSLf("header.guardThermalLabel", "Guard active — 🌡 %@", SafetyMonitor.thermalPressureLabel(p))
+                    return NSLf("header.guardThermalLabel", "Guard active — [therm] %@", SafetyMonitor.thermalPressureLabel(p))
                 }
-                return NSL("header.guardThermalSerious", "Guard active — 🌡 serious + lid")
+                return NSL("header.guardThermalSerious", "Guard active — [therm] serious + lid")
             case .batteryLow:
                 if let pct = store.batteryPercent {
-                    return NSLf("header.guardBattery", "Guard active — 🔋 %d%%", pct)
+                    return NSLf("header.guardBattery", "Guard active — [bat] %d%%", pct)
                 }
-                return NSL("header.guardBatteryLow", "Guard active — 🔋 low")
+                return NSL("header.guardBatteryLow", "Guard active — [bat] low")
             case .timer:
                 let m = store.safetySettings.maxDurationMin
-                return m > 0 ? NSLf("header.guardTimer", "Guard active — ⏱ %dm", m)
-                             : NSL("header.guardTimerPlain", "Guard active — ⏱ timer")
+                return m > 0 ? NSLf("header.guardTimer", "Guard active — [timer] %dm", m)
+                             : NSL("header.guardTimerPlain", "Guard active — [timer] timer")
             case .watchdog:
                 return NSL("header.guardWatchdog", "Guard active — helper timeout")
             }
@@ -445,31 +445,42 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // (The lines now render inside `MenuStatusHeaderView` — the old per-line
     // disabled NSMenuItems were dimmed by NSMenu and hard to read.)
 
-    /// Status-line emoji → monochrome SF Symbols.
-    private static let statusSymbols: [Character: String] = [
-        "🔋": "battery.100",
-        "🌡": "thermometer.medium",
-        "🛰": "antenna.radiowaves.left.and.right",
-        "⏱": "timer",
-        "⚠️": "exclamationmark.triangle.fill",
+    /// Status-line `[tag]` markers → monochrome SF Symbols.
+    private static let statusSymbols: [String: String] = [
+        "[bat]": "battery.100",
+        "[therm]": "thermometer.medium",
+        "[sat]": "antenna.radiowaves.left.and.right",
+        "[timer]": "timer",
+        "[warn]": "exclamationmark.triangle.fill",
     ]
 
-    /// Renders a status string, swapping the emoji in `statusSymbols` for
-    /// monochrome SF Symbols as *inline text attachments*. Inline (not
+    /// Renders a status string, swapping the `[tag]` markers in `statusSymbols`
+    /// for monochrome SF Symbols as *inline text attachments*. Inline (not
     /// `NSMenuItem.image`) so NSMenu's state column stays closed and Settings…/
-    /// Quit aren't indented (ADR-0005 §2). ⚠️ keeps a systemOrange tint; the
+    /// Quit aren't indented (ADR-0005 §2). [warn] keeps a systemOrange tint; the
     /// rest take the row's text color so they track light/dark automatically.
     private static func symbolize(_ line: String, color: NSColor) -> NSAttributedString {
         let font = NSFont.menuFont(ofSize: 0)
         let out = NSMutableAttributedString()
-        for ch in line {
-            guard let name = statusSymbols[ch],
+        func appendText(_ s: Substring) {
+            guard !s.isEmpty else { return }
+            out.append(NSAttributedString(string: String(s),
+                attributes: [.font: font, .foregroundColor: color]))
+        }
+        var rest = Substring(line)
+        while let open = rest.firstIndex(of: "[") {
+            guard let close = rest[open...].firstIndex(of: "]") else { break }
+            let afterClose = rest.index(after: close)
+            let tag = String(rest[open..<afterClose])
+            guard let name = statusSymbols[tag],
                   let base = NSImage(systemSymbolName: name, accessibilityDescription: nil) else {
-                out.append(NSAttributedString(string: String(ch),
-                    attributes: [.font: font, .foregroundColor: color]))
+                // Not a known tag — emit it (and everything before it) verbatim.
+                appendText(rest[..<afterClose])
+                rest = rest[afterClose...]
                 continue
             }
-            let tint = (ch == "⚠️") ? NSColor.systemOrange : color
+            appendText(rest[..<open])
+            let tint = (tag == "[warn]") ? NSColor.systemOrange : color
             let conf = NSImage.SymbolConfiguration(pointSize: font.pointSize, weight: .regular)
                 .applying(.init(paletteColors: [tint]))
             let img = base.withSymbolConfiguration(conf) ?? base
@@ -479,7 +490,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             attachment.bounds = CGRect(x: 0, y: (font.capHeight - img.size.height) / 2,
                                        width: img.size.width, height: img.size.height)
             out.append(NSAttributedString(attachment: attachment))
+            rest = rest[afterClose...]
         }
+        appendText(rest)
         return out
     }
 
@@ -488,36 +501,36 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let s = store.safetySettings
         var lines: [String] = []
 
-        // 🔋 Battery — current % vs guard threshold. Display uses the raw
+        // [bat] Battery — current % vs guard threshold. Display uses the raw
         // (un-debounced) reading so the number tracks the OS immediately; the
         // guard's own decision still runs on the debounced `batteryPercent`.
-        // No ⚠️ on effective AC power — the guard ignores the threshold there,
+        // No [warn] on effective AC power — the guard ignores the threshold there,
         // so warning about it would announce a trip that cannot happen.
         if let pct = store.batteryPercentDisplay {
             let warn = s.enabled && pct <= s.batteryLow && !store.effectiveACConnected
-            lines.append(NSLf("status.battery", "🔋 %d%% · guard %d%%%@",
-                              pct, s.batteryLow, warn ? " ⚠️" : ""))
+            lines.append(NSLf("status.battery", "[bat] %d%% · guard %d%%%@",
+                              pct, s.batteryLow, warn ? " [warn]" : ""))
         }
 
-        // 🌡 Thermal — current state vs cutoff.
+        // [therm] Thermal — current state vs cutoff.
         let tWarn = s.enabled && store.thermalState.rawValue >= Self.thermalRank(fromName: s.thermalCutoff)
-        lines.append(NSLf("status.thermal", "🌡 %@ · limit %@%@",
+        lines.append(NSLf("status.thermal", "[therm] %@ · limit %@%@",
                           Self.thermalShort(store.thermalState),
                           Self.thermalLocalized(fromName: s.thermalCutoff),
-                          tWarn ? " ⚠️" : ""))
+                          tWarn ? " [warn]" : ""))
 
-        // 🛰 Remote — ADR-0016 idle knob state.
+        // [sat] Remote — ADR-0016 idle knob state.
         lines.append(remoteStatusLine())
 
-        // ⏱ Session — elapsed awake time, always shown while awake: with a cap
+        // [timer] Session — elapsed awake time, always shown while awake: with a cap
         // it reads "elapsed · cap", without one just the elapsed time (the old
         // cap-only condition hid the number most overnight runs care about).
         if store.shouldKeepAwake, let since = store.keepAwakeSince {
             let elapsed = Date().timeIntervalSince(since)
             if s.maxDurationMin > 0 {
-                lines.append(NSLf("status.timer", "⏱ %dm · cap %dm", Int(elapsed / 60), s.maxDurationMin))
+                lines.append(NSLf("status.timer", "[timer] %dm · cap %dm", Int(elapsed / 60), s.maxDurationMin))
             } else {
-                lines.append(NSLf("status.uptime", "⏱ awake %@",
+                lines.append(NSLf("status.uptime", "[timer] awake %@",
                                   DurationParse.shortFormat(seconds: elapsed)))
             }
         }
@@ -526,20 +539,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func remoteStatusLine() -> String {
         let t = store.remoteIdleTimeoutMin
-        if t == 0 { return NSL("status.remoteOff", "🛰 remote off") }
+        if t == 0 { return NSL("status.remoteOff", "[sat] remote off") }
         if store.remoteActive {
             if t == StateStore.remoteIdleNever {
-                return NSL("status.remoteActiveNoExpiry", "🛰 remote active · no expiry")
+                return NSL("status.remoteActiveNoExpiry", "[sat] remote active · no expiry")
             }
             if let idle = store.remoteIdleMin {
-                return NSLf("status.remoteIdleActive", "🛰 idle %dm · sleep at %dm", idle, t)
+                return NSLf("status.remoteIdleActive", "[sat] idle %dm · sleep at %dm", idle, t)
             }
-            return NSLf("status.remoteActiveCap", "🛰 remote active · sleep after %dm idle", t)
+            return NSLf("status.remoteActiveCap", "[sat] remote active · sleep after %dm idle", t)
         }
         if t == StateStore.remoteIdleNever {
-            return NSL("status.remoteIdleNever", "🛰 remote · no expiry")
+            return NSL("status.remoteIdleNever", "[sat] remote · no expiry")
         }
-        return NSLf("status.remoteIdleCap", "🛰 remote · sleep after %dm idle", t)
+        return NSLf("status.remoteIdleCap", "[sat] remote · sleep after %dm idle", t)
     }
 
     private static func thermalShort(_ s: ProcessInfo.ThermalState) -> String {
@@ -691,7 +704,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// power settings" constraint; `pmset displaysleepnow` needs no privileges and
     /// is the most reliable cross-version trigger. The displays go dark but each
     /// monitor stays powered (USB-C PD continues) because we only blank.
-    /// ⚠ 즉시-잠금 Mac 에선 display sleep 이 화면 잠금을 유발해 FortiClient 같은 VPN
+    /// 주의: 즉시-잠금 Mac 에선 display sleep 이 화면 잠금을 유발해 FortiClient 같은 VPN
     /// 을 끊을 수 있다(Settings 의 Sleep 옵션에 경고). 그래서 기본 모드는 `.dim`.
     private func sleepDisplaysNow() {
         let p = Process()

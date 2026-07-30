@@ -202,7 +202,7 @@ enum TelegramSupport {
     }
 
     /// 메시지 꼬리에 붙는 현재 상태 한 줄. 모든 입력이 nil/빈 값이면 nil.
-    /// 예: "🔋 78% ⚡️ · 🌡 62°C · 🤖 claude · 💻 MacBook Pro"
+    /// 예: "BAT 78% +AC · 62°C · claude · MacBook Pro"
     /// host 는 멀티 Mac 사용자가 어느 기계의 알림인지 구분하는 용도.
     static func statusLine(batteryPercent: Int?,
                            charging: Bool,
@@ -211,16 +211,16 @@ enum TelegramSupport {
                            host: String? = nil) -> String? {
         var parts: [String] = []
         if let b = batteryPercent {
-            parts.append(charging ? "🔋 \(b)% ⚡️" : "🔋 \(b)%")
+            parts.append(charging ? "BAT \(b)% +AC" : "BAT \(b)%")
         }
         if let t = socTempCelsius {
-            parts.append(String(format: "🌡 %.0f°C", t))
+            parts.append(String(format: "%.0f°C", t))
         }
         if !activeAgents.isEmpty {
-            parts.append("🤖 " + activeAgents.sorted().joined(separator: ", "))
+            parts.append(activeAgents.sorted().joined(separator: ", "))
         }
         if let h = host, !h.isEmpty {
-            parts.append("💻 " + h)
+            parts.append(h)
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }

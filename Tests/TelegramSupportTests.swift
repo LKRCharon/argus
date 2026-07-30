@@ -148,17 +148,17 @@ enum TelegramSupportTestMain {
         print("── statusLine")
         assert(TelegramSupport.statusLine(batteryPercent: 78, charging: false,
                                           socTempCelsius: 62.4, activeAgents: ["codex", "claude"])
-               == "🔋 78% · 🌡 62°C · 🤖 claude, codex",
+               == "BAT 78% · 62°C · claude, codex",
                "전체 조합 + 에이전트 정렬")
         assert(TelegramSupport.statusLine(batteryPercent: 95, charging: true,
                                           socTempCelsius: nil, activeAgents: [])
-               == "🔋 95% ⚡️", "충전 표시 + 부분 입력")
+               == "BAT 95% +AC", "충전 표시 + 부분 입력")
         assert(TelegramSupport.statusLine(batteryPercent: nil, charging: false,
                                           socTempCelsius: nil, activeAgents: []) == nil,
                "전부 없음 ⇒ nil")
         assert(TelegramSupport.statusLine(batteryPercent: 50, charging: false,
                                           socTempCelsius: nil, activeAgents: [], host: "Mini")
-               == "🔋 50% · 💻 Mini", "호스트명 꼬리 표기")
+               == "BAT 50% · Mini", "호스트명 꼬리 표기")
 
         print("── digest (ADR-0028 §7)")
         assert(TelegramSupport.shouldSendDigest(settings: cfg(digest: 30), episodeOngoing: true),

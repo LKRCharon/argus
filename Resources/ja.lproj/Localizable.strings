@@ -34,13 +34,13 @@
 "header.unknown" = "不明な状態";
 
 /* Menu header — reasons */
-"header.guardThermalLabel" = "ガード作動 — 🌡 %@";
-"header.guardThermalCritical" = "ガード作動 — 🌡 危険";
-"header.guardThermalSerious" = "ガード作動 — 🌡 高温 + 蓋";
-"header.guardBattery" = "ガード作動 — 🔋 %d%%";
-"header.guardBatteryLow" = "ガード作動 — 🔋 残量低下";
-"header.guardTimer" = "ガード作動 — ⏱ %d分";
-"header.guardTimerPlain" = "ガード作動 — ⏱ タイマー";
+"header.guardThermalLabel" = "ガード作動 — [therm] %@";
+"header.guardThermalCritical" = "ガード作動 — [therm] 危険";
+"header.guardThermalSerious" = "ガード作動 — [therm] 高温 + 蓋";
+"header.guardBattery" = "ガード作動 — [bat] %d%%";
+"header.guardBatteryLow" = "ガード作動 — [bat] 残量低下";
+"header.guardTimer" = "ガード作動 — [timer] %d分";
+"header.guardTimerPlain" = "ガード作動 — [timer] タイマー";
 "header.guardWatchdog" = "ガード作動 — ヘルパー応答なし";
 "header.awakeRemote" = "起動中 — リモートセッション";
 "header.awakeAgentsCount" = "起動中 — エージェント%d個が動作中";
@@ -59,7 +59,6 @@
 
 /* General pane */
 "general.version" = "バージョン %@";
-"general.support" = "☕ コーヒーを一杯おごる";
 "general.language" = "言語";
 "general.statusCard.on" = "Argus — オン · スリープしません";
 "general.statusCard.off" = "Argus — オフ · 通常どおりスリープ";
@@ -137,15 +136,15 @@
 "remote.tip.channels" = "現在検出されているリモート接続経路です（診断用の表示）。このタブを開いている間、数秒ごとに更新されます。";
 
 /* ADR-0017 — メニューのガード状態 */
-"status.battery" = "🔋 %d%% · ガード %d%%%@";
-"status.thermal" = "🌡 %@ · 上限 %@%@";
-"status.timer" = "⏱ %dm · 上限 %dm";
-"status.remoteOff" = "🛰 リモート オフ";
-"status.remoteActiveNoExpiry" = "🛰 リモート稼働中 · 期限なし";
-"status.remoteIdleActive" = "🛰 アイドル %dm · %dm でスリープ";
-"status.remoteActiveCap" = "🛰 リモート稼働中 · アイドル %dm 後にスリープ";
-"status.remoteIdleNever" = "🛰 リモート · 期限なし";
-"status.remoteIdleCap" = "🛰 リモート · アイドル %dm 後にスリープ";
+"status.battery" = "[bat] %d%% · ガード %d%%%@";
+"status.thermal" = "[therm] %@ · 上限 %@%@";
+"status.timer" = "[timer] %dm · 上限 %dm";
+"status.remoteOff" = "[sat] リモート オフ";
+"status.remoteActiveNoExpiry" = "[sat] リモート稼働中 · 期限なし";
+"status.remoteIdleActive" = "[sat] アイドル %dm · %dm でスリープ";
+"status.remoteActiveCap" = "[sat] リモート稼働中 · アイドル %dm 後にスリープ";
+"status.remoteIdleNever" = "[sat] リモート · 期限なし";
+"status.remoteIdleCap" = "[sat] リモート · アイドル %dm 後にスリープ";
 
 /* Safety pane */
 "safety.master" = "条件が危険になったら自動解除";
@@ -378,23 +377,23 @@
 "telegram.error.notConfigured" = "先にボットトークンとチャット ID を入力してください。";
 "telegram.error.badToken" = "ボットトークンの形式ではないようです (例: 123456:ABC…)。";
 "telegram.error.noUpdates" = "メッセージが見つかりません。Telegram でボットに何かメッセージを送ってから再試行してください。";
-"telegram.test" = "🐚 Argus — テストメッセージ。通知の接続が完了しました。";
-"telegram.start.agent" = "🟢 起床 — %@ が作業中";
-"telegram.start.remote" = "🟢 起床 — リモートセッション (%@)";
-"telegram.start.generic" = "🟢 起床 — Mac を起こしています";
-"telegram.end.agentIdle" = "⚪️ %1$@ がアイドルに — %2$@ の起床が終了";
-"telegram.end.battery" = "🛑 バッテリーガードがスリープを許可 (%1$@) — Mac はまもなくスリープする可能性があります。起床時間 %2$@";
-"telegram.end.thermal" = "🛑 発熱ガードがスリープを許可 (%1$@) — Mac はまもなくスリープする可能性があります。起床時間 %2$@";
-"telegram.end.timer" = "⏱ 最大起床時間に到達 (%1$@) — スリープ許可。起床時間 %2$@";
-"telegram.end.watchdog" = "⚠️ ヘルパーのウォッチドッグが作動 — スリープを復元";
-"telegram.end.remoteEnded" = "⚪️ リモートセッション終了 (%1$@) — %2$@ の起床が終了";
-"telegram.end.remoteLost" = "⚪️ リモートセッション切断 (ネットワーク喪失) — %@ の起床が終了";
-"telegram.end.generic" = "⚪️ 起床終了 — %@";
+"telegram.test" = "[TEST] Argus — テストメッセージ。通知の接続が完了しました。";
+"telegram.start.agent" = "[ON] 起床 — %@ が作業中";
+"telegram.start.remote" = "[ON] 起床 — リモートセッション (%@)";
+"telegram.start.generic" = "[ON] 起床 — Mac を起こしています";
+"telegram.end.agentIdle" = "[OFF] %1$@ がアイドルに — %2$@ の起床が終了";
+"telegram.end.battery" = "[GUARD] バッテリーガードがスリープを許可 (%1$@) — Mac はまもなくスリープする可能性があります。起床時間 %2$@";
+"telegram.end.thermal" = "[GUARD] 発熱ガードがスリープを許可 (%1$@) — Mac はまもなくスリープする可能性があります。起床時間 %2$@";
+"telegram.end.timer" = "[TIMER] 最大起床時間に到達 (%1$@) — スリープ許可。起床時間 %2$@";
+"telegram.end.watchdog" = "[WARN] ヘルパーのウォッチドッグが作動 — スリープを復元";
+"telegram.end.remoteEnded" = "[OFF] リモートセッション終了 (%1$@) — %2$@ の起床が終了";
+"telegram.end.remoteLost" = "[OFF] リモートセッション切断 (ネットワーク喪失) — %@ の起床が終了";
+"telegram.end.generic" = "[OFF] 起床終了 — %@";
 
 /* ADR-0028 §7 — 定期サイレントダイジェスト */
 "telegram.evtDigest" = "作業中の定期ステータス (サイレント)、間隔";
 "telegram.tip.evtDigest" = "Mac が起きている間のハートビート: この間隔でサイレントなステータスメッセージ(音・バナーなし)を送ります。届いていたハートビートが途切れたら、Mac かネットワークが落ちた合図です。作業が終わると即座に止まります。";
-"telegram.digest" = "📊 まだ起きています — %@";
+"telegram.digest" = "[STATUS] まだ起きています — %@";
 
 /* ADR-0037 — クラムシェルロック防止 · VPN 監視 · 画面オフモード (vdisplay) */
 "general.sessions" = "セッション";
@@ -417,10 +416,10 @@
 /* ADR-0037 — VPN 切断通知 (ローカル + Telegram) */
 "notify.vpnDropped.title" = "VPN が切断されました";
 "notify.vpnDropped.body" = "%@ は再認証が必要です（SAML/SSO）。Argus は自動再接続しません — FortiClient を開いて再度サインインしてください。";
-"telegram.vpn.dropped" = "🔌 VPN が切断されました（%@）— FortiClient は再認証が必要です（SAML）。自動再接続なし。";
+"telegram.vpn.dropped" = "[VPN] VPN が切断されました（%@）— FortiClient は再認証が必要です（SAML）。自動再接続なし。";
 
 /* Menu — uptime line (shown while awake, no cap set) */
-"status.uptime" = "⏱ 起動 %@";
+"status.uptime" = "[timer] 起動 %@";
 
 /* UI redesign — pane titles & card headings */
 "agents.title" = "エージェント";

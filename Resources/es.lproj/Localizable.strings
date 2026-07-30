@@ -34,13 +34,13 @@
 "header.unknown" = "Estado desconocido";
 
 /* Menu header — reasons */
-"header.guardThermalLabel" = "Protección activa — 🌡 %@";
-"header.guardThermalCritical" = "Protección activa — 🌡 crítico";
-"header.guardThermalSerious" = "Protección activa — 🌡 grave + tapa";
-"header.guardBattery" = "Protección activa — 🔋 %d%%";
-"header.guardBatteryLow" = "Protección activa — 🔋 baja";
-"header.guardTimer" = "Protección activa — ⏱ %d min";
-"header.guardTimerPlain" = "Protección activa — ⏱ temporizador";
+"header.guardThermalLabel" = "Protección activa — [therm] %@";
+"header.guardThermalCritical" = "Protección activa — [therm] crítico";
+"header.guardThermalSerious" = "Protección activa — [therm] grave + tapa";
+"header.guardBattery" = "Protección activa — [bat] %d%%";
+"header.guardBatteryLow" = "Protección activa — [bat] baja";
+"header.guardTimer" = "Protección activa — [timer] %d min";
+"header.guardTimerPlain" = "Protección activa — [timer] temporizador";
 "header.guardWatchdog" = "Protección activa — el ayudante no responde";
 "header.awakeRemote" = "Despierto — sesión remota";
 "header.awakeAgentsCount" = "Despierto — %d agentes activos";
@@ -59,7 +59,6 @@
 
 /* General pane */
 "general.version" = "Versión %@";
-"general.support" = "☕ Invítame a un café";
 "general.language" = "Idioma";
 "general.statusCard.on" = "Argus — Activado · sin dormir";
 "general.statusCard.off" = "Argus — Desactivado · duerme normal";
@@ -137,15 +136,15 @@
 "remote.tip.channels" = "Las vías de acceso remoto detectadas actualmente (se muestran a modo de diagnóstico). Se actualiza cada pocos segundos mientras esta pestaña está abierta.";
 
 /* ADR-0017 — bloque de estado de guardas del menú */
-"status.battery" = "🔋 %d%% · límite %d%%%@";
-"status.thermal" = "🌡 %@ · límite %@%@";
-"status.timer" = "⏱ %dm · máx %dm";
-"status.remoteOff" = "🛰 remoto apagado";
-"status.remoteActiveNoExpiry" = "🛰 remoto activo · sin caducidad";
-"status.remoteIdleActive" = "🛰 inactivo %dm · duerme a %dm";
-"status.remoteActiveCap" = "🛰 remoto activo · duerme tras %dm inactivo";
-"status.remoteIdleNever" = "🛰 remoto · sin caducidad";
-"status.remoteIdleCap" = "🛰 remoto · duerme tras %dm inactivo";
+"status.battery" = "[bat] %d%% · límite %d%%%@";
+"status.thermal" = "[therm] %@ · límite %@%@";
+"status.timer" = "[timer] %dm · máx %dm";
+"status.remoteOff" = "[sat] remoto apagado";
+"status.remoteActiveNoExpiry" = "[sat] remoto activo · sin caducidad";
+"status.remoteIdleActive" = "[sat] inactivo %dm · duerme a %dm";
+"status.remoteActiveCap" = "[sat] remoto activo · duerme tras %dm inactivo";
+"status.remoteIdleNever" = "[sat] remoto · sin caducidad";
+"status.remoteIdleCap" = "[sat] remoto · duerme tras %dm inactivo";
 
 /* Safety pane */
 "safety.master" = "Liberar automáticamente cuando las condiciones sean inseguras";
@@ -378,23 +377,23 @@
 "telegram.error.notConfigured" = "Introduce primero un token de bot y un ID de chat.";
 "telegram.error.badToken" = "Eso no parece un token de bot (se espera 123456:ABC…).";
 "telegram.error.noUpdates" = "No se encontraron mensajes. Envía cualquier mensaje a tu bot en Telegram y vuelve a intentarlo.";
-"telegram.test" = "🐚 Argus — mensaje de prueba. Las notificaciones están conectadas.";
-"telegram.start.agent" = "🟢 Despierto — %@ está trabajando";
-"telegram.start.remote" = "🟢 Despierto — sesión remota (%@)";
-"telegram.start.generic" = "🟢 Despierto — manteniendo el Mac activo";
-"telegram.end.agentIdle" = "⚪️ %1$@ quedó inactivo — despierto durante %2$@";
-"telegram.end.battery" = "🛑 La protección de batería permitió dormir (%1$@) — tu Mac podría dormirse pronto. Despierto %2$@";
-"telegram.end.thermal" = "🛑 La protección térmica permitió dormir (%1$@) — tu Mac podría dormirse pronto. Despierto %2$@";
-"telegram.end.timer" = "⏱ Tiempo máximo despierto alcanzado (%1$@) — sueño permitido. Despierto %2$@";
-"telegram.end.watchdog" = "⚠️ Watchdog del helper activado — sueño restaurado";
-"telegram.end.remoteEnded" = "⚪️ Sesión remota terminada (%1$@) — despierto durante %2$@";
-"telegram.end.remoteLost" = "⚪️ Sesión remota perdida (sin red) — despierto durante %@";
-"telegram.end.generic" = "⚪️ Fin del periodo despierto — %@";
+"telegram.test" = "[TEST] Argus — mensaje de prueba. Las notificaciones están conectadas.";
+"telegram.start.agent" = "[ON] Despierto — %@ está trabajando";
+"telegram.start.remote" = "[ON] Despierto — sesión remota (%@)";
+"telegram.start.generic" = "[ON] Despierto — manteniendo el Mac activo";
+"telegram.end.agentIdle" = "[OFF] %1$@ quedó inactivo — despierto durante %2$@";
+"telegram.end.battery" = "[GUARD] La protección de batería permitió dormir (%1$@) — tu Mac podría dormirse pronto. Despierto %2$@";
+"telegram.end.thermal" = "[GUARD] La protección térmica permitió dormir (%1$@) — tu Mac podría dormirse pronto. Despierto %2$@";
+"telegram.end.timer" = "[TIMER] Tiempo máximo despierto alcanzado (%1$@) — sueño permitido. Despierto %2$@";
+"telegram.end.watchdog" = "[WARN] Watchdog del helper activado — sueño restaurado";
+"telegram.end.remoteEnded" = "[OFF] Sesión remota terminada (%1$@) — despierto durante %2$@";
+"telegram.end.remoteLost" = "[OFF] Sesión remota perdida (sin red) — despierto durante %@";
+"telegram.end.generic" = "[OFF] Fin del periodo despierto — %@";
 
 /* ADR-0028 §7 — resumen periódico silencioso */
 "telegram.evtDigest" = "Estado periódico mientras trabaja (silencioso), cada";
 "telegram.tip.evtDigest" = "Un latido mientras algo mantiene el Mac despierto: un mensaje de estado silencioso (sin sonido ni banner) a este intervalo; si el latido deja de llegar, el Mac o la red han caído. Se detiene en cuanto termina el trabajo.";
-"telegram.digest" = "📊 Sigue despierto — %@";
+"telegram.digest" = "[STATUS] Sigue despierto — %@";
 
 /* ADR-0037 — protección de bloqueo con tapa cerrada · vigilancia de VPN · modo de pantalla apagada (vdisplay) */
 "general.sessions" = "Sesiones";
@@ -417,10 +416,10 @@
 /* ADR-0037 — notificaciones de desconexión de VPN (local + Telegram) */
 "notify.vpnDropped.title" = "VPN desconectada";
 "notify.vpnDropped.body" = "%@ necesita volver a autenticarse (SAML/SSO). Argus no reconectará automáticamente — abre FortiClient e inicia sesión de nuevo.";
-"telegram.vpn.dropped" = "🔌 VPN desconectada (%@) — FortiClient necesita volver a autenticarse (SAML). Sin reconexión automática.";
+"telegram.vpn.dropped" = "[VPN] VPN desconectada (%@) — FortiClient necesita volver a autenticarse (SAML). Sin reconexión automática.";
 
 /* Menu — uptime line (shown while awake, no cap set) */
-"status.uptime" = "⏱ despierto %@";
+"status.uptime" = "[timer] despierto %@";
 
 /* UI redesign — pane titles & card headings */
 "agents.title" = "Agentes";

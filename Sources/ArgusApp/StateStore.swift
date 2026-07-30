@@ -33,7 +33,7 @@ final class StateStore {
     ///   `dim`   (기본·VPN-안전): 내장 밝기 최저 + `PreventUserIdleDisplaySleep`
     ///            assertion → 화면을 *잠그지 않고* 깜깜하게. VPN(FortiClient) 유지.
     ///   `sleep` (기존): `pmset displaysleepnow` → display 를 재워 화면이 잠기고
-    ///            VPN 이 끊길 수 있다(⚠ 경고 표시).
+    ///            VPN 이 끊길 수 있다((warning) 표시).
     /// 현 silently-locks 동작은 footgun 이라 기본을 안전한 `dim` 으로 전환한다.
     /// `MenuBarTheme` 와 동일한 String-raw 저장 패턴.
     enum BlankDisplaysMode: String, CaseIterable {

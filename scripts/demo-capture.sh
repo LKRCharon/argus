@@ -29,7 +29,7 @@ cleanup() {
   if [ -n "$ARGUS" ]; then "$ARGUS" session stop demo >/dev/null 2>&1; "$ARGUS" off >/dev/null 2>&1; fi
   # Belt-and-suspenders: if SleepDisabled is still 1 and we own no helper, warn.
   if pmset -g 2>/dev/null | grep -qiE 'sleepdisabled[[:space:]]+1'; then
-    echo "⚠️  SleepDisabled is still 1 — run 'argus off' or toggle the app off."
+    echo "[WARN]  SleepDisabled is still 1 — run 'argus off' or toggle the app off."
   fi
   [ "$APP_LAUNCHED" = 1 ] && osascript -e 'quit app "Argus"' >/dev/null 2>&1
   rm -rf "$WORK"
@@ -41,7 +41,7 @@ probe() {
   # screencapture returns immediately (does not hang like avfoundation).
   screencapture -x -R0,0,600,60 "$p" 2>/dev/null || true
   if [ ! -s "$p" ]; then
-    echo "❌ screencapture produced no file → Screen Recording permission is missing."
+    echo "[FAIL] screencapture produced no file → Screen Recording permission is missing."
     echo "   Grant it to your terminal app, then re-run."
     return 1
   fi
@@ -52,10 +52,10 @@ probe() {
   echo "probe: captured $(sips -g pixelWidth "$p" 2>/dev/null | awk '/pixelWidth/{print $2}')px, mean-luma=${y:-?}"
   # YAVG ≈ 16 (limited-range black) ⇒ blocked. A real menu bar is much brighter.
   if [ -n "$y" ] && awk "BEGIN{exit !($y < 24)}"; then
-    echo "❌ frame is ~black → Screen Recording permission is missing/ineffective."
+    echo "[FAIL] frame is ~black → Screen Recording permission is missing/ineffective."
     return 1
   fi
-  echo "✅ Screen Recording works — real capture is possible."
+  echo "[OK] Screen Recording works — real capture is possible."
 }
 
 record() {
@@ -68,7 +68,7 @@ record() {
     echo "    (no 'argus' on PATH — recording whatever state the app shows)"
   fi
 
-  echo "==> RECORDING ${SECONDS_REC}s. Click the 🐚 menu bar icon NOW and hold the menu open."
+  echo "==> RECORDING ${SECONDS_REC}s. Click the Argus menu bar icon NOW and hold the menu open."
   local raw="$WORK/raw.mov"
   # -t bounds the capture; run detached + watchdog so a stall can't orphan ffmpeg.
   ffmpeg -hide_banner -loglevel error -f avfoundation -framerate 30 -i "$SCREEN_IDX" \
@@ -78,7 +78,7 @@ record() {
   local wp=$!
   wait "$fp" 2>/dev/null || true
   kill "$wp" 2>/dev/null || true
-  [ -s "$raw" ] || { echo "❌ no recording produced"; return 1; }
+  [ -s "$raw" ] || { echo "[FAIL] no recording produced"; return 1; }
 
   echo "==> cropping top-right menu region + building GIF"
   # Full-screen capture cropped to the top-right corner where the menu drops.

@@ -64,16 +64,17 @@ enum MonitorRadius {
 // silently pinned everything to .dark — if a future child subtree needs the
 // palette, inject it ABOVE the NSHostingController's root view, not in-body.
 
-/// Emoji → SF Symbol, mirroring MenuBarController.statusSymbols so a guard row
-/// reads identically in the menu and the window (menus attach glyphs inline).
+/// Status `[tag]` marker → SF Symbol, mirroring MenuBarController.statusSymbols
+/// so a guard row reads identically in the menu and the window (menus attach
+/// glyphs inline).
 enum MonitorSymbols {
-    static func name(for emoji: Character) -> String? {
-        switch emoji {
-        case "🔋": return "battery.100"
-        case "🌡": return "thermometer.medium"
-        case "🛰": return "antenna.radiowaves.left.and.right"
-        case "⏱": return "timer"
-        case "⚠️": return "exclamationmark.triangle.fill"
+    static func name(for tag: String) -> String? {
+        switch tag {
+        case "[bat]": return "battery.100"
+        case "[therm]": return "thermometer.medium"
+        case "[sat]": return "antenna.radiowaves.left.and.right"
+        case "[timer]": return "timer"
+        case "[warn]": return "exclamationmark.triangle.fill"
         default: return nil
         }
     }

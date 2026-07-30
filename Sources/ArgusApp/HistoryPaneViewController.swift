@@ -252,9 +252,10 @@ final class HistoryPaneViewController: TimedRefreshPaneViewController, NSTableVi
                 label.stringValue = NSL("history.ongoing", "● ongoing")
                 label.textColor = .systemGreen
             } else if let r = ep.endReason {
-                let (emoji, text, color) = reasonStyle(r)
+                let (symbol, text, color) = reasonStyle(r)
                 let detail = ep.endDetail.map { " \($0)" } ?? ""
-                label.stringValue = "\(emoji) \(text)\(detail)"
+                label.attributedStringValue = Self.reasonAttributed(
+                    symbol: symbol, text: text + detail, color: color, font: label.font)
                 label.textColor = color
             } else {
                 label.stringValue = "—"
@@ -263,6 +264,31 @@ final class HistoryPaneViewController: TimedRefreshPaneViewController, NSTableVi
             return nil
         }
         return label
+    }
+
+    /// Reason cell = tinted SF Symbol (inline attachment) + label text. The
+    /// column used to carry an emoji prefix; a symbol attachment keeps the row
+    /// monochrome-consistent with the menu and the monitor window.
+    private static func reasonAttributed(symbol: String,
+                                         text: String,
+                                         color: NSColor,
+                                         font: NSFont?) -> NSAttributedString {
+        let f = font ?? NSFont.systemFont(ofSize: 12)
+        let out = NSMutableAttributedString()
+        if let base = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
+            let conf = NSImage.SymbolConfiguration(pointSize: f.pointSize, weight: .regular)
+                .applying(.init(paletteColors: [color]))
+            let img = base.withSymbolConfiguration(conf) ?? base
+            let attachment = NSTextAttachment()
+            attachment.image = img
+            attachment.bounds = CGRect(x: 0, y: (f.capHeight - img.size.height) / 2,
+                                       width: img.size.width, height: img.size.height)
+            out.append(NSAttributedString(attachment: attachment))
+            out.append(NSAttributedString(string: " "))
+        }
+        out.append(NSAttributedString(string: text,
+                                      attributes: [.font: f, .foregroundColor: color]))
+        return out
     }
 
     private func makeLabel(_ id: NSUserInterfaceItemIdentifier) -> NSTextField {
@@ -391,20 +417,22 @@ final class HistoryPaneViewController: TimedRefreshPaneViewController, NSTableVi
         return base
     }
 
+    /// Per-reason SF Symbol name + label + tint for the history table's reason
+    /// column (symbol names, never emoji).
     private func reasonStyle(_ r: AwakeEndReason) -> (String, String, NSColor) {
         switch r {
-        case .manualOff:         return ("✋", NSL("end.manualOff", "manual off"), .secondaryLabelColor)
-        case .forceSleep:        return ("😴", NSL("end.forceSleep", "force sleep"), .secondaryLabelColor)
-        case .agentCeased:       return ("🤖", NSL("end.agentDone", "agent done"), .secondaryLabelColor)
-        case .remoteEnded:       return ("🖥", NSL("end.remoteEnded", "remote ended"), .secondaryLabelColor)
-        case .remoteNetworkLost: return ("📡", NSL("end.networkLost", "network lost"), .systemOrange)
-        case .batteryLow:        return ("🔋", NSL("end.batteryLow", "battery low"), .systemOrange)
-        case .thermalSerious:    return ("🌡", NSL("end.thermal", "thermal"), .systemOrange)
-        case .thermalCritical:   return ("🔥", NSL("end.thermalCritical", "thermal critical"), .systemRed)
-        case .timer:             return ("⏱", NSL("end.durationCap", "duration cap"), .secondaryLabelColor)
-        case .watchdog:          return ("🐕", NSL("end.watchdog", "watchdog"), .systemRed)
-        case .appQuit:           return ("⏻", NSL("end.appQuit", "app quit"), .secondaryLabelColor)
-        case .unknown:           return ("·", NSL("end.unknown", "ended"), .secondaryLabelColor)
+        case .manualOff:         return ("hand.raised", NSL("end.manualOff", "manual off"), .secondaryLabelColor)
+        case .forceSleep:        return ("moon.zzz", NSL("end.forceSleep", "force sleep"), .secondaryLabelColor)
+        case .agentCeased:       return ("cpu", NSL("end.agentDone", "agent done"), .secondaryLabelColor)
+        case .remoteEnded:       return ("display", NSL("end.remoteEnded", "remote ended"), .secondaryLabelColor)
+        case .remoteNetworkLost: return ("antenna.radiowaves.left.and.right.slash", NSL("end.networkLost", "network lost"), .systemOrange)
+        case .batteryLow:        return ("battery.25", NSL("end.batteryLow", "battery low"), .systemOrange)
+        case .thermalSerious:    return ("thermometer.medium", NSL("end.thermal", "thermal"), .systemOrange)
+        case .thermalCritical:   return ("thermometer.sun.fill", NSL("end.thermalCritical", "thermal critical"), .systemRed)
+        case .timer:             return ("timer", NSL("end.durationCap", "duration cap"), .secondaryLabelColor)
+        case .watchdog:          return ("shield.slash", NSL("end.watchdog", "watchdog"), .systemRed)
+        case .appQuit:           return ("power", NSL("end.appQuit", "app quit"), .secondaryLabelColor)
+        case .unknown:           return ("circle", NSL("end.unknown", "ended"), .secondaryLabelColor)
         }
     }
 }

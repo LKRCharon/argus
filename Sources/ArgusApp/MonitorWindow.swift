@@ -186,18 +186,19 @@ private struct MonitorRootView: View {
         let isWarning: Bool
     }
 
-    /// Strip the leading status emoji (menu strings carry them as markers) and
+    /// Strip the leading status tag (menu strings carry them as markers) and
     /// map it to an SF Symbol via the same table the menu uses.
     private static func splitSymbol(_ line: String) -> GuardRow {
-        guard let first = line.first, let name = MonitorSymbols.name(for: first) else {
+        guard line.hasPrefix("["), let close = line.firstIndex(of: "]"),
+              let name = MonitorSymbols.name(for: String(line[...close])) else {
             return GuardRow(symbol: nil, text: line, isWarning: false)
         }
-        // The warning mark is appended at the END of the line ("🔋 15% · guard
-        // 20% ⚠️"), not at the front — checking the first character never fired
-        // and left the emoji inline in the text.
-        let isWarning = line.contains("⚠️")
-        let rest = line.dropFirst().drop(while: { $0 == " " })
-        let text = rest.replacingOccurrences(of: " ⚠️", with: "")
+        // The warning mark is appended at the END of the line ("[bat] 15% ·
+        // guard 20% [warn]"), not at the front — checking only the leading tag
+        // would never fire and leave the marker inline in the text.
+        let isWarning = line.contains("[warn]")
+        let rest = line[line.index(after: close)...].drop(while: { $0 == " " })
+        let text = rest.replacingOccurrences(of: " [warn]", with: "")
         return GuardRow(symbol: name, text: text, isWarning: isWarning)
     }
 

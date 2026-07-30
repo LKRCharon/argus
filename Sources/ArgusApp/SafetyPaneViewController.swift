@@ -280,10 +280,10 @@ final class SafetyPaneViewController: TimedRefreshPaneViewController {
         let tempPrefix = peakSoC.map { String(format: "%.0f°C · ", $0) } ?? ""
         let thermal = "\(tempPrefix)\(publicDot) \(publicThermal)"
         let batteryDot: String = {
-            guard let p = displayPercent else { return "⚪" }
-            if p < 15 { return "🔴" }
-            if p < 30 { return "🟠" }
-            return "🟢"
+            guard let p = displayPercent else { return "[--]" }
+            if p < 15 { return "[crit]" }
+            if p < 30 { return "[low]" }
+            return "[ok]"
         }()
         let batTemp = store.batteryTempCelsius.map { String(format: "  %.1f°C", $0) } ?? ""
         let cpuStr = store.cpuTempCelsius.map { String(format: "%.1f°C", $0) } ?? "—"
@@ -344,13 +344,14 @@ final class SafetyPaneViewController: TimedRefreshPaneViewController {
     // thermal label / level helpers — single source in SafetyMonitor
     // (`publicThermalLabel` / `thermalLevelInt`); local copies removed.
 
-    /// Color-coded thermal severity dot for the current state line.
+    /// Severity marker for the current thermal state line (plain text, no emoji:
+    /// the field is a single-color NSTextField, so the tag carries the band).
     private func colorDot(level: Int) -> String {
         switch level {
-        case 0: return "🟢"
-        case 1: return "🟡"
-        case 2: return "🟠"
-        default: return "🔴"
+        case 0: return "[ok]"
+        case 1: return "[fair]"
+        case 2: return "[warn]"
+        default: return "[crit]"
         }
     }
 
