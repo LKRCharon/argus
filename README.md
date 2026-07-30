@@ -4,11 +4,10 @@
 
 # Argus
 
-**Agents must keep working — your Mac shouldn't cook trying.**
-It detects *work*, not just a running process.
+**Keep your Mac awake while coding agents work — sleep safely when they stop.**
 
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://www.apple.com/macos/)
-[![Language](https://img.shields.io/badge/Swift-AppKit%20%2B%20IOKit-orange?logo=swift)](https://swift.org)
+[![Language](https://img.shields.io/badge/Swift-AppKit%20%2B%20SwiftUI-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.7.3-yellow)](CHANGELOG.md)
 
@@ -19,63 +18,23 @@ It detects *work*, not just a running process.
 
 ---
 
-## Highlights
+## What it does
 
-- **Lid-closed keep-awake.** One toggle stops your Mac from sleeping even with the lid shut — no terminal commands, no password per toggle.
-- **Detects work, not processes.** Stays awake only while a coding agent is *actively producing output*; once the agent stops, your Mac can sleep again.
-- **5 agents out of the box** — Claude Code, Codex, Cursor, opencode, Antigravity — plus any others you add yourself.
-- **Safety guards that adapt.** Auto-sleeps when battery or temperature crosses a danger line.
-- **Remote-activity aware.** Won't sleep while you're on it over SSH, screen sharing, or Tailscale — and keeps remote builds alive.
-- **Never reads your conversations or code.** Agent detection only looks at transcript timestamps, never their contents.
+Argus sits in your menu bar and prevents macOS from sleeping — but only when there is real work happening. It watches coding agent transcripts for fresh output, holds the Mac awake while they produce, and releases the hold when they go idle. Safety guards step in if temperature or battery gets dangerous.
 
----
+No cloud, no telemetry, no reading your code or conversations — only file timestamps.
 
 ## Features
 
-The goal is to keep your agent working — **safely** — without interruption. Everything below serves that.
-
-### Agent-aware keep-awake
-
-The point is simple: let your agent keep working, uninterrupted.
-
-So the toggle tracks whether the agent is *working right now*, not whether a process exists. While it works, the Mac stays awake; when it stops, the hold releases (**Strict** mode). A **Lax** mode that simply stays awake while the process is alive is also available.
-
-**Detected by default (5):** Claude Code · Codex · Cursor · opencode · Antigravity.
-
-**Opt-in via Customize (off by default):** Aider · Cline · Roo Code · OpenHands · Hermes · Openclaw.
-
-Agents not listed here can be added too — give a glob pattern, or drop a single declaration file into `~/.config/argus/traces.d/*.json`.
-
-By default agents are detected by polling their session logs (~5 s, ~30 s while the screen is locked), so a just-started agent can take a few seconds to appear. Claude, Codex, and Hermes can be detected instantly by installing their (optional) hooks.
-
-### Safety guards
-
-Running a heavy workload in clamshell mode inside a bag is a thermal risk. Argus watches temperature and battery, and lets the Mac sleep when things get risky:
-
-- **Battery** — the threshold depends on your setup: 30% with the lid closed and no external display, 10% otherwise (adjustable). A weak or unstable AC connection counts as battery.
-- **Thermal** — combines the macOS signal with a more sensitive internal one to react faster.
-- **Max duration** — Desktop mode (AC + lid open + external display) skips the cap entirely.
-- **Low Power Mode** — tightens both by one step (+10pp battery, one thermal notch).
-
-With AC unplugged and the lid closed in a bag it judges more conservatively, then clears automatically once things are safe again. You can opt into a notification when it puts the Mac to sleep.
-
-### Remote-activity awareness
-
-Argus won't sleep while you're using the Mac remotely. It detects SSH, screen sharing, Tailscale, and known remote-control apps. The default is simple: stay awake as long as you're connected.
-
-### Telegram notifications (off by default)
-
-Connect your own Telegram bot and you'll get a ping when an agent stops or your Mac goes to sleep — with battery %, temperature, and host name attached.
-
-### Other
-
-- **CLI + named sessions** — drive it straight from the terminal (see [Usage](#usage)).
-- **Optional agent hooks** — installing injects an activity-signal hook into Claude / Codex / Hermes configs; uninstalling restores them.
-- **Guaranteed sleep restore on exit** — three layers: synchronous restore on quit, a SIGTERM handler, and a 20-second watchdog if the app crashes.
-- **Open at login (optional)** — start Argus automatically when you log in; off by default.
-- **Update notifications** — checks GitHub for new releases and points you to the download; it only notifies, never installs on its own.
-- **Clamshell VPN lock guard (opt-in).** With no external display on battery, closing the lid normally *locks* the screen — which drops a FortiClient SSL VPN (it needs a fresh sign-in to reconnect). An invisible virtual display anchors the session so the screen doesn't lock and the tunnel survives — no backlight, so essentially no power and no extra hardware. The **Blank screen** action also splits into **Dim** (dark but VPN-safe, default) vs **Sleep**, with an optional VPN-disconnect notification. Off by default, tucked deep in Settings.
-- **Resilient helper setup** — won't register the background helper from a quarantined download or a temporary (translocated) location where macOS blocks it; it guides you to move the app to Applications instead. Settings flags duplicate copies and version mismatches, and `argus repair` recovers a wedged or unreachable helper.
+- **Agent-aware detection.** Watches transcript timestamps (not contents) for Claude Code, Codex, Cursor, opencode, Antigravity, and any custom agents you add via `~/.config/argus/traces.d/*.json`.
+- **Strict and Lax modes.** Strict releases the hold when the agent stops writing; Lax holds as long as the process is alive.
+- **Safety guards.** Auto-sleeps on low battery, high temperature, or a max-duration cap. Desktop mode (AC + lid open + external display) skips the cap.
+- **Remote-activity awareness.** Won't sleep while you have an SSH, screen sharing, or Tailscale session.
+- **Codex quota monitor.** Reads your plan usage from local transcripts and shows it in the Monitor window.
+- **Telegram notifications (opt-in).** Pings your bot when the Mac sleeps or wakes.
+- **CLI.** `argus on/off/status/watch/session/debug/repair/help` — drive it without the GUI.
+- **Android companion.** Pair via QR code, monitor agent status and control sessions from your phone.
+- **Privacy-first.** Reads file clocks only. No analytics, no tracking, no network calls except your own Telegram bot and optional relay.
 
 ## Install
 
@@ -84,98 +43,68 @@ brew install --cask LKRCharon/tap/argus
 open /Applications/Argus.app
 ```
 
-Turn on **Argus Helper** in **System Settings → General → Login Items & Extensions**.
+Then enable **Argus Helper** in **System Settings > General > Login Items & Extensions**.
+
+Or build from source:
+
+```bash
+ARGUS_SIGN_ID=- ./scripts/build.sh
+open build/Argus.app
+```
+
+The Android companion APK is available in [Releases](https://github.com/LKRCharon/argus/releases).
 
 ## Usage
 
-**Click** the menu bar icon to open the menu. The icon is a clam shell with three states: outline (asleep), filled + bolt (manually holding awake), filled + remote mark (automatic hold from an agent or remote session).
+**Click** the menu bar icon to open the menu.
 
-### Menu
-
-| Item | Action |
+| Item | What it does |
 |---|---|
-| Status header | Current state at a glance (e.g., "Asleep when idle", "Awake — until I quit", "Awake — remote session") |
-| **Keep Mac Awake** (⌘K) | Toggle keep-awake |
-| **Watch Agents** ▸ | Enable/disable the agents to detect (shows " • active" when one is); **Customize…** at the bottom |
-| **Blank screen — keep working** | Sleep the displays but keep the Mac and agents running |
-| **Settings…** (⌘,) | Open settings |
-| **Quit** (⌘Q) | Quit (restores sleep first) |
+| Status header | Current state at a glance |
+| **Keep Mac Awake** (Cmd+K) | Toggle manual keep-awake |
+| **Watch Agents** | Enable/disable agent detection per agent |
+| **Monitor...** | Open the dashboard (thermal, agents, Codex quota, remote) |
+| **Blank screen — keep working** | Sleep displays but keep agents running |
+| **Settings...** (Cmd+,) | Full settings |
+| **Quit** (Cmd+Q) | Quit (restores sleep first) |
+
+The icon has three states: outline shell (asleep), filled + bolt (you toggled it on), filled + remote (automatic hold).
 
 ### CLI
 
-The Homebrew cask creates a `$HOMEBREW_PREFIX/bin/argus` symlink.
-
 ```
-argus on [--for <dur>] [--forever]   # keep awake; default 2h, then the helper auto-releases (no GUI needed, survives reboot)
+argus on [--for <dur>] [--forever]
 argus off
-argus status [--json]                # also flags a quarantined app, a failed helper, and duplicate copies
-argus repair                         # recover a wedged/unreachable helper
+argus status [--json]
+argus repair
 argus keep --while <pid>
 argus watch <agent> [--grace s] [--check-interval s] [--max min] [--json]
-argus session start <name> [--message <text>] / stop <name> / list [--json]
+argus session start <name> / stop <name> / list [--json]
+argus monitor
 argus debug [agents] [--json]
 argus help
 ```
 
-**Exit codes:** `0` success · `1` bad arguments · `2` helper unreachable · `3` approval required · `4` user cancelled.
-
-## Security & privacy
+## Security
 
 - Reads file clocks, not file contents.
-- No telemetry, no tracking, no analytics.
-- XPC caller verification is enforced.
-- Developer ID signed + Apple notarized (when applicable).
-- Tokens stay local.
-- Sleep is always restored on exit or crash.
-- One permission path (`SMAppService`).
-
-See [Security & privacy](docs/security.md) for details.
-
-## Cautions / Known limitations
-
-- **Detection can lag a few seconds without a hook.** Agents without an installed hook are detected by polling their session logs (~5 s, ~30 s while locked). Claude / Codex / Hermes are instant once you install their hooks.
-- **No safety guards in CLI-only use.**
-- **VS Code–embedded agents** (Cline / Roo Code) have no standalone process, so Lax-mode detection is limited.
-- **Apple Silicon only**, macOS 13+ (Ventura).
+- No telemetry, no tracking.
+- XPC caller verification enforced.
+- Sleep always restored on exit or crash.
+- See [docs/security.md](docs/security.md) for details.
 
 ## Tech stack
 
-- **Language / UI:** Swift + AppKit + SwiftUI (`NSStatusItem`, `LSUIElement` menu bar app — no Dock).
-- **Power control:** IOKit SPI — `IOPMSetSystemPowerSetting("SleepDisabled")` via an `@_silgen_name` binding.
-- **Privilege separation:** an `SMAppService` daemon talking to the app over `NSXPCConnection` (mach service).
-- **Build:** direct `swiftc` (no SwiftPM), **no external dependencies**.
-- **Targets:** arm64, macOS 13+ (Ventura).
-
-## Build from source
-
-```bash
-./scripts/build.sh            # app + helper + hook binaries (Developer ID signed)
-open build/Argus.app
-```
-
-- Direct `swiftc` invocation, `arm64-apple-macos13.0` target. Set `ARGUS_SIGN_ID=-` for fast ad-hoc local builds.
-- Bundle layout: `Contents/MacOS/{Argus, ArgusHelper, argus-hook}` + `Contents/Library/LaunchDaemons/com.kairong.argus.helper.plist`.
-- Release builds are Developer ID–signed and notarized (stapled by `release.sh`).
-
-## Release history
-
-Recent releases — full history in [CHANGELOG.md](CHANGELOG.md):
-
-- **0.6.3** — Fix: with the clamshell lock guard enabled, attaching a real external display no longer disturbs your saved built-in + external arrangement. The invisible anchor now steps aside immediately (no re-mirror) when a real display appears, letting macOS restore your saved layout; it returns automatically when the external is removed. Headless clamshell lock protection is unchanged.
-- **0.6.2** — Clamshell VPN lock guard (opt-in): with no external display on battery, closing the lid no longer locks the screen, so a FortiClient SSL VPN survives instead of dropping — an invisible virtual display anchors the session, the "Blank screen" action now lets you choose **Dim** (VPN-safe, default) or **Sleep**, and an optional notification warns you if the VPN drops. Plus a more resilient helper setup that refuses to register from a quarantined or translocated copy, flags duplicate copies and version mismatches, and recovers via `argus repair`.
-- **0.6.1** — Honest helper status: a dead-but-registered helper no longer shows a false "enabled". `argus status` reports it as `unreachable` (exit 2), the app self-repairs on relaunch, a new `argus repair` command and a menu-bar warning surface it, and `argus status` now also reports the Open-at-Login state.
-- **0.6.0** — Open at Login, in-app update notifications, awake history, internationalization (English · 한국어 · 中文 · 日本語 · Español), single-click toggle, menu-bar icon themes, remote idle policy, Telegram status notifications, Developer ID signing + notarization.
-
-Earlier: agent-aware detection and the `watch` / `session` CLI (0.5.x), state-conditioned battery / thermal / timer safety guards (0.4.x), remote-activity awareness and the first CLI (0.3.x).
+- Swift + AppKit + SwiftUI (menu bar `LSUIElement` app)
+- IOKit SPI for sleep control (`IOPMSetSystemPowerSetting`)
+- `SMAppService` privileged helper over `NSXPCConnection`
+- Direct `swiftc` build, no SPM, no external dependencies
+- arm64 only, macOS 13+ (Ventura)
 
 ## Origins
 
-Argus began as a fork of [jadhvank/eclam](https://github.com/jadhvank/eclam) (Electronic Clam) and has since been rebranded and extended. Thanks to the original author for the foundation.
+Argus began as a fork of [jadhvank/eclam](https://github.com/jadhvank/eclam) (Electronic Clam) and has since been rebranded and extended.
 
 ## License
 
 [MIT](LICENSE).
-
----
-
-<sub>`README.zh-CN.md`, `README.ja.md`, and `README.es.md` are generated from this file via the `/translate` command — don't edit them by hand. `README.ko.md` is maintained by hand.</sub>
