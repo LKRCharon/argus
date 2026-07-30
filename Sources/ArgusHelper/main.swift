@@ -25,5 +25,5 @@ let listener = NSXPCListener(machServiceName: HelperServiceName.mach)
 listener.delegate = delegate
 listener.resume()
 
-helperLog.info("ElectronicClamHelper started, listening on \(HelperServiceName.mach, privacy: .public)")
+helperLog.info("ArgusHelper started, listening on \(HelperServiceName.mach, privacy: .public)")
 RunLoop.main.run()

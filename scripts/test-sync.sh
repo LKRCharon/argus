@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pull latest, rebuild, and (re)launch ElectronicClam on the *test* Mac.
+# Pull latest, rebuild, and (re)launch Argus on the *test* Mac.
 # Workflow A: dev machine pushes a branch, this fetches + builds + relaunches.
 #
 # Usage (on the test Mac):
@@ -27,17 +27,17 @@ git fetch --prune origin
 git checkout "$BRANCH"
 git reset --hard "origin/$BRANCH"
 
-echo "==> Quitting running ElectronicClam (if any)"
-osascript -e 'quit app "ElectronicClam"' 2>/dev/null || true
+echo "==> Quitting running Argus (if any)"
+osascript -e 'quit app "Argus"' 2>/dev/null || true
 # Fallback for the menubar process if AppleScript quit didn't catch it.
-pkill -x ElectronicClam 2>/dev/null || true
+pkill -x Argus 2>/dev/null || true
 sleep 1
 
 echo "==> Building"
 ./scripts/build.sh
 
 echo "==> Clearing quarantine + launching"
-xattr -dr com.apple.quarantine "build/ElectronicClam.app" 2>/dev/null || true
-open "build/ElectronicClam.app"
+xattr -dr com.apple.quarantine "build/Argus.app" 2>/dev/null || true
+open "build/Argus.app"
 
 echo "==> Synced to $(git rev-parse --short HEAD) — $(git log -1 --pretty=%s)"

@@ -282,7 +282,7 @@ final class HistoryPaneViewController: TimedRefreshPaneViewController, NSTableVi
             f.dateFormat = "yyyyMMdd"
             return f.string(from: Date())
         }()
-        panel.nameFieldStringValue = "eclam-history-\(dateStr).csv"
+        panel.nameFieldStringValue = "argus-history-\(dateStr).csv"
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }

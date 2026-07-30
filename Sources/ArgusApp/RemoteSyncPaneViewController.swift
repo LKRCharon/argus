@@ -287,7 +287,7 @@ final class RemoteSyncPaneViewController: NSViewController, NSPopoverDelegate {
         sessionLabel.font = .systemFont(ofSize: 11)
         sessionLabel.textColor = .secondaryLabelColor
 
-        relayURLField.placeholderString = "wss://relay.limen.codes/ws"
+        relayURLField.placeholderString = "wss://relay.example.com/ws"
         relayURLField.translatesAutoresizingMaskIntoConstraints = false
         relayURLField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
 
@@ -436,7 +436,7 @@ final class RemoteSyncPaneViewController: NSViewController, NSPopoverDelegate {
         guard pairProcess == nil else { return }
         // Same preflight as start() — a missing bun/checkout otherwise dies as
         // an opaque NSCocoaErrorDomain message.
-        if let err = AgentlinkBridge.preflightError() {
+        if let err = AgentlinkBridge.preflightError(relayURL: relayURLField.stringValue) {
             errorLabel.stringValue = err
             errorLabel.isHidden = false
             return

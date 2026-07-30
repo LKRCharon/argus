@@ -5,7 +5,7 @@ import Foundation
 /// `RemoteWatcher` runs `ps -axww -o command` and feeds each line here; this file
 /// does no I/O, so `scripts/test.sh` compiles it standalone.
 ///
-/// Detection is **argv-only** — an eclam invariant: no transcript contents, no
+/// Detection is **argv-only** — an argus invariant: no transcript contents, no
 /// network snooping (the same posture `AgentDetector` already takes with `ps`).
 /// Signatures observed live (Claude `2.1.x`, 2026-06-14):
 ///

@@ -47,14 +47,14 @@ enum RepairCommand: CLISubcommand {
 
         // 2) Relaunch the app so registration happens in its GUI session.
         guard let appPath = appBundlePath() else {
-            CLIStderr.print("argus repair: cannot locate ElectronicClam.app. Open the app manually "
+            CLIStderr.print("argus repair: cannot locate Argus.app. Open the app manually "
                 + "and use Settings > General > Reinstall Helper.")
             return 2
         }
         print("argus repair: relaunching Argus to repair the helper in its app context…")
         // Graceful quit (no-op if not running) — same path the app uses on quit,
         // so any held sleep is restored cleanly. Then relaunch the bundle.
-        _ = Subprocess.capture("/usr/bin/osascript", ["-e", "quit app \"ElectronicClam\""])
+        _ = Subprocess.capture("/usr/bin/osascript", ["-e", "quit app \"Argus\""])
         Thread.sleep(forTimeInterval: 1.5)
         _ = Subprocess.capture("/usr/bin/open", [appPath])
 
@@ -91,7 +91,7 @@ enum RepairCommand: CLISubcommand {
         return 2
     }
 
-    /// The `.app` bundle to relaunch. `eclam` is a symlink into the bundle, so
+    /// The `.app` bundle to relaunch. `argus` is a symlink into the bundle, so
     /// `Bundle.main` usually resolves to the `.app`; fall back to truncating at
     /// `.app` (when it resolves to `Contents/MacOS`), then to the conventional
     /// install path.
@@ -99,7 +99,7 @@ enum RepairCommand: CLISubcommand {
         let b = Bundle.main.bundlePath
         if b.hasSuffix(".app") { return b }
         if let r = b.range(of: ".app") { return String(b[..<r.upperBound]) }
-        let fallback = "/Applications/ElectronicClam.app"
+        let fallback = "/Applications/Argus.app"
         return FileManager.default.fileExists(atPath: fallback) ? fallback : nil
     }
 

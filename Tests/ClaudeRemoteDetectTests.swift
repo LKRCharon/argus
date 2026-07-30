@@ -26,7 +26,7 @@ func assert(_ cond: Bool, _ msg: String) {
 }
 
 // ── 실측 fixture ──────────────────────────────────────────────────────────
-let host = "claude remote-control --name home-eclam --spawn worktree --capacity 8"
+let host = "claude remote-control --name home-argus --spawn worktree --capacity 8"
 let worker = "/Users/foo/.local/share/claude/versions/2.1.177 --print "
     + "--sdk-url https://api.anthropic.com/v1/code/sessions/cse_01QhaEYKNXsFY6YRmQen1o8u "
     + "--session-id cse_01QhaEYKNXsFY6YRmQen1o8u --input-format stream-json "

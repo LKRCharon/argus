@@ -42,7 +42,7 @@ final class SafetyPaneViewController: TimedRefreshPaneViewController {
 
     private let stateHeader = NSTextField(labelWithString: NSL("safety.currentState", "Current state"))
     private let stateBody = NSTextField(labelWithString: "")
-    /// v0.4.0 — mini 60-second thermal chart. CPU / GPU / battery °C as lines;
+    /// Mini 60-second thermal chart. CPU / GPU / battery °C as lines;
     /// fallback to 5-step pressure bars when SMC is unavailable.
     private let thermalChart = ThermalChartView()
 

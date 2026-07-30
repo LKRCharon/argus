@@ -23,7 +23,7 @@ enum HelperLiveness {
     static func isReachable(timeout: TimeInterval) -> Bool {
         let conn = NSXPCConnection(machServiceName: HelperServiceName.mach,
                                    options: .privileged)
-        conn.remoteObjectInterface = NSXPCInterface(with: ElectronicClamHelperProtocol.self)
+        conn.remoteObjectInterface = NSXPCInterface(with: ArgusHelperProtocol.self)
         conn.resume()
         defer { conn.invalidate() }
 
@@ -35,7 +35,7 @@ enum HelperLiveness {
         let reachable = LockedBox(false)
         guard let proxy = conn.remoteObjectProxyWithErrorHandler({ _ in
             sem.signal()   // connection-level failure ⇒ reachable stays false
-        }) as? ElectronicClamHelperProtocol else {
+        }) as? ArgusHelperProtocol else {
             return false
         }
         proxy.currentState { _, _ in

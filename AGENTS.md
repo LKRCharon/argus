@@ -5,9 +5,9 @@ product; read the section for whichever one you are touching.
 
 | Repo | Path | Stack |
 |---|---|---|
-| Argus (this repo) | `~/proj/eclam` | Swift / AppKit, no SwiftUI, no SPM manifest — `scripts/build.sh` drives swiftc directly |
-| Android client | `~/proj/Argus/android` | Kotlin / Compose, Gradle (`./gradlew`) |
-| agentlink | `~/Documents/Qoder/2026-07-26/chat-1/agentlink` | TypeScript / Bun workspaces (daemon + wire + relay + PWA) |
+| Argus (this repo) | this checkout | Swift / AppKit, no SwiftUI, no SPM manifest — `scripts/build.sh` drives swiftc directly |
+| Android client | a sibling checkout (`android/`) | Kotlin / Compose, Gradle (`./gradlew`) |
+| agentlink | a local checkout, path configured in Settings → Remote Sync | TypeScript / Bun workspaces (daemon + wire + relay + PWA) |
 
 Stack is Swift, Kotlin and TypeScript. Do not introduce another language —
 including throwaway scripts for editing source. Batch edits belong in the
@@ -22,7 +22,7 @@ deletions cut the wrong range).
 ### Build, deploy, verify
 
 ```bash
-ECLAM_SIGN_ID=- ./scripts/build.sh          # -> build/Argus.app
+ARGUS_SIGN_ID=- ./scripts/build.sh          # -> build/Argus.app
 ./scripts/test.sh                            # standalone test programs, no XCTest
 ./scripts/check-i18n.sh                      # key parity + format specifiers across 5 locales
 ```
@@ -50,9 +50,11 @@ does not mean the layout is right — screenshot it.
 - **The privileged helper is deprecated** but its code stays: the CLI's timed
   hold and the hook's `pingActivity` still need it. keep-awake itself no longer
   goes through it.
-- **Naming**: `ElectronicClam` / `eclam` / `jadhvank` are gone. Exceptions that
-  must stay: the XPC protocol name `ElectronicClamHelperProtocol` and the
-  `ECLAM_SIGN_ID` build variable.
+- **Naming**: `ElectronicClam` / `eclam` / `jadhvank` are gone everywhere,
+  including the XPC protocol (now `ArgusHelperProtocol`) and the build variable
+  (now `ARGUS_SIGN_ID`). The only remaining `eclam` literals are the two
+  pre-rename migration fallbacks (`AwakeHistory`, `ExternalTraces`) and the
+  README origin note crediting the upstream fork.
 - Menu bar icon: SF Symbol `link` (asleep) / `link.circle.fill` (awake). No
   sponsorship or donation entry points.
 
@@ -148,7 +150,7 @@ state and leak the old WebSocket). Register activity results through
 
 ```bash
 bun test && bun run typecheck
-AGENTLINK_RELAY=wss://relay.limen.codes/ws bun run packages/daemon/src/index.ts watch
+AGENTLINK_RELAY=wss://<your-relay-host>/ws bun run packages/daemon/src/index.ts watch
 ```
 
 `AGENTLINK_RELAY` selects the relay (default is localhost, which just fails).

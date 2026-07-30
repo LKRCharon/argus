@@ -1,6 +1,12 @@
 # Changelog
 
-All notable changes to Electronic Clam are documented here.
+All notable changes to Argus (formerly Electronic Clam) are documented here.
+
+## [0.7.0] — 2026-07-29
+
+- **Renamed: Electronic Clam is now Argus** — the app (`Argus.app`), the CLI (`argus`), the background helper (`ArgusHelper`, `com.kairong.argus.helper`), on-disk paths, and the Homebrew cask (`jadhvank/tap/argus`) are all renamed.
+- **Automatic data migration** — existing state in `~/Library/Application Support/eclam` and custom agent declarations in `~/.config/eclam/traces.d` are moved to the new `argus` locations on first launch; no action needed.
+- **Relay and agentlink paths now default to empty** — they are no longer pre-filled with the old `eclam` locations; configure them manually if you use these features.
 
 ## [0.6.3] — 2026-07-02
 

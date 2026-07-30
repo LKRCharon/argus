@@ -27,11 +27,11 @@ func testIsTranslocated() {
     currentSuite = "isTranslocated"
 
     expectEqual(InstallLocation.isTranslocated(
-        "/private/var/folders/ab/xyz/AppTranslocation/ABCD/d/ElectronicClam.app"),
+        "/private/var/folders/ab/xyz/AppTranslocation/ABCD/d/Argus.app"),
         true, "translocation path ⇒ true")
-    expectEqual(InstallLocation.isTranslocated("/Applications/ElectronicClam.app"),
+    expectEqual(InstallLocation.isTranslocated("/Applications/Argus.app"),
                 false, "/Applications path ⇒ false")
-    expectEqual(InstallLocation.isTranslocated("/Users/x/Downloads/ElectronicClam.app"),
+    expectEqual(InstallLocation.isTranslocated("/Users/x/Downloads/Argus.app"),
                 false, "Downloads path ⇒ false")
 
     print("OK: isTranslocated")
@@ -58,7 +58,7 @@ func testIsQuarantined() {
     currentSuite = "isQuarantined"
 
     let dir = NSTemporaryDirectory()
-    let path = (dir as NSString).appendingPathComponent("eclam-iltest-\(getpid()).tmp")
+    let path = (dir as NSString).appendingPathComponent("argus-iltest-\(getpid()).tmp")
     FileManager.default.createFile(atPath: path, contents: Data("x".utf8))
     defer { try? FileManager.default.removeItem(atPath: path) }
 
@@ -81,13 +81,13 @@ func testRegistrationBlock() {
 
     // translocation path ⇒ .translocated (reported regardless of quarantine)
     expectEqual(InstallLocation.registrationBlock(
-        bundlePath: "/private/var/folders/ab/AppTranslocation/X/d/ElectronicClam.app"),
+        bundlePath: "/private/var/folders/ab/AppTranslocation/X/d/Argus.app"),
         InstallLocation.Block(kind: .translocated),
         "translocation ⇒ .translocated")
 
     // plain /Applications path (non-existent ⇒ not quarantined) ⇒ nil
     expectEqual(InstallLocation.registrationBlock(
-        bundlePath: "/Applications/ElectronicClam.app"),
+        bundlePath: "/Applications/Argus.app"),
         nil, "/Applications, no quarantine ⇒ nil (safe)")
 
     print("OK: registrationBlock")

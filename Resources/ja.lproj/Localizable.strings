@@ -345,7 +345,7 @@
 /* proposal §1 — Detect Now 진단 버튼 */
 "agents.detectNow" = "今すぐ検知…";
 "agents.detectNow.title" = "検知スナップショット";
-"agents.tip.detectNow" = "検知を1回実行し、各エージェントがどのファイルにマッチしたか(またはなぜしなかったか)をそのまま表示します。`eclam debug agents` と同じ出力です。";
+"agents.tip.detectNow" = "検知を1回実行し、各エージェントがどのファイルにマッチしたか(またはなぜしなかったか)をそのまま表示します。`argus debug agents` と同じ出力です。";
 
 /* proposal §5 — 첫 승인 후 1회 안내 */
 "onboarding.enabled.title" = "Argus の準備ができました";
@@ -474,6 +474,7 @@
 "sync.bun.missing" = "見つかりません — brew install oven-sh/bun/bun";
 "sync.projectDir" = "プロジェクトフォルダ";
 "sync.choose" = "選択…";
+"sync.err.relayMissing" = "リレー URL が未設定です。上の欄にリレーの wss:// アドレスを入力してください。";
 "sync.err.bunMissing" = "Bun ランタイムが見つかりません。インストールするか(brew install oven-sh/bun/bun)、~/.bun/bin/bun に配置してください。";
 "sync.err.projectMissing" = "%@ に agentlink プロジェクトが見つかりません — 下の「ローカルデーモン」でフォルダを選択してください。";
 

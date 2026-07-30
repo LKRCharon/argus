@@ -1,4 +1,4 @@
-// ADR-0025 — `eclam on --for <dur>` 파서/포매터 테스트.
+// ADR-0025 — `argus on --for <dur>` 파서/포매터 테스트.
 // swiftc 단독 컴파일: Sources/Shared/DurationParse.swift 와 함께 (scripts/test.sh).
 // (stdlib-only 제약은 대상 소스에만 적용 — 테스트 파일은 Darwin.exit 사용 가능.)
 

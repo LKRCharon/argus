@@ -1,4 +1,4 @@
-# ci.yml — Electronic Clam 통합 CI
+# ci.yml — Argus 통합 CI
 # macOS 러너는 분당 10x 차감 — 무료 분량 주의
 #
 # push/PR 마다 smoke.sh 를 실행해 빌드 + 단위 테스트 + i18n parity +
@@ -28,4 +28,4 @@ jobs:
         # 러너 키체인에는 Developer ID 인증서가 없으므로 ad-hoc 서명으로 빌드.
         # (build.sh 기본값이 Developer ID — ADR-0028. 서명/노터라이즈 검증은
         # release.sh 수동 단계의 몫이고, CI는 컴파일·테스트·CLI 동작만 본다.)
-        run: ECLAM_SIGN_ID=- ./scripts/smoke.sh
+        run: ARGUS_SIGN_ID=- ./scripts/smoke.sh

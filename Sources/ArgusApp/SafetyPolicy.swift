@@ -48,9 +48,9 @@ public struct AwakeInputs {
     /// True when inside the 5-minute post-release cooldown
     /// (`safetyCooldownUntil > now`).
     public let cooldownActive: Bool
-    /// ElectronicClam-managed user "Keep Mac Awake" toggle.
+    /// Argus-managed user "Keep Mac Awake" toggle.
     public let manualToggle: Bool
-    /// v0.4.0 — user force-slept despite live auto signals (ADR-0014).
+    /// User force-slept despite live auto signals (ADR-0014).
     public let manualOverrideOff: Bool
     /// ADR-0016 — remote counts as activity unless the idle knob is 0.
     public let remoteCountsAsActivity: Bool
@@ -148,7 +148,7 @@ public struct SafetyEnvironment {
     // Timer cap.
     /// `SafetySettings.maxDurationMin` (0 = unlimited).
     public let maxDurationMin: Int
-    /// v0.3.4 E — AC + lid open + ext display ⇒ "at a desk", timer cap skipped.
+    /// E — AC + lid open + ext display ⇒ "at a desk", timer cap skipped.
     public let safeScenario: Bool
     /// Minutes since `keepAwakeSince`, or `nil` if not currently keeping awake.
     public let keepAwakeElapsedMinutes: Double?

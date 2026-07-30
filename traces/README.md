@@ -1,12 +1,12 @@
 # Community agent traces
 
-Electronic Clam detects "an agent is working" by watching files the agent
+Argus detects "an agent is working" by watching files the agent
 writes during a session (ADR-0006). Built-in traces live in
 `Sources/Shared/AgentTrace.swift`; **you can add new agents without touching
 code** by dropping a JSON file into:
 
 ```
-~/.config/eclam/traces.d/<name>.json
+~/.config/argus/traces.d/<name>.json
 ```
 
 Format — one object or an array of objects, same fields as `AgentTrace`:
@@ -23,14 +23,14 @@ Format — one object or an array of objects, same fields as `AgentTrace`:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | ✅ | lowercase `[a-z0-9_-.]` — used in menus, `status --json`, hooks |
-| `label` | ✅ | display name |
-| `globPattern` | ✅ | POSIX glob (`*`/`?` only, no `**`); `~` expands |
+| `id` | yes | lowercase `[a-z0-9_-.]` — used in menus, `status --json`, hooks |
+| `label` | yes | display name |
+| `globPattern` | yes | POSIX glob (`*`/`?` only, no `**`); `~` expands |
 | `freshness` | – | seconds an mtime counts as "active" (default 60) |
-| `hookKey` | – | only if the agent pushes `eclam-hook` signals |
+| `hookKey` | – | only if the agent pushes `argus-hook` signals |
 | `comm` | – | process basename for Lax mode (`ps -axo comm`) |
 
-Verify with **Settings → Agents → Detect Now…** (or `eclam debug agents`),
+Verify with **Settings → Agents → Detect Now…** (or `argus debug agents`),
 then enable the agent in the Watch list.
 
 To contribute a trace upstream, open a PR adding it under `traces/community/`

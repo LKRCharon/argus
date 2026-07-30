@@ -4,7 +4,7 @@ import Foundation
 import Darwin
 #endif
 
-/// `eclam keep --while <pid>` — daemon-independent caffeinate wrapper.
+/// `argus keep --while <pid>` — daemon-independent caffeinate wrapper.
 /// ADR-0007 §C. Does NOT prevent lid-close sleep; that path uses the toggle
 /// + helper. We make that explicit on stderr so people don't reach for `keep`
 /// expecting lid-close blocking.
@@ -20,13 +20,13 @@ enum KeepCommand: CLISubcommand {
                     i += 2
                     continue
                 }
-                CLIStderr.print("eclam keep: --while requires a positive integer pid.")
+                CLIStderr.print("argus keep: --while requires a positive integer pid.")
                 return 1
             }
             i += 1
         }
         guard let pid = pid else {
-            CLIStderr.print("usage: eclam keep --while <pid>")
+            CLIStderr.print("usage: argus keep --while <pid>")
             return 1
         }
 
@@ -34,17 +34,17 @@ enum KeepCommand: CLISubcommand {
         if kill(pid, 0) != 0 {
             let saved = errno
             if saved == ESRCH {
-                CLIStderr.print("eclam keep: no such process: \(pid)")
+                CLIStderr.print("argus keep: no such process: \(pid)")
                 return 1
             }
             // EPERM means process exists but we lack signal permission — fine.
             if saved != EPERM {
-                CLIStderr.print("eclam keep: cannot probe pid \(pid): \(String(cString: strerror(saved)))")
+                CLIStderr.print("argus keep: cannot probe pid \(pid): \(String(cString: strerror(saved)))")
                 return 1
             }
         }
 
-        CLIStderr.print("eclam keep: idle sleep blocked while pid \(pid) alive (lid-close NOT blocked — use the menu bar app for that).")
+        CLIStderr.print("argus keep: idle sleep blocked while pid \(pid) alive (lid-close NOT blocked — use the menu bar app for that).")
 
         // Spawn `caffeinate -dis -w <pid>` and forward signals.
         let task = Process()
@@ -54,7 +54,7 @@ enum KeepCommand: CLISubcommand {
         do {
             try task.run()
         } catch {
-            CLIStderr.print("eclam keep: failed to spawn caffeinate: \(error.localizedDescription)")
+            CLIStderr.print("argus keep: failed to spawn caffeinate: \(error.localizedDescription)")
             return 1
         }
 

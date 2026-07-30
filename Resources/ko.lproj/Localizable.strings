@@ -344,7 +344,7 @@
 /* proposal §1 — Detect Now 진단 버튼 */
 "agents.detectNow" = "지금 감지…";
 "agents.detectNow.title" = "감지 스냅샷";
-"agents.tip.detectNow" = "감지를 1회 실행해 각 에이전트가 어떤 파일에 매칭됐는지(또는 왜 안 됐는지)를 그대로 보여줍니다. `eclam debug agents`와 같은 출력입니다.";
+"agents.tip.detectNow" = "감지를 1회 실행해 각 에이전트가 어떤 파일에 매칭됐는지(또는 왜 안 됐는지)를 그대로 보여줍니다. `argus debug agents`와 같은 출력입니다.";
 
 /* proposal §5 — 첫 승인 후 1회 안내 */
 "onboarding.enabled.title" = "Argus 준비 완료";
@@ -473,6 +473,7 @@
 "sync.bun.missing" = "찾을 수 없음 — brew install oven-sh/bun/bun";
 "sync.projectDir" = "프로젝트 폴더";
 "sync.choose" = "선택…";
+"sync.err.relayMissing" = "릴레이 URL이 설정되지 않았습니다. 위에 릴레이의 wss:// 주소를 입력하세요.";
 "sync.err.bunMissing" = "Bun 런타임을 찾을 수 없습니다. 설치하거나(brew install oven-sh/bun/bun) ~/.bun/bin/bun에 두세요.";
 "sync.err.projectMissing" = "%@에서 agentlink 프로젝트를 찾을 수 없습니다 — 아래 '로컬 데몬'에서 폴더를 선택하세요.";
 

@@ -9,7 +9,7 @@ final class HelperBridge {
     private var connection: NSXPCConnection?
     private let lock = NSLock()
 
-    /// v0.5 P1 — 버전 핸드셰이크 직렬 큐 (reply 타임아웃 대기 동안 블록되므로
+    /// P1 — 버전 핸드셰이크 직렬 큐 (reply 타임아웃 대기 동안 블록되므로
     /// 전용 큐; 메인/XPC 큐와 무관).
     private let handshakeQueue = DispatchQueue(label: "com.kairong.argus.handshake")
     /// `lock` 보호. 구버전 daemon 이 미구현 selector 수신으로 연결을
@@ -48,7 +48,7 @@ final class HelperBridge {
             consecutiveInvalidations = 0
         }
         let c = NSXPCConnection(machServiceName: HelperServiceName.mach, options: .privileged)
-        c.remoteObjectInterface = NSXPCInterface(with: ElectronicClamHelperProtocol.self)
+        c.remoteObjectInterface = NSXPCInterface(with: ArgusHelperProtocol.self)
         c.invalidationHandler = { [weak self] in
             guard let self = self else { return }
             self.lock.lock()
@@ -68,7 +68,7 @@ final class HelperBridge {
         }
         c.resume()
         connection = c
-        // v0.5 P1 — 버전 핸드셰이크: 연결 수립 시 1회 (+invalidation 후
+        // P1 — 버전 핸드셰이크: 연결 수립 시 1회 (+invalidation 후
         // 재수립 시). 폴링 없음; 위 throttle 이 비정상 재연결 폭주만 막는다.
         connection = c
         let now = Date()
@@ -79,7 +79,7 @@ final class HelperBridge {
         return c
     }
 
-    // MARK: - v0.5 P1 — protocol version handshake
+    // MARK: - P1 — protocol version handshake
 
     /// 업그레이드 직후 잔존한 구버전 daemon 감지 (ADR-0020 트랩 후속).
     ///
@@ -155,11 +155,11 @@ final class HelperBridge {
         lock.unlock()
     }
 
-    private func remoteProxy(errorHandler: @escaping (Error) -> Void) -> ElectronicClamHelperProtocol? {
+    private func remoteProxy(errorHandler: @escaping (Error) -> Void) -> ArgusHelperProtocol? {
         guard let c = ensureConnection() else { return nil }
         let proxy = c.remoteObjectProxyWithErrorHandler { err in
             errorHandler(err)
-        } as? ElectronicClamHelperProtocol
+        } as? ArgusHelperProtocol
         return proxy
     }
 
@@ -263,7 +263,7 @@ final class HelperBridge {
         }
     }
 
-    /// v0.3.2 — push the current active-agents set to the helper so out-of-band
+    /// Push the current active-agents set to the helper so out-of-band
     /// CLI calls (`status --json`) can read it. Fire-and-forget; debouncing is
     /// the caller's responsibility.
     func setActiveAgents(_ ids: [String]) {
@@ -277,7 +277,7 @@ final class HelperBridge {
         }
     }
 
-    /// v0.3.2 — synchronous snapshot of the helper's published active-agents set.
+    /// Synchronous snapshot of the helper's published active-agents set.
     /// Used by `argus status --json`. Returns `nil` on XPC failure so the
     /// caller can distinguish "no data" from "definitively empty".
     func fetchActiveAgentsSync(timeout: TimeInterval = 0.5) -> [String]? {
@@ -339,7 +339,7 @@ final class HelperBridge {
 
 // `LockedBox` (lock-guarded value for sync-XPC timeout races) used to live
 // here as a private type; it moved to Sources/Shared/HelperProtocol.swift so
-// the CLI commands and the separately-compiled eclam-hook binary can reuse it.
+// the CLI commands and the separately-compiled argus-hook binary can reuse it.
 
 private func makeError(_ msg: String) -> NSError {
     NSError(domain: "com.kairong.argus", code: -1,

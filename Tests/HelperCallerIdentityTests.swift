@@ -4,10 +4,10 @@
 // Compiled together with Sources/ArgusHelper/HelperCallerIdentity.swift:
 //
 //   swiftc -framework Foundation -framework Security \
-//     -o /tmp/eclam_calleridtests \
+//     -o /tmp/argus_calleridtests \
 //     Sources/ArgusHelper/HelperCallerIdentity.swift \
 //     Tests/HelperCallerIdentityTests.swift
-//   /tmp/eclam_calleridtests
+//   /tmp/argus_calleridtests
 //
 // Only the *pure* requirement-string builder is exercised here. The audit-token
 // → SecCode → SecCodeCheckValidity path needs a live signed XPC peer and a GUI

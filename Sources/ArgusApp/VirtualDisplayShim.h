@@ -14,7 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// 헤드리스 클램쉘(덮개 닫힘 + 외장 없음)에서 활성 디스플레이가 0개가 되어
 /// 발생하는 화면 잠금을 막아 VPN 세션을 유지한다. 백라이트 0 → 전력·발열 ~0.
 /// 소유·라이프사이클은 Swift 쪽 `VirtualDisplayController` 가 관리한다.
-@interface EClamVirtualDisplay : NSObject
+@interface ArgusVirtualDisplay : NSObject
 
 /// 가상 디스플레이를 생성하고 메인 디스플레이로 미러한다. 성공 시 YES.
 /// SPI 부재·헤드리스 세션(WindowServer 없음)·인터페이스 변경 등 어떤 실패에도

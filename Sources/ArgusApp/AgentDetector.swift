@@ -18,18 +18,18 @@ private func notify_cancel(_ token: Int32) -> UInt32
 
 private let NOTIFY_STATUS_OK: UInt32 = 0
 
-/// Where `eclam-hook` drops PID files when Darwin notify is blocked.
+/// Where `argus-hook` drops PID files when Darwin notify is blocked.
 /// ADR-0006 §L. Filename = `<source>-<pid>`, mtime = last hook fire.
-/// v0.3.2 — moved out of `/tmp` (which is symlinked to `/private/tmp` and shared
+/// Moved out of `/tmp` (which is symlinked to `/private/tmp` and shared
 /// across uids) into the per-user `NSTemporaryDirectory()` so sticky-bit /
 /// other-user-readable concerns disappear. Hook stub uses the same directory.
 let kPIDFileDir: String = {
     let base = NSTemporaryDirectory()
     let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
-    return trimmed + "/eclam_working_pids"
+    return trimmed + "/argus_working_pids"
 }()
 
-/// v0.3.2 — process-alive cache for the Lax-mode rule in `StateStore.shouldKeepAwake`.
+/// Process-alive cache for the Lax-mode rule in `StateStore.shouldKeepAwake`.
 /// `ps -axo comm` is scanned at most once per 5s; the cached result is consulted
 /// synchronously from the convergence engine. Expected comm names come from
 /// `AgentTrace.comm` (single source of truth — the previous hand-maintained
@@ -155,7 +155,7 @@ final class AgentDetector {
     /// One `FileChangeWatcher` per watched directory. Key = directory path.
     private var watchers: [String: FileChangeWatcher] = [:]
 
-    /// v0.3.2 — `eclam session start/stop` heartbeat scanner. Set is
+    /// `argus session start/stop` heartbeat scanner. Set is
     /// merged into the active aggregation as `session:<name>` ids.
     private let sessionWatcher = SessionWatcher()
 
@@ -183,7 +183,7 @@ final class AgentDetector {
     /// Fired on the main queue whenever the active set changes.
     var onChange: ((Set<String>) -> Void)?
 
-    /// v0.3.2 — checked by `AppDelegate.startSubsystemsIfNewlyEnabled` to
+    /// Checked by `AppDelegate.startSubsystemsIfNewlyEnabled` to
     /// avoid restarting a detector that's already polling.
     var timerIsRunning: Bool { timer != nil }
 
@@ -712,9 +712,9 @@ final class AgentDetector {
 
     // MARK: - PID-file IPC fallback (ADR-0006 §L)
 
-    /// Scans `<NSTemporaryDirectory()>/eclam_working_pids/*`. Files older
+    /// Scans `<NSTemporaryDirectory()>/argus_working_pids/*`. Files older
     /// than `pidFileTTL` or whose pid is no longer live are deleted, but only
-    /// when owned by the current uid (v0.3.2 sticky-bit safety — the dir is
+    /// when owned by the current uid (sticky-bit safety — the dir is
     /// now per-user but the same predicate is cheap and defensive). Returns
     /// the set of source ids (from filename `<source>-<pid>`) with at least
     /// one fresh & live entry within `pidFileGrace`.
@@ -831,10 +831,10 @@ enum Glob {
     }
 }
 
-// MARK: - SessionWatcher (v0.3.2)
+// MARK: - SessionWatcher
 
-/// v0.3.2 — directory poller for `eclam session start/stop`. The CLI
-/// creates one file per named session under `<NSTemporaryDirectory()>/eclam_sessions/`
+/// Directory poller for `argus session start/stop`. The CLI
+/// creates one file per named session under `<NSTemporaryDirectory()>/argus_sessions/`
 /// containing the foreground PID as ASCII decimal and rewrites its mtime every
 /// 5s as a heartbeat. A session is **alive** iff:
 ///
@@ -852,11 +852,11 @@ enum Glob {
 /// itself does not own a timer (no extra fds).
 final class SessionWatcher {
     /// Per-user, sticky-bit-safe location. Both the CLI and watcher agree on
-    /// this exact path (the v0.3.2 shared contract). Computed once at load.
+    /// this exact path (a shared contract). Computed once at load.
     static let directory: String = {
         let base = NSTemporaryDirectory()
         let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
-        return trimmed + "/eclam_sessions"
+        return trimmed + "/argus_sessions"
     }()
 
     /// Heartbeat freshness — must match the CLI's 5s mtime touch + 25s slack.

@@ -1,6 +1,6 @@
 import AppKit
 
-/// v0.5.1 — custom-view menu header.
+/// Custom-view menu header.
 ///
 /// The old header block was 4 *disabled* `NSMenuItem`s (headline + guard
 /// lines). macOS renders disabled rows at reduced opacity — even with an

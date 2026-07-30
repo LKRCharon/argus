@@ -4,7 +4,7 @@ import ServiceManagement
 /// `argus status [--json]` — read-only (never *mutates* helper/power state).
 /// It does send read-only XPC probes when the helper is enabled: a liveness
 /// ping (honest reachability, handoff 2026-06-24) plus the ADR-0025 hold and
-/// v0.3.2 active-agents snapshots. ADR-0007 §C.
+/// active-agents snapshots. ADR-0007 §C.
 ///
 /// Exit: 0 ok / 2 enabled-but-unreachable (run `argus repair`). Non-enabled
 /// registration states stay 0 (read succeeded) — `HelperHealthVerdict.exit`.
@@ -178,7 +178,7 @@ enum StatusCommand: CLISubcommand {
     private static func readHoldViaXPC() -> Double? {
         let conn = NSXPCConnection(machServiceName: HelperServiceName.mach,
                                    options: .privileged)
-        conn.remoteObjectInterface = NSXPCInterface(with: ElectronicClamHelperProtocol.self)
+        conn.remoteObjectInterface = NSXPCInterface(with: ArgusHelperProtocol.self)
         conn.resume()
         defer { conn.invalidate() }
         let sem = DispatchSemaphore(value: 0)
@@ -188,7 +188,7 @@ enum StatusCommand: CLISubcommand {
         let result = LockedBox<Double?>(nil)
         let proxy = conn.remoteObjectProxyWithErrorHandler { _ in
             sem.signal()
-        } as? ElectronicClamHelperProtocol
+        } as? ArgusHelperProtocol
         guard let proxy = proxy else { return nil }
         proxy.currentStateWithHold { _, remaining, err in
             if err == nil { result.set(remaining) }
@@ -198,14 +198,14 @@ enum StatusCommand: CLISubcommand {
         return result.get()
     }
 
-    /// v0.3.2 — single-shot synchronous XPC call to fetch the helper's most
+    /// Single-shot synchronous XPC call to fetch the helper's most
     /// recent `activeAgents` snapshot. Returns nil on any failure path; the
     /// caller treats nil as `[]` for the JSON output but never tears down the
     /// app over it (read-only command).
     private static func readActiveAgentsViaXPC() -> [String]? {
         let conn = NSXPCConnection(machServiceName: HelperServiceName.mach,
                                    options: .privileged)
-        conn.remoteObjectInterface = NSXPCInterface(with: ElectronicClamHelperProtocol.self)
+        conn.remoteObjectInterface = NSXPCInterface(with: ArgusHelperProtocol.self)
         conn.resume()
         defer { conn.invalidate() }
         let sem = DispatchSemaphore(value: 0)
@@ -213,7 +213,7 @@ enum StatusCommand: CLISubcommand {
         let result = LockedBox<[String]?>(nil)
         let proxy = conn.remoteObjectProxyWithErrorHandler { _ in
             sem.signal()
-        } as? ElectronicClamHelperProtocol
+        } as? ArgusHelperProtocol
         guard let proxy = proxy else { return nil }
         proxy.activeAgents { ids, err in
             if err == nil { result.set(ids) }

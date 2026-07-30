@@ -10,14 +10,14 @@ import OSLog
 /// 그러면 덮개를 닫아 내장 패널이 빠져도 활성 디스플레이가 0개가 되지 않아 화면
 /// 잠금이 발생하지 않고, FortiClient 같은 VPN 세션이 끊기지 않는다.
 ///
-/// 실제 디스플레이 생성·미러·해제는 ObjC shim(`EClamVirtualDisplay`)이 소유한다.
+/// 실제 디스플레이 생성·미러·해제는 ObjC shim(`ArgusVirtualDisplay`)이 소유한다.
 /// 이 컨트롤러는 정책(언제 켜고 끌지)만 가지며 helper·`SleepDisabled` 기구와는
 /// 무관하다(ADR-0037 §결정). `apply(...)` 는 멱등이라 converge 마다 호출해도
 /// 안전하다.
 final class VirtualDisplayController {
     private let log = Logger(subsystem: "com.kairong.argus", category: "vdisplay")
     private let store: StateStore
-    private let anchor = EClamVirtualDisplay()
+    private let anchor = ArgusVirtualDisplay()
 
     /// SPI 가 없거나 헤드리스라 `start()` 가 실패한 경우, 같은 조건에서 매 converge
     /// 마다 재시도/재로그하는 스팸을 막는 게이트. 조건이 풀리면(want=false) 리셋해

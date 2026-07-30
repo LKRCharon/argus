@@ -197,7 +197,7 @@ final class VpnWatcher {
             "%@ needs re-auth (SAML/SSO). Argus won't auto-reconnect — open FortiClient and sign in again.",
             svc)
         Task { await ReleaseNotifier.shared.notifyInfo(
-            identifier: "eclam.vpn.disconnected", title: title, body: body) }
+            identifier: "argus.vpn.disconnected", title: title, body: body) }
     }
 
     // MARK: - scutil parsing

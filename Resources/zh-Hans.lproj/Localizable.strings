@@ -345,7 +345,7 @@
 /* proposal §1 — Detect Now 진단 버튼 */
 "agents.detectNow" = "立即检测…";
 "agents.detectNow.title" = "检测快照";
-"agents.tip.detectNow" = "执行一次检测,并展示每个代理匹配到了哪个文件(或为何没有匹配)。与 `eclam debug agents` 输出相同。";
+"agents.tip.detectNow" = "执行一次检测,并展示每个代理匹配到了哪个文件(或为何没有匹配)。与 `argus debug agents` 输出相同。";
 
 /* proposal §5 — 첫 승인 후 1회 안내 */
 "onboarding.enabled.title" = "Argus 已就绪";
@@ -474,6 +474,7 @@
 "sync.bun.missing" = "未找到 — brew install oven-sh/bun/bun";
 "sync.projectDir" = "项目目录";
 "sync.choose" = "选择…";
+"sync.err.relayMissing" = "尚未配置中继地址。请在上方输入你的中继 wss:// 地址。";
 "sync.err.bunMissing" = "未找到 Bun 运行时。请安装(brew install oven-sh/bun/bun)或放到 ~/.bun/bin/bun。";
 "sync.err.projectMissing" = "在 %@ 未找到 agentlink 项目 — 请在下方“本地 daemon”中选择其目录。";
 

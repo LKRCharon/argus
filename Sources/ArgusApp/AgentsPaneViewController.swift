@@ -3,7 +3,7 @@ import OSLog
 
 /// Agents pane — Strict/Lax radio, watched-agents table, and a collapsed-by-
 /// default "Advanced" disclosure holding the optional hook installers.
-/// ADR-0006 §D + §E (hooks demoted to opt-in Advanced, v0.5).
+/// ADR-0006 §D + §E (hooks demoted to opt-in Advanced).
 final class AgentsPaneViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     private let log = Logger(subsystem: "com.kairong.argus", category: "settings")
     private let store: StateStore
@@ -26,10 +26,10 @@ final class AgentsPaneViewController: NSViewController, NSTableViewDataSource, N
     /// regardless of which are currently installed. Visible only when at
     /// least one hook is installed.
     private let uninstallAllButton = NSButton(title: NSL("agents.uninstallAll", "Uninstall all hooks"), target: nil, action: nil)
-    /// proposal §1 — 감지 진단 1클릭 (`eclam debug agents` 의 GUI 노출).
+    /// proposal §1 — 감지 진단 1클릭 (`argus debug agents` 의 GUI 노출).
     private let detectNowButton = NSButton(title: NSL("agents.detectNow", "Detect Now…"), target: nil, action: nil)
 
-    /// v0.5 (ADR-0006 §E amend) — hooks DEMOTED to an opt-in "Advanced"
+    /// ADR-0006 §E amend — hooks DEMOTED to an opt-in "Advanced"
     /// disclosure. File-watching already detects every agent (the glob-mtime
     /// branch of §A); hooks are only a latency/fallback booster, so they start
     /// collapsed and out of the main flow. `hookStack` is the collapsible body.
@@ -174,7 +174,7 @@ final class AgentsPaneViewController: NSViewController, NSTableViewDataSource, N
         tableButtons.translatesAutoresizingMaskIntoConstraints = false
 
         // Hook install group — DEMOTED to an opt-in "Advanced" disclosure
-        // (ADR-0006 §E amend, v0.5). Collapsed by default; file-watching is the
+        // (ADR-0006 §E amend). Collapsed by default; file-watching is the
         // headline path, hooks are the optional latency/fallback booster.
         // NOTE: the "hooks are optional" message lives in `hooksCaption` (a
         // visible caption), so no redundant tooltip is added on the header.
@@ -211,7 +211,7 @@ final class AgentsPaneViewController: NSViewController, NSTableViewDataSource, N
         detectNowButton.controlSize = .small
         detectNowButton.toolTip = NSL("agents.tip.detectNow",
             "Runs one detection pass and shows exactly which file each agent "
-            + "matched (or why it didn't). Same output as `eclam debug agents`.")
+            + "matched (or why it didn't). Same output as `argus debug agents`.")
         claudeStatus.font = NSFont.systemFont(ofSize: 11)
         claudeStatus.textColor = .secondaryLabelColor
         codexStatus.font = NSFont.systemFont(ofSize: 11)
@@ -523,7 +523,7 @@ final class AgentsPaneViewController: NSViewController, NSTableViewDataSource, N
         hookStack.isHidden = !expanded
     }
 
-    /// proposal §1 — `eclam debug agents` 를 자기 바이너리 재호출로 실행해
+    /// proposal §1 — `argus debug agents` 를 자기 바이너리 재호출로 실행해
     /// 모노스페이스 시트로 표시. 감지가 "왜 안 잡히는지"를 사용자가 직접 본다.
     @objc private func detectNowTapped() {
         let exe = Bundle.main.executablePath ?? ""

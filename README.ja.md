@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="docs/assets/eclam-icon.png" width="120" alt="Electronic Clam" />
+<img src="docs/assets/argus-icon.png" width="120" alt="Argus" />
 
-# Electronic Clam
+# Argus
 
 **Agents must keep working — your Mac shouldn't cook trying.**
 ただ動いているプロセスではなく、*作業*そのものを検知します。
@@ -10,12 +10,12 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://www.apple.com/macos/)
 [![Language](https://img.shields.io/badge/Swift-AppKit%20%2B%20IOKit-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.6.3-yellow)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.7.0-yellow)](CHANGELOG.md)
 
 <!-- i18n-langbar -->
 [English](README.md) · [한국어](README.ko.md) · [中文](README.zh-CN.md) · **日本語** · [Español](README.es.md)
 
-![Electronic Clam メニューのデモ](docs/assets/eclam-menu-demo.gif)
+![Argus メニューのデモ](docs/assets/argus-menu-demo.gif)
 
 </div>
 
@@ -38,7 +38,7 @@
 
 ### エージェントが働く間だけ起こしておく
 
-![エージェント検知のデモ](docs/assets/eclam-demo-agents.gif)
+![エージェント検知のデモ](docs/assets/argus-demo-agents.gif)
 
 シンプルです — エージェントを止めずに働かせ続けること。
 
@@ -48,15 +48,15 @@
 
 **Customize で有効化(デフォルトはオフ):** Aider · Cline · Roo Code · OpenHands · Hermes · Openclaw。
 
-ここに載っていないエージェントも追加できます — glob パターンを指定するか、`~/.config/eclam/traces.d/*.json` に宣言ファイルを 1 つ置くだけです。
+ここに載っていないエージェントも追加できます — glob パターンを指定するか、`~/.config/argus/traces.d/*.json` に宣言ファイルを 1 つ置くだけです。
 
 デフォルトでは、エージェントはセッションログのポーリングで検知します(~5 秒、画面ロック中は ~30 秒)。そのため起動直後のエージェントは現れるまで数秒かかることがあります。Claude・Codex・Hermes は(任意の)hook を入れれば即座に検知できます。
 
 ### 安全ガード
 
-![安全ガードのデモ](docs/assets/eclam-demo-safety.gif)
+![安全ガードのデモ](docs/assets/argus-demo-safety.gif)
 
-クラムシェルモードでバッグに入れたまま重いワークロードを走らせるのは発熱リスクです。Electronic Clam は温度とバッテリーを見ていて、危険になったら Mac をスリープさせます:
+クラムシェルモードでバッグに入れたまま重いワークロードを走らせるのは発熱リスクです。Argus は温度とバッテリーを見ていて、危険になったら Mac をスリープさせます:
 
 - **バッテリー** — しきい値は構成によって変わります:フタを閉じて外部ディスプレイなしなら 30%、それ以外は 10%(調整可)。弱い/不安定な AC 接続はバッテリー扱いです。
 - **発熱** — macOS の信号に、より敏感な内部信号を組み合わせて素早く反応します。
@@ -67,9 +67,9 @@ AC を抜いてフタを閉じてバッグに入れた状態では、より慎�
 
 ### リモート活動の検知
 
-![リモート検知のデモ](docs/assets/eclam-demo-remote.gif)
+![リモート検知のデモ](docs/assets/argus-demo-remote.gif)
 
-Electronic Clam はリモートで Mac を使っている間はスリープさせません。SSH・画面共有・Tailscale・既知のリモート操作 App を検知します。デフォルトはシンプルで、つながっている間は起きたままです。
+Argus はリモートで Mac を使っている間はスリープさせません。SSH・画面共有・Tailscale・既知のリモート操作 App を検知します。デフォルトはシンプルで、つながっている間は起きたままです。
 
 ### Telegram 通知(デフォルトはオフ)
 
@@ -81,16 +81,16 @@ Electronic Clam はリモートで Mac を使っている間はスリープさ�
 - **任意のエージェント hook** — 入れると Claude / Codex / Hermes の設定に活動シグナルの hook を挿入し、外すと元に戻します。
 - **終了時のスリープ復元を保証** — 三重の安全策:終了時の同期復元、SIGTERM ハンドラ、そして App がクラッシュした場合の 20 秒ウォッチドッグ。
 - **クラムシェル VPN ロックガード(オプトイン)。** 外部ディスプレイなしのバッテリー駆動では、フタを閉じると通常は画面が*ロック*され、FortiClient SSL VPN が切れます(再接続には SAML の再ログインが必要)。目に見えない仮想ディスプレイがセッションをつなぎ留めるので、画面はロックされずトンネルは生き残ります。**画面だけオフ**の動作も **Dim**(暗いが VPN に安全・デフォルト)と **Sleep** に分かれ、VPN 切断の通知も任意で受け取れます。
-- **頑健な helper 登録** — 隔離(quarantine)されたダウンロードや一時的(translocated)な場所からはバックグラウンド helper を登録しません(macOS がそこでの起動を拒むため)。代わりに App を Applications へ移すよう案内します。設定 → 一般 では重複コピーやバージョン不一致を表示し、`eclam repair` / **Reinstall Helper** で固まった登録を復旧できます。
+- **頑健な helper 登録** — 隔離(quarantine)されたダウンロードや一時的(translocated)な場所からはバックグラウンド helper を登録しません(macOS がそこでの起動を拒むため)。代わりに App を Applications へ移すよう案内します。設定 → 一般 では重複コピーやバージョン不一致を表示し、`argus repair` / **Reinstall Helper** で固まった登録を復旧できます。
 
 ## インストール
 
 ```bash
-brew install --cask jadhvank/tap/eclam
-open /Applications/ElectronicClam.app
+brew install --cask LKRCharon/tap/argus
+open /Applications/Argus.app
 ```
 
-**System Settings → General → Login Items & Extensions** で **Electronic Clam Helper** をオンにしてください。
+**System Settings → General → Login Items & Extensions** で **Argus Helper** をオンにしてください。
 
 ## Usage
 
@@ -111,18 +111,18 @@ open /Applications/ElectronicClam.app
 
 ### CLI
 
-Homebrew cask が `$HOMEBREW_PREFIX/bin/eclam` シンボリックリンクを作成します。
+Homebrew cask が `$HOMEBREW_PREFIX/bin/argus` シンボリックリンクを作成します。
 
 ```
-eclam on [--for <dur>] [--forever]   # keep awake; default 2h, then the helper auto-releases (no GUI needed, survives reboot)
-eclam off
-eclam status [--json]                 # also flags a quarantined/outside-Applications app, a failed helper, and duplicate copies
-eclam repair                          # recover a wedged/unreachable helper (relaunches the app; guides you to sfltool resetbtm as a last resort)
-eclam keep --while <pid>
-eclam watch <agent> [--grace s] [--check-interval s] [--max min] [--json]
-eclam session start <name> [--message <text>] / stop <name> / list [--json]
-eclam debug [agents] [--json]
-eclam help
+argus on [--for <dur>] [--forever]   # keep awake; default 2h, then the helper auto-releases (no GUI needed, survives reboot)
+argus off
+argus status [--json]                 # also flags a quarantined/outside-Applications app, a failed helper, and duplicate copies
+argus repair                          # recover a wedged/unreachable helper (relaunches the app; guides you to sfltool resetbtm as a last resort)
+argus keep --while <pid>
+argus watch <agent> [--grace s] [--check-interval s] [--max min] [--json]
+argus session start <name> [--message <text>] / stop <name> / list [--json]
+argus debug [agents] [--json]
+argus help
 ```
 
 **終了コード:** `0` 成功 · `1` 引数エラー · `2` helper 到達不可 · `3` 承認が必要 · `4` ユーザーがキャンセル。
@@ -143,7 +143,7 @@ eclam help
 
 - **hook がないと検知が数秒遅れることがあります。** hook を入れていないエージェントはセッションログのポーリングで検知します(~5 秒、ロック中は ~30 秒)。Claude / Codex / Hermes は hook を入れれば即座です。
 - **CLI だけでは安全ガードがありません。**
-- **Applications から実行してください。** Downloads や隔離(quarantine)されたままのコピーから起動すると、macOS がバックグラウンド helper を起動させません — Electronic Clam を Applications フォルダへ移してから開き直してください。
+- **Applications から実行してください。** Downloads や隔離(quarantine)されたままのコピーから起動すると、macOS がバックグラウンド helper を起動させません — Argus を Applications フォルダへ移してから開き直してください。
 - **VS Code 組み込みのエージェント**(Cline / Roo Code)は独立したプロセスがないため、Lax モードの検知は限定的です。
 - **Apple Silicon 専用**、macOS 13+ (Ventura)。
 
@@ -159,11 +159,11 @@ eclam help
 
 ```bash
 ./scripts/build.sh            # app + helper + hook binaries (Developer ID signed)
-open build/ElectronicClam.app
+open build/Argus.app
 ```
 
-- 直接 `swiftc` を呼び出し、ターゲットは `arm64-apple-macos13.0`。素早いアドホックなローカルビルドには `ECLAM_SIGN_ID=-` を設定します。
-- バンドル構成:`Contents/MacOS/{ElectronicClam, ElectronicClamHelper, eclam-hook}` + `Contents/Library/LaunchDaemons/com.jadhvank.eclam.helper.plist`。
+- 直接 `swiftc` を呼び出し、ターゲットは `arm64-apple-macos13.0`。素早いアドホックなローカルビルドには `ARGUS_SIGN_ID=-` を設定します。
+- バンドル構成:`Contents/MacOS/{Argus, ArgusHelper, argus-hook}` + `Contents/Library/LaunchDaemons/com.kairong.argus.helper.plist`。
 - リリースビルドは Developer ID 署名 + Apple 公証されます(`release.sh` が staple)。
 
 ## リリース履歴
@@ -172,16 +172,14 @@ open build/ElectronicClam.app
 
 - **0.6.3** — 修正:クラムシェルロックガードを有効にした状態で実機の外部ディスプレイを接続しても、保存済みの「内蔵 + 外部」の配置が崩れなくなりました。実機ディスプレイが現れると、目に見えないアンカーが即座に道を譲り(再ミラーしない)、macOS が保存した配置を復元します。外部ディスプレイを外すとアンカーは自動的に戻ります。クラムシェル(ヘッドレス)のロック防止そのものは変わりません。
 - **0.6.2** — クラムシェル VPN ロックガード(オプトイン):外部ディスプレイなしのバッテリー駆動で、フタを閉じても画面がロックされなくなり、FortiClient SSL VPN が切れずに維持されます — 目に見えない仮想ディスプレイがセッションをつなぎ留めます。**画面だけオフ**の動作は **Dim**(VPN に安全・デフォルト)と **Sleep** から選べ、VPN 切断の通知も任意です。
-- **0.6.1** — 正直な helper ステータス:死んでいるのに登録だけ残った helper が、もう誤って「有効」と表示されません。`eclam status` はそれを `unreachable`(終了コード 2)として報告し、App は再起動時に自己修復し、新しい `eclam repair` コマンドとメニューバーの警告がそれを可視化し、`eclam status` は起動時ログイン(Open at Login)の状態も報告するようになりました。
+- **0.6.1** — 正直な helper ステータス:死んでいるのに登録だけ残った helper が、もう誤って「有効」と表示されません。`argus status` はそれを `unreachable`(終了コード 2)として報告し、App は再起動時に自己修復し、新しい `argus repair` コマンドとメニューバーの警告がそれを可視化し、`argus status` は起動時ログイン(Open at Login)の状態も報告するようになりました。
 - **0.6.0** — 起動時ログイン、アプリ内更新通知、起動履歴、国際化(English · 한국어 · 中文 · 日本語 · Español)、シングルクリック切り替え、メニューバーアイコンのテーマ、リモートアイドルポリシー、Telegram ステータス通知、Developer ID 署名 + 公証。
 
 それ以前:エージェント検知と `watch` / `session` CLI(0.5.x)、状態条件つきのバッテリー / 発熱 / タイマー安全ガード(0.4.x)、リモート活動の検知と最初の CLI(0.3.x)。
 
-## 支援
+## 成り立ち
 
-Electronic Clam は無料のオープンソースです。エージェントを起こしておくのは Electronic Clam、開発者を起こしておくのはあなたのコーヒー。☕
-
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-%E2%98%95-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/jadhvank)
+Argus は [jadhvank/eclam](https://github.com/jadhvank/eclam)（Electronic Clam）のフォークとして始まり、その後改名・拡張されました。基盤を築いた原作者に感謝します。
 
 ## ライセンス
 

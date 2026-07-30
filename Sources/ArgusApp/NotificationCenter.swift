@@ -10,7 +10,7 @@ import UserNotifications
 /// genuinely have something to say.
 ///
 /// Identifier reuse coalesces duplicates: posting twice with identifier
-/// `eclam.release.<reason>` replaces (rather than stacks) the earlier
+/// `argus.release.<reason>` replaces (rather than stacks) the earlier
 /// banner, which is what we want during the 5-min cooldown window where the
 /// same reason may re-trip.
 final class ReleaseNotifier {
@@ -74,7 +74,7 @@ final class ReleaseNotifier {
         content.sound = .default
 
         // Identifier reuse → cooldown coalescing (see header comment).
-        let identifier = "eclam.release.\(reason.rawValue)"
+        let identifier = "argus.release.\(reason.rawValue)"
         let request = UNNotificationRequest(
             identifier: identifier,
             content: content,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build, package, publish a GitHub release, and patch the Homebrew cask.
-# Electronic Clam (eclam). Developer ID signed + notarized + stapled (ADR-0020 §③).
+# Argus (argus). Developer ID signed + notarized + stapled (ADR-0020 §③).
 # Ported from the LidAwake-era _archive script.
 #
 # Usage:
@@ -19,16 +19,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-REPO="${REPO:-jadhvank/eclam}"
-CASK="${CASK:-$ROOT/tap/Casks/eclam.rb}"
-NOTARY_PROFILE="${NOTARY_PROFILE:-eclam-notary}"  # xcrun notarytool store-credentials
+REPO="${REPO:-LKRCharon/argus}"
+CASK="${CASK:-$ROOT/tap/Casks/argus.rb}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-argus-notary}"  # xcrun notarytool store-credentials
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/Resources/App-Info.plist")"
-APP="$ROOT/build/ElectronicClam.app"
-ZIP="$ROOT/build/ElectronicClam-$VERSION.zip"
+APP="$ROOT/build/Argus.app"
+ZIP="$ROOT/build/Argus-$VERSION.zip"
 TAG="v$VERSION"
 
-echo "==> Releasing Electronic Clam $VERSION ($TAG) to $REPO"
+echo "==> Releasing Argus $VERSION ($TAG) to $REPO"
 
 echo "==> Building"
 "$ROOT/scripts/build.sh"
@@ -59,7 +59,7 @@ if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
   gh release upload "$TAG" "$ZIP" --repo "$REPO" --clobber
 else
   gh release create "$TAG" "$ZIP" --repo "$REPO" \
-    --title "Electronic Clam $VERSION" \
+    --title "Argus $VERSION" \
     --notes "See CHANGELOG.md. Menu-bar app: keep macOS awake while agents work; sleep safely when conditions degrade."
 fi
 
@@ -86,6 +86,6 @@ fi
 
 echo "==> Done."
 echo "    Release: https://github.com/$REPO/releases/tag/$TAG"
-echo "    Next (manual): copy $CASK into the jadhvank/homebrew-tap repo under Casks/,"
+echo "    Next (manual): copy $CASK into the LKRCharon/homebrew-tap repo under Casks/,"
 echo "    commit + push, then verify on a clean account:"
-echo "      brew install --cask jadhvank/tap/eclam"
+echo "      brew install --cask LKRCharon/tap/argus"

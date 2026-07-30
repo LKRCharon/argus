@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-/// Accepts XPC connections from the GUI app AND from `eclam` CLI / `eclam-hook`
+/// Accepts XPC connections from the GUI app AND from `argus` CLI / `argus-hook`
 /// processes running as the same user. The original ADR-0002 §6 "one connection
 /// only" rule rejected the CLI whenever the menubar app was running, breaking
 /// `argus on` / `off`, so we now accept all of them — multiple concurrent
@@ -13,7 +13,7 @@ import OSLog
 /// requirement pins callers to our Team ID plus the app/CLI and hook code-sign
 /// identifiers, so the published Mach service `com.kairong.argus.helper` no
 /// longer accepts an arbitrary same-user process — only our own signed app, the
-/// `eclam` CLI (same Mach-O as the app), and `eclam-hook` may connect. The
+/// `argus` CLI (same Mach-O as the app), and `argus-hook` may connect. The
 /// system invalidates any connection whose peer fails the requirement.
 ///
 /// The SMAppService approval gate is a *run* gate (may this daemon launch?),
@@ -22,7 +22,7 @@ import OSLog
 /// same-user process could flip `SleepDisabled` or spoof activity.
 ///
 /// Ad-hoc dev builds compile with -DARGUS_DEV_ADHOC (build.sh, when
-/// ECLAM_SIGN_ID=-) and SKIP this check: ad-hoc has no Team ID and a cdhash
+/// ARGUS_SIGN_ID=-) and SKIP this check: ad-hoc has no Team ID and a cdhash
 /// that churns every build, so the requirement would reject the legitimate
 /// CLI/hook — the exact reason ADR-0023 deferred this until a stable identity.
 ///
@@ -56,7 +56,7 @@ final class HelperListenerDelegate: NSObject, NSXPCListenerDelegate {
             log.info("xpc caller identified as hook — power/state methods will be denied")
         }
         #endif
-        new.exportedInterface = NSXPCInterface(with: ElectronicClamHelperProtocol.self)
+        new.exportedInterface = NSXPCInterface(with: ArgusHelperProtocol.self)
         new.exportedObject = HelperService(isHook: isHook)
         let id = ObjectIdentifier(new)
         new.invalidationHandler = { [weak self] in

@@ -44,7 +44,9 @@ final class AgentlinkBridge {
     private var restartDelay: TimeInterval = 2
 
     init() {
-        relayURL = UserDefaults.standard.string(forKey: "AgentlinkRelayURL") ?? "wss://relay.limen.codes/ws"
+        // No baked-in relay: an unconfigured install must refuse to start rather
+        // than dial someone else's server. Settings -> Remote Sync fills this in.
+        relayURL = UserDefaults.standard.string(forKey: "AgentlinkRelayURL") ?? ""
     }
 
     func setRelayURL(_ url: String) {
@@ -54,11 +56,11 @@ final class AgentlinkBridge {
 
     func getRelayURL() -> String { relayURL }
 
-    /// Where the agentlink monorepo lives, and which bun runs it. Overridable via
-    /// defaults so the app is not pinned to one checkout.
+    /// Where the agentlink monorepo lives, and which bun runs it. Set via
+    /// defaults (Settings -> Remote Sync -> Choose…); empty until the user picks
+    /// a checkout, which `preflightError()` reports as not-configured.
     static func projectDir() -> String {
-        let dir = UserDefaults.standard.string(forKey: "AgentlinkProjectDir")
-            ?? "~/Documents/Qoder/2026-07-26/chat-1/agentlink"
+        let dir = UserDefaults.standard.string(forKey: "AgentlinkProjectDir") ?? ""
         return (dir as NSString).expandingTildeInPath
     }
 
@@ -87,12 +89,21 @@ final class AgentlinkBridge {
     /// a user-facing reason with the fix path spelled out. Checked before every
     /// spawn (watch and one-shot pair alike) so failures explain themselves
     /// instead of surfacing as a bare NSCocoaErrorDomain message.
-    static func preflightError() -> String? {
+    ///
+    /// Neither the relay URL nor the project folder ships with a default, so
+    /// both are checked here first — an empty relay would otherwise reach the
+    /// daemon as `AGENTLINK_RELAY=`, which fails much later and far less
+    /// legibly.
+    static func preflightError(relayURL: String) -> String? {
+        if relayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return NSL("sync.err.relayMissing",
+                       "Relay URL is not configured. Enter your relay's wss:// address above.")
+        }
         if bunPath() == nil {
             return NSL("sync.err.bunMissing",
                        "Bun runtime not found. Install it (brew install oven-sh/bun/bun) or place it at ~/.bun/bin/bun.")
         }
-        if !FileManager.default.fileExists(atPath: daemonEntry()) {
+        if projectDir().isEmpty || !FileManager.default.fileExists(atPath: daemonEntry()) {
             return NSLf("sync.err.projectMissing",
                         "agentlink project not found at %@ — pick its folder in the Local daemon section below.",
                         projectDir())
@@ -116,7 +127,7 @@ final class AgentlinkBridge {
     /// Start the daemon watch process.
     func start() {
         guard !isRunning else { return }
-        if let err = AgentlinkBridge.preflightError() {
+        if let err = AgentlinkBridge.preflightError(relayURL: relayURL) {
             lastError = err
             onStateChange?()
             return
@@ -203,7 +214,7 @@ final class AgentlinkBridge {
     /// Called from AppDelegate so the approval hook is never left unanswered.
     func startIfPreviouslyRunning() {
         guard AgentlinkBridge.autoStartEnabled, !isRunning else { return }
-        guard AgentlinkBridge.preflightError() == nil else {
+        guard AgentlinkBridge.preflightError(relayURL: relayURL) == nil else {
             log.notice("auto-start skipped: agentlink prerequisites missing")
             return
         }

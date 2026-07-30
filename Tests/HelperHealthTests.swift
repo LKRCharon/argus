@@ -53,7 +53,7 @@ func testEnabledUnprobed() {
     print("OK: enabled + unprobed (nil)")
 }
 
-// 비-enabled 상태는 전부 exit 0 (CI smoke.sh 가 미등록 러너에서 `eclam status`
+// 비-enabled 상태는 전부 exit 0 (CI smoke.sh 가 미등록 러너에서 `argus status`
 // 를 돌리고 비정상 종료에 실패하므로 — 이 불변식이 깨지면 CI 가 깨진다).
 func testNonEnabledStatesStayExitZero() {
     for reg in [HelperReg.requiresApproval, .notRegistered, .notFound, .unknown] {

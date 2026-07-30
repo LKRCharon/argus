@@ -37,11 +37,11 @@ enum OnCommand: CLISubcommand {
         let rc = SleepDisabledRPC.hold(seconds: seconds)
         guard rc == 0 else { return rc }
         if seconds < 0 {
-            print("eclam: on — no expiry.")
+            print("argus: on — no expiry.")
             CLIStderr.print("warning: battery/thermal guards live in the app; "
                 + "with no GUI running, nothing will put a hot or draining Mac back to sleep.")
         } else {
-            print("eclam: on — auto-release in \(DurationParse.shortFormat(seconds: seconds)) "
+            print("argus: on — auto-release in \(DurationParse.shortFormat(seconds: seconds)) "
                 + "(--for <dur> / --forever to change)")
         }
         return 0
@@ -56,7 +56,7 @@ enum SleepDisabledRPC {
     /// `op` 는 proxy 에 RPC 를 걸고 완료 콜백을 정확히 1회 부른다.
     /// 반환: 0 성공 / 2 unreachable·helper error / 3 미승인·미등록.
     private static func call(
-        _ op: (ElectronicClamHelperProtocol, @escaping (Error?) -> Void) -> Void
+        _ op: (ArgusHelperProtocol, @escaping (Error?) -> Void) -> Void
     ) -> Int32 {
         // 1) Approval gate — without it, XPC connect would just stall.
         let service = SMAppService.daemon(plistName: HelperRegistration.plistName)
@@ -64,22 +64,22 @@ enum SleepDisabledRPC {
         case .enabled:
             break
         case .requiresApproval:
-            CLIStderr.print("eclam: helper requires approval. Open System Settings > General > Login Items & Extensions and enable Argus.")
+            CLIStderr.print("argus: helper requires approval. Open System Settings > General > Login Items & Extensions and enable Argus.")
             return 3
         case .notFound:
-            CLIStderr.print("eclam: helper not registered (.notFound). Launch ElectronicClam.app once to register the daemon.")
+            CLIStderr.print("argus: helper not registered (.notFound). Launch Argus.app once to register the daemon.")
             return 3
         case .notRegistered:
-            CLIStderr.print("eclam: helper not registered. Launch ElectronicClam.app once to register the daemon.")
+            CLIStderr.print("argus: helper not registered. Launch Argus.app once to register the daemon.")
             return 3
         @unknown default:
-            CLIStderr.print("eclam: helper in an unknown registration state.")
+            CLIStderr.print("argus: helper in an unknown registration state.")
             return 3
         }
 
         // 2) Synchronous XPC with a bounded wait.
         let conn = NSXPCConnection(machServiceName: HelperServiceName.mach, options: .privileged)
-        conn.remoteObjectInterface = NSXPCInterface(with: ElectronicClamHelperProtocol.self)
+        conn.remoteObjectInterface = NSXPCInterface(with: ArgusHelperProtocol.self)
         conn.resume()
         defer { conn.invalidate() }
 
@@ -92,10 +92,10 @@ enum SleepDisabledRPC {
         let proxy = conn.remoteObjectProxyWithErrorHandler { err in
             rpcError.set(err)
             sem.signal()
-        } as? ElectronicClamHelperProtocol
+        } as? ArgusHelperProtocol
 
         guard let proxy = proxy else {
-            CLIStderr.print("eclam: helper unreachable (no XPC proxy).")
+            CLIStderr.print("argus: helper unreachable (no XPC proxy).")
             return 2
         }
 
@@ -108,11 +108,11 @@ enum SleepDisabledRPC {
         // up to a couple of seconds on a freshly-booted machine; 3s is a safe
         // bound that still surfaces real hangs.
         if sem.wait(timeout: .now() + 3.0) == .timedOut {
-            CLIStderr.print("eclam: helper unreachable (XPC timeout after 3s).")
+            CLIStderr.print("argus: helper unreachable (XPC timeout after 3s).")
             return 2
         }
         if let err = rpcError.get() {
-            CLIStderr.print("eclam: helper error: \(err.localizedDescription)")
+            CLIStderr.print("argus: helper error: \(err.localizedDescription)")
             return 2
         }
         return 0
@@ -120,7 +120,7 @@ enum SleepDisabledRPC {
 
     static func set(_ enabled: Bool) -> Int32 {
         let rc = call { proxy, done in proxy.setSleepDisabled(enabled, reply: done) }
-        if rc == 0 { print("eclam: \(enabled ? "on" : "off")") }
+        if rc == 0 { print("argus: \(enabled ? "on" : "off")") }
         return rc
     }
 

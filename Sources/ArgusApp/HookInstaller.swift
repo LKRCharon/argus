@@ -7,18 +7,18 @@ import OSLog
 /// in place. Existing user hooks are preserved; only our own block is touched.
 ///
 ///   Claude `~/.claude/settings.json`:
-///     A top-level key `"_eclam_hook_version": N` plus entries in
+///     A top-level key `"_argus_hook_version": N` plus entries in
 ///     `hooks.PreToolUse` / `hooks.PostToolUse` that we tag with
-///     `"_eclam": true` so uninstall can filter them precisely. JSON
+///     `"_argus": true` so uninstall can filter them precisely. JSON
 ///     in/out via `JSONSerialization` — never via string templates.
 ///
 ///   Codex `~/.codex/config.toml`:
 ///     A literal text block delimited by
-///       `# >>> eclam-hook v<N>`
-///       `# <<< eclam-hook`
+///       `# >>> argus-hook v<N>`
+///       `# <<< argus-hook`
 ///     appended idempotently. No TOML parser — we slice on the markers.
 ///
-///   Hermes `~/.hermes/config.yaml` (v0.3.2):
+///   Hermes `~/.hermes/config.yaml`:
 ///     Same marker-block strategy as Codex — YAML accepts `#` comments natively.
 ///     We emit a `hooks:` map with `pre_tool_call` and `post_tool_call` arrays,
 ///     each holding a single entry with `matcher: ".*"` and our hook command.
@@ -49,7 +49,7 @@ enum HookInstaller {
         var errorDescription: String? {
             switch self {
             case .bundleHookMissing:
-                return "Hook binary is missing from the app bundle (Contents/MacOS/eclam-hook)."
+                return "Hook binary is missing from the app bundle (Contents/MacOS/argus-hook)."
             case .io(let m):
                 return "Filesystem error: \(m)"
             case .malformed(let m):
@@ -70,7 +70,7 @@ enum HookInstaller {
 
     static func hookBinaryPath() -> String? {
         let url = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/MacOS/eclam-hook")
+            .appendingPathComponent("Contents/MacOS/argus-hook")
         return FileManager.default.isExecutableFile(atPath: url.path) ? url.path : nil
     }
 
@@ -227,7 +227,7 @@ enum HookInstaller {
     // appends ours after it which yields a YAML duplicate-key error on load.
     // That case is rare in practice (Hermes's default config has no hooks)
     // and surfaces as a startup error rather than silent breakage; ADR-0006
-    // §E documents this as a known v0.3.2 limitation.
+    // §E documents this as a known limitation.
 
     private static func installHermes(hookBinary: String) throws {
         let url = settingsURL(.hermes)

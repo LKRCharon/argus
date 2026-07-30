@@ -13,6 +13,28 @@ import OSLog
 /// convergence engine (`AppDelegate.convergeNow`). Persisted locally to
 /// Application Support so the log survives relaunch and reboot.
 
+/// The app's Application Support container (`~/Library/Application Support/Argus`),
+/// shared by the history log and the Telegram token file.
+///
+/// pre-rename migration: builds before the Argus rename wrote to `.../eclam`.
+/// The first accessor call moves that directory across if the new one does not
+/// exist yet, so history and the Telegram token survive the rename. One-shot by
+/// construction — after the move the old path is gone.
+enum AppSupportDirectory {
+    static var url: URL? {
+        let fm = FileManager.default
+        guard let base = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                     appropriateFor: nil, create: true) else { return nil }
+        let dir = base.appendingPathComponent("Argus", isDirectory: true)
+        let legacy = base.appendingPathComponent("eclam", isDirectory: true)
+        if !fm.fileExists(atPath: dir.path), fm.fileExists(atPath: legacy.path) {
+            try? fm.moveItem(at: legacy, to: dir)
+        }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+}
+
 /// Owns the episode log + the in-flight episode. Single-threaded: every entry
 /// point is invoked on the main thread (convergence engine + Settings pane).
 final class AwakeHistoryStore {
@@ -271,15 +293,10 @@ final class AwakeHistoryStore {
         return res == 0 ? String(cString: host) : nil
     }
 
-    // MARK: - Persistence (atomic JSON in ~/Library/Application Support/eclam/)
+    // MARK: - Persistence (atomic JSON in ~/Library/Application Support/Argus/)
 
     private static var fileURL: URL? {
-        let fm = FileManager.default
-        guard let base = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                     appropriateFor: nil, create: true) else { return nil }
-        let dir = base.appendingPathComponent("eclam", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("history.json")
+        AppSupportDirectory.url?.appendingPathComponent("history.json")
     }
 
     private func load() {

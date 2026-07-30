@@ -35,8 +35,8 @@ func occurrences(of needle: String, in haystack: String) -> Int {
     return count
 }
 
-/// `_eclam`-태그된 엔트리 개수.
-func eclamCount(_ root: [String: Any], _ phase: String) -> Int {
+/// `_argus`-태그된 엔트리 개수.
+func argusCount(_ root: [String: Any], _ phase: String) -> Int {
     let hooks = root["hooks"] as? [String: Any] ?? [:]
     let arr = hooks[phase] as? [Any] ?? []
     return arr.filter { ($0 as? [String: Any])?[HookConfigEditing.jsonTagKey] as? Bool == true }.count
@@ -48,7 +48,7 @@ func phaseCount(_ root: [String: Any], _ phase: String) -> Int {
     return (hooks[phase] as? [Any] ?? []).count
 }
 
-let bin = "/Applications/ElectronicClam.app/Contents/MacOS/eclam-hook"
+let bin = "/Applications/Argus.app/Contents/MacOS/argus-hook"
 
 func testWrappedCommand() {
     print("── wrappedCommand / shellQuote")
@@ -65,7 +65,7 @@ func testCodexIdempotent() {
     print("── Codex 멱등 재설치 (빈 config)")
     let once = HookConfigEditing.codexConfig(installingInto: "", hookBinary: bin)
     assert(HookConfigEditing.markerBlockPresent(in: once), "마커 블록 존재")
-    assert(once.contains("# >>> eclam-hook v3"), "버전 마커 v3")
+    assert(once.contains("# >>> argus-hook v3"), "버전 마커 v3")
     assert(once.contains("[features]") && once.contains("hooks = true"), "자체 [features] + hooks=true")
     assert(once.contains("[[hooks.PreToolUse.hooks]]") && once.contains("[[hooks.PostToolUse.hooks]]"),
            "Pre/Post 4요소 블록")
@@ -130,18 +130,18 @@ func testClaudeJSON() {
     let installed = HookConfigEditing.claudeRoot(installingInto: [:], hookBinary: bin)
     assert(HookConfigEditing.claudeInstalled(in: installed), "버전 키 stamped ⇒ installed")
     assert((installed[HookConfigEditing.jsonVersionKey] as? Int) == 3, "버전 == 3")
-    assert(eclamCount(installed, "PreToolUse") == 1 && eclamCount(installed, "PostToolUse") == 1,
-           "Pre/Post 각 1개 eclam 엔트리")
+    assert(argusCount(installed, "PreToolUse") == 1 && argusCount(installed, "PostToolUse") == 1,
+           "Pre/Post 각 1개 argus 엔트리")
 
     // 멱등 재설치 — 교체이지 중복 추가 아님.
     let reinstalled = HookConfigEditing.claudeRoot(installingInto: installed, hookBinary: bin)
-    assert(eclamCount(reinstalled, "PreToolUse") == 1, "재설치해도 eclam 엔트리 1개 (교체)")
+    assert(argusCount(reinstalled, "PreToolUse") == 1, "재설치해도 argus 엔트리 1개 (교체)")
 
     // 사용자 기존 hook 보존.
     let withUser: [String: Any] = ["hooks": ["PreToolUse": [["matcher": "Bash", "user": true]]]]
     let mergedRoot = HookConfigEditing.claudeRoot(installingInto: withUser, hookBinary: bin)
-    assert(phaseCount(mergedRoot, "PreToolUse") == 2, "사용자 엔트리 + eclam = 2개")
-    assert(eclamCount(mergedRoot, "PreToolUse") == 1, "그 중 eclam 1개")
+    assert(phaseCount(mergedRoot, "PreToolUse") == 2, "사용자 엔트리 + argus = 2개")
+    assert(argusCount(mergedRoot, "PreToolUse") == 1, "그 중 argus 1개")
     let userSurvived = (mergedRoot["hooks"] as? [String: Any])?["PreToolUse"] as? [Any]
     assert(userSurvived?.contains { ($0 as? [String: Any])?["user"] as? Bool == true } == true,
            "사용자 엔트리 보존")
@@ -151,10 +151,10 @@ func testClaudeJSON() {
     assert(!HookConfigEditing.claudeInstalled(in: cleaned), "version 키 제거")
     assert(cleaned["hooks"] == nil, "빈 hooks 맵 제거")
 
-    // uninstall — 사용자 엔트리는 남기고 eclam·version만.
+    // uninstall — 사용자 엔트리는 남기고 argus·version만.
     let userCleaned = HookConfigEditing.claudeRoot(uninstallingFrom: mergedRoot)
     assert(!HookConfigEditing.claudeInstalled(in: userCleaned), "병합본도 version 제거")
-    assert(eclamCount(userCleaned, "PreToolUse") == 0, "eclam 엔트리 제거")
+    assert(argusCount(userCleaned, "PreToolUse") == 0, "argus 엔트리 제거")
     assert(phaseCount(userCleaned, "PreToolUse") == 1, "사용자 엔트리 1개 잔존")
 
     // 빈/미설치 root 판정.

@@ -2,12 +2,12 @@ import Darwin
 import Dispatch
 import Foundation
 
-/// `eclam session start|stop|list` — named work sessions that block idle
+/// `argus session start|stop|list` — named work sessions that block idle
 /// sleep while the foreground CLI process is alive. ADR-0007 §A/§C (v0.3.2).
 ///
 /// Protocol (shared with `AgentDetector.SessionWatcher`):
 ///
-///   - Directory: `<NSTemporaryDirectory()>/eclam_sessions/` (mode 0700).
+///   - Directory: `<NSTemporaryDirectory()>/argus_sessions/` (mode 0700).
 ///   - Filename: sanitized session name — lowercased, `[a-z0-9_-]` only,
 ///     max 64 chars. No path separators, no traversal.
 ///   - File contents (line-based plain text, ASCII):
@@ -35,7 +35,7 @@ enum SessionCommand: CLISubcommand {
             print(usage)
             return 0
         default:
-            CLIStderr.print("eclam session: unknown subcommand '\(sub)'.")
+            CLIStderr.print("argus session: unknown subcommand '\(sub)'.")
             CLIStderr.print(usage)
             return 1
         }
@@ -43,9 +43,9 @@ enum SessionCommand: CLISubcommand {
 
     static let usage = """
     usage:
-      eclam session start <name> [--message <text>] [--json]
-      eclam session stop <name>
-      eclam session list [--json]
+      argus session start <name> [--message <text>] [--json]
+      argus session stop <name>
+      argus session list [--json]
     """
 }
 
@@ -55,7 +55,7 @@ private enum SessionFS {
     /// Directory all session files live in.
     static func sessionsDir() -> URL {
         let base = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        return base.appendingPathComponent("eclam_sessions", isDirectory: true)
+        return base.appendingPathComponent("argus_sessions", isDirectory: true)
     }
 
     /// Create the sessions directory if missing, with 0700 perms so a shared
@@ -178,7 +178,7 @@ private enum SessionFS {
     }
 }
 
-// MARK: - `eclam session start`
+// MARK: - `argus session start`
 
 private enum SessionStart {
     static func run(args: [String]) -> Int32 {
@@ -192,12 +192,12 @@ private enum SessionStart {
             switch a {
             case "--message":
                 guard i + 1 < args.count else {
-                    CLIStderr.print("eclam session start: --message requires a value.")
+                    CLIStderr.print("argus session start: --message requires a value.")
                     return 1
                 }
                 let raw = args[i + 1]
                 guard let m = SessionFS.validateMessage(raw) else {
-                    CLIStderr.print("eclam session start: --message must be ASCII printable, max 200 chars.")
+                    CLIStderr.print("argus session start: --message must be ASCII printable, max 200 chars.")
                     return 1
                 }
                 message = m
@@ -210,7 +210,7 @@ private enum SessionStart {
                 return 0
             default:
                 if a.hasPrefix("--") {
-                    CLIStderr.print("eclam session start: unknown option '\(a)'.")
+                    CLIStderr.print("argus session start: unknown option '\(a)'.")
                     return 1
                 }
                 positional.append(a)
@@ -218,15 +218,15 @@ private enum SessionStart {
             }
         }
         guard let rawName = positional.first else {
-            CLIStderr.print("usage: eclam session start <name> [--message <text>] [--json]")
+            CLIStderr.print("usage: argus session start <name> [--message <text>] [--json]")
             return 1
         }
         if positional.count > 1 {
-            CLIStderr.print("eclam session start: unexpected extra arguments.")
+            CLIStderr.print("argus session start: unexpected extra arguments.")
             return 1
         }
         guard let name = SessionFS.sanitize(rawName) else {
-            CLIStderr.print("eclam session start: invalid name '\(rawName)'. Allowed: 1-64 chars of [a-z0-9_-] (case-insensitive).")
+            CLIStderr.print("argus session start: invalid name '\(rawName)'. Allowed: 1-64 chars of [a-z0-9_-] (case-insensitive).")
             return 1
         }
 
@@ -238,7 +238,7 @@ private enum SessionStart {
                SessionFS.isAlive(pid: parsed.pid),
                let mt = SessionFS.mtime(url),
                Date().timeIntervalSince1970 - mt < 30 {
-                CLIStderr.print("eclam session start: session '\(name)' already running (pid=\(parsed.pid)).")
+                CLIStderr.print("argus session start: session '\(name)' already running (pid=\(parsed.pid)).")
                 return 1
             }
             // Stale (dead pid or aged-out mtime) — overwrite.
@@ -250,7 +250,7 @@ private enum SessionStart {
         var body = "\(myPid)"
         if let m = message { body += "\n\(m)" }
         guard SessionFS.writeAtomic(url, contents: body) else {
-            CLIStderr.print("eclam session start: failed to write session file at \(url.path).")
+            CLIStderr.print("argus session start: failed to write session file at \(url.path).")
             return 1
         }
 
@@ -284,7 +284,7 @@ private enum SessionStart {
             ])
         } else {
             let suffix = message.map { " — \($0)" } ?? ""
-            print("eclam session '\(name)' started (pid=\(myPid)).\(suffix) Ctrl-C to stop.")
+            print("argus session '\(name)' started (pid=\(myPid)).\(suffix) Ctrl-C to stop.")
         }
 
         // Park the main thread until a signal fires. `dispatchMain()` never
@@ -398,25 +398,25 @@ private enum SessionSignalTrap {
     }
 }
 
-// MARK: - `eclam session stop`
+// MARK: - `argus session stop`
 
 private enum SessionStop {
     static func run(args: [String]) -> Int32 {
         guard let rawName = args.first else {
-            CLIStderr.print("usage: eclam session stop <name>")
+            CLIStderr.print("usage: argus session stop <name>")
             return 1
         }
         if args.count > 1 {
-            CLIStderr.print("eclam session stop: unexpected extra arguments.")
+            CLIStderr.print("argus session stop: unexpected extra arguments.")
             return 1
         }
         guard let name = SessionFS.sanitize(rawName) else {
-            CLIStderr.print("eclam session stop: invalid name '\(rawName)'.")
+            CLIStderr.print("argus session stop: invalid name '\(rawName)'.")
             return 1
         }
         let url = SessionFS.fileURL(forSanitized: name)
         guard FileManager.default.fileExists(atPath: url.path) else {
-            CLIStderr.print("eclam session stop: no such session '\(name)'.")
+            CLIStderr.print("argus session stop: no such session '\(name)'.")
             return 1
         }
 
@@ -425,7 +425,7 @@ private enum SessionStop {
             if kill(parsed.pid, SIGTERM) != 0 {
                 let saved = errno
                 if saved != ESRCH && saved != EPERM {
-                    CLIStderr.print("eclam session stop: kill(\(parsed.pid)) failed: \(String(cString: strerror(saved)))")
+                    CLIStderr.print("argus session stop: kill(\(parsed.pid)) failed: \(String(cString: strerror(saved)))")
                     // continue — we still want to delete the file
                 }
             }
@@ -437,17 +437,17 @@ private enum SessionStop {
         } catch {
             // If it vanished between exists() and removeItem, that's fine.
             if FileManager.default.fileExists(atPath: url.path) {
-                CLIStderr.print("eclam session stop: failed to remove \(url.path): \(error.localizedDescription)")
+                CLIStderr.print("argus session stop: failed to remove \(url.path): \(error.localizedDescription)")
                 return 1
             }
         }
 
-        print("eclam session '\(name)' stopped.")
+        print("argus session '\(name)' stopped.")
         return 0
     }
 }
 
-// MARK: - `eclam session list`
+// MARK: - `argus session list`
 
 private enum SessionList {
     static func run(args: [String]) -> Int32 {
@@ -459,7 +459,7 @@ private enum SessionList {
                 print(SessionCommand.usage)
                 return 0
             default:
-                CLIStderr.print("eclam session list: unknown option '\(a)'.")
+                CLIStderr.print("argus session list: unknown option '\(a)'.")
                 return 1
             }
         }

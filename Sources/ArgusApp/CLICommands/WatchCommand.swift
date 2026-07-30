@@ -19,7 +19,7 @@ private func notify_cancel(_ token: Int32) -> UInt32
 
 private let WATCH_NOTIFY_STATUS_OK: UInt32 = 0
 
-/// `eclam watch <agent>` — block idle sleep ONLY while `<agent>` is
+/// `argus watch <agent>` — block idle sleep ONLY while `<agent>` is
 /// actively working. One-shot foreground process; releases on every exit path.
 /// ADR-0007 §A/§C/§D.
 ///
@@ -46,21 +46,21 @@ enum WatchCommand: CLISubcommand {
             switch a {
             case "--grace":
                 guard i + 1 < args.count, let v = Double(args[i + 1]), v > 0 else {
-                    CLIStderr.print("eclam watch: --grace requires a positive number of seconds.")
+                    CLIStderr.print("argus watch: --grace requires a positive number of seconds.")
                     return 1
                 }
                 grace = v
                 i += 2
             case "--check-interval":
                 guard i + 1 < args.count, let v = Double(args[i + 1]), v > 0 else {
-                    CLIStderr.print("eclam watch: --check-interval requires a positive number of seconds.")
+                    CLIStderr.print("argus watch: --check-interval requires a positive number of seconds.")
                     return 1
                 }
                 checkInterval = v
                 i += 2
             case "--max":
                 guard i + 1 < args.count, let v = Double(args[i + 1]), v >= 0 else {
-                    CLIStderr.print("eclam watch: --max requires a non-negative number of minutes.")
+                    CLIStderr.print("argus watch: --max requires a non-negative number of minutes.")
                     return 1
                 }
                 maxMinutes = v
@@ -73,7 +73,7 @@ enum WatchCommand: CLISubcommand {
                 return 0
             default:
                 if a.hasPrefix("--") {
-                    CLIStderr.print("eclam watch: unknown option '\(a)'.")
+                    CLIStderr.print("argus watch: unknown option '\(a)'.")
                     return 1
                 }
                 positional.append(a)
@@ -82,17 +82,17 @@ enum WatchCommand: CLISubcommand {
         }
 
         guard let agentArg = positional.first else {
-            CLIStderr.print("usage: eclam watch <agent> [--grace s] [--check-interval s] [--max minutes] [--json]")
+            CLIStderr.print("usage: argus watch <agent> [--grace s] [--check-interval s] [--max minutes] [--json]")
             return 1
         }
         if positional.count > 1 {
-            CLIStderr.print("eclam watch: unexpected extra arguments: \(positional.dropFirst().joined(separator: " "))")
+            CLIStderr.print("argus watch: unexpected extra arguments: \(positional.dropFirst().joined(separator: " "))")
             return 1
         }
 
         // ---------------- 2) Resolve <agent> → AgentTrace ----------------
         guard let trace = resolveTrace(agentArg) else {
-            CLIStderr.print("eclam watch: unknown agent '\(agentArg)'. Try one of: \(knownAgentIds().joined(separator: ", ")), or pass an explicit path/glob (starts with ~, /, ., or contains *).")
+            CLIStderr.print("argus watch: unknown agent '\(agentArg)'. Try one of: \(knownAgentIds().joined(separator: ", ")), or pass an explicit path/glob (starts with ~, /, ., or contains *).")
             return 1
         }
 
@@ -102,22 +102,22 @@ enum WatchCommand: CLISubcommand {
         case .enabled:
             break
         case .requiresApproval:
-            CLIStderr.print("eclam watch: helper requires approval. Open System Settings > General > Login Items & Extensions and enable Argus.")
+            CLIStderr.print("argus watch: helper requires approval. Open System Settings > General > Login Items & Extensions and enable Argus.")
             return 3
         case .notFound:
-            CLIStderr.print("eclam watch: helper not registered (.notFound). Launch ElectronicClam.app once to register the daemon.")
+            CLIStderr.print("argus watch: helper not registered (.notFound). Launch Argus.app once to register the daemon.")
             return 3
         case .notRegistered:
-            CLIStderr.print("eclam watch: helper not registered. Launch ElectronicClam.app once to register the daemon.")
+            CLIStderr.print("argus watch: helper not registered. Launch Argus.app once to register the daemon.")
             return 3
         @unknown default:
-            CLIStderr.print("eclam watch: helper in an unknown registration state.")
+            CLIStderr.print("argus watch: helper in an unknown registration state.")
             return 3
         }
 
         // ---------------- 4) Open one-shot XPC connection ----------------
         let conn = NSXPCConnection(machServiceName: HelperServiceName.mach, options: .privileged)
-        conn.remoteObjectInterface = NSXPCInterface(with: ElectronicClamHelperProtocol.self)
+        conn.remoteObjectInterface = NSXPCInterface(with: ArgusHelperProtocol.self)
         conn.resume()
 
         let session = WatchSession(
@@ -174,7 +174,7 @@ enum WatchCommand: CLISubcommand {
     }
 
     private static let helpText = """
-    usage: eclam watch <agent> [--grace s] [--check-interval s] [--max minutes] [--json]
+    usage: argus watch <agent> [--grace s] [--check-interval s] [--max minutes] [--json]
 
     Block idle sleep while <agent> is actively working.
 
@@ -290,7 +290,7 @@ private final class WatchSession {
         // Try to engage sleep-disabled up front. We don't wait for activity to
         // arrive — the user invoked `watch` because they expect coverage now.
         if let err = syncSetSleepDisabled(true) {
-            CLIStderr.print("eclam watch: failed to engage sleep block: \(err.localizedDescription)")
+            CLIStderr.print("argus watch: failed to engage sleep block: \(err.localizedDescription)")
             cleanupSubscriptions()
             connection.invalidate()
             return 2
@@ -430,7 +430,7 @@ private final class WatchSession {
                 "maxMinutes": maxMinutes,
             ])
         } else {
-            print("eclam watch: engaging sleep block for \(trace.label) (id=\(trace.id), grace=\(Int(grace))s, poll=\(Int(checkInterval))s). Ctrl-C to release.")
+            print("argus watch: engaging sleep block for \(trace.label) (id=\(trace.id), grace=\(Int(grace))s, poll=\(Int(checkInterval))s). Ctrl-C to release.")
         }
     }
 
@@ -491,7 +491,7 @@ private final class WatchSession {
                 "agent": trace.id,
             ])
         } else {
-            print("eclam watch: released sleep block (\(reasonStr)).")
+            print("argus watch: released sleep block (\(reasonStr)).")
         }
     }
 
@@ -580,7 +580,7 @@ private final class WatchSession {
         let proxy = connection.remoteObjectProxyWithErrorHandler { err in
             rpcError.set(err)
             sem.signal()
-        } as? ElectronicClamHelperProtocol
+        } as? ArgusHelperProtocol
         guard let proxy = proxy else {
             return NSError(domain: "com.kairong.argus", code: -1,
                            userInfo: [NSLocalizedDescriptionKey: "no XPC proxy"])

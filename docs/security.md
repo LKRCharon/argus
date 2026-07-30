@@ -1,6 +1,6 @@
 # Security & privacy
 
-Electronic Clam runs right next to an AI developer's most sensitive files. It is built so there is **no telemetry and no involuntary exfiltration**: the only outbound traffic is the opt-in Telegram bot you set up yourself (off by default). This document expands on the summary in the README.
+Argus runs right next to an AI developer's most sensitive files. It is built so there is **no telemetry and no involuntary exfiltration**: the only outbound traffic is the opt-in Telegram bot you set up yourself (off by default). This document expands on the summary in the README.
 
 ## Reads file clocks, not file contents
 

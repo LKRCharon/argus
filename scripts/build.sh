@@ -11,8 +11,8 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # ADR-0020 §③ — sign with a stable Developer ID so the daemon's Designated
 # Requirement is cdhash-free (identifier + TeamID) and survives upgrades, instead
 # of the ad-hoc cdhash that trips the SMAppService LWCR. Override for fast local
-# dev iteration with `ECLAM_SIGN_ID=- ./scripts/build.sh` (ad-hoc, no notarize).
-SIGN_ID="${ECLAM_SIGN_ID:-Developer ID Application: Changwook Jung (GBQ3DN529X)}"
+# dev iteration with `ARGUS_SIGN_ID=- ./scripts/build.sh` (ad-hoc, no notarize).
+SIGN_ID="${ARGUS_SIGN_ID:-Developer ID Application: Changwook Jung (GBQ3DN529X)}"
 # A secure timestamp is required for notarization; ad-hoc signing rejects it.
 TS_FLAG=(--timestamp)
 [[ "$SIGN_ID" == "-" ]] && TS_FLAG=()

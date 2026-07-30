@@ -12,7 +12,7 @@ import OSLog
 /// onEpisodeEnd). 거기서 이미 시작 원인·종료 사유·디테일 귀속이 끝나 있으므로
 /// 여기서는 게이팅(순수 `TelegramSupport`) → 문안 조립(NSL) → 전송만 한다.
 ///
-/// 토큰 저장: `~/Library/Application Support/eclam/telegram.json` (0600).
+/// 토큰 저장: `~/Library/Application Support/Argus/telegram.json` (0600).
 /// Keychain 이 아닌 이유 — ad-hoc 서명은 빌드마다 code identity 가 바뀌어
 /// Keychain ACL 재승인 프롬프트가 업데이트마다 뜨고, 이는 "권한 요청 1회"
 /// 규약(CLAUDE.md §4)의 회귀다. v1.0 노터라이즈에서 Keychain 전환 검토.
@@ -60,12 +60,7 @@ final class TelegramNotifier {
     // MARK: - Settings persistence (0600 JSON)
 
     private static var fileURL: URL? {
-        let fm = FileManager.default
-        guard let base = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                     appropriateFor: nil, create: true) else { return nil }
-        let dir = base.appendingPathComponent("eclam", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("telegram.json")
+        AppSupportDirectory.url?.appendingPathComponent("telegram.json")
     }
 
     private static func loadSettings() -> TelegramSettings {

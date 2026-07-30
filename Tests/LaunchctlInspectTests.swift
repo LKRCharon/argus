@@ -23,7 +23,7 @@ func expectEqual<T: Equatable>(_ got: T, _ want: T, _ what: String) {
 
 // MARK: - the real incident fixture (spawn failed / EX_CONFIG)
 //
-// Shape of a real `launchctl print system/com.jadhvank.eclam.helper` for the
+// Shape of a real `launchctl print system/com.kairong.argus.helper` for the
 // BTM record problem: exit 78, version 0.6.1, job state spawn failed. Spacing
 // is deliberately uneven to exercise lenient trimming.
 
@@ -31,15 +31,15 @@ func testSpawnFailedFixture() {
     currentSuite = "parse(spawn failed)"
 
     let fixture = """
-    com.jadhvank.eclam.helper = {
+    com.kairong.argus.helper = {
         active count = 0
-        path = /System/Library/LaunchDaemons/com.jadhvank.eclam.helper.plist
+        path = /System/Library/LaunchDaemons/com.kairong.argus.helper.plist
         type = LaunchDaemon
         state = not running
         runs = 24
         last exit code =  78: EX_CONFIG
         parent bundle version = 0.6.1
-        program = /Applications/ElectronicClam.app/Contents/Library/.../helper
+        program = /Applications/Argus.app/Contents/Library/.../helper
         job state    =   spawn failed
     }
     """
@@ -60,7 +60,7 @@ func testHealthyFixture() {
     currentSuite = "parse(healthy)"
 
     let fixture = """
-    com.jadhvank.eclam.helper = {
+    com.kairong.argus.helper = {
         active count = 1
         runs = 1
         last exit code = 0

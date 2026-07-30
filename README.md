@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="docs/assets/eclam-icon.png" width="120" alt="Electronic Clam" />
+<img src="docs/assets/argus-icon.png" width="120" alt="Argus" />
 
-# Electronic Clam
+# Argus
 
 **Agents must keep working — your Mac shouldn't cook trying.**
 It detects *work*, not just a running process.
@@ -10,12 +10,12 @@ It detects *work*, not just a running process.
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://www.apple.com/macos/)
 [![Language](https://img.shields.io/badge/Swift-AppKit%20%2B%20IOKit-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.6.3-yellow)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.7.0-yellow)](CHANGELOG.md)
 
 <!-- i18n-langbar -->
 **English** · [한국어](README.ko.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md)
 
-![Electronic Clam menu demo](docs/assets/eclam-menu-demo.gif)
+![Argus menu demo](docs/assets/argus-menu-demo.gif)
 
 </div>
 
@@ -38,7 +38,7 @@ The goal is to keep your agent working — **safely** — without interruption. 
 
 ### Agent-aware keep-awake
 
-![Agent-aware detection demo](docs/assets/eclam-demo-agents.gif)
+![Agent-aware detection demo](docs/assets/argus-demo-agents.gif)
 
 The point is simple: let your agent keep working, uninterrupted.
 
@@ -48,15 +48,15 @@ So the toggle tracks whether the agent is *working right now*, not whether a pro
 
 **Opt-in via Customize (off by default):** Aider · Cline · Roo Code · OpenHands · Hermes · Openclaw.
 
-Agents not listed here can be added too — give a glob pattern, or drop a single declaration file into `~/.config/eclam/traces.d/*.json`.
+Agents not listed here can be added too — give a glob pattern, or drop a single declaration file into `~/.config/argus/traces.d/*.json`.
 
 By default agents are detected by polling their session logs (~5 s, ~30 s while the screen is locked), so a just-started agent can take a few seconds to appear. Claude, Codex, and Hermes can be detected instantly by installing their (optional) hooks.
 
 ### Safety guards
 
-![Safety guard demo](docs/assets/eclam-demo-safety.gif)
+![Safety guard demo](docs/assets/argus-demo-safety.gif)
 
-Running a heavy workload in clamshell mode inside a bag is a thermal risk. Electronic Clam watches temperature and battery, and lets the Mac sleep when things get risky:
+Running a heavy workload in clamshell mode inside a bag is a thermal risk. Argus watches temperature and battery, and lets the Mac sleep when things get risky:
 
 - **Battery** — the threshold depends on your setup: 30% with the lid closed and no external display, 10% otherwise (adjustable). A weak or unstable AC connection counts as battery.
 - **Thermal** — combines the macOS signal with a more sensitive internal one to react faster.
@@ -67,9 +67,9 @@ With AC unplugged and the lid closed in a bag it judges more conservatively, the
 
 ### Remote-activity awareness
 
-![Remote awareness demo](docs/assets/eclam-demo-remote.gif)
+![Remote awareness demo](docs/assets/argus-demo-remote.gif)
 
-Electronic Clam won't sleep while you're using the Mac remotely. It detects SSH, screen sharing, Tailscale, and known remote-control apps. The default is simple: stay awake as long as you're connected.
+Argus won't sleep while you're using the Mac remotely. It detects SSH, screen sharing, Tailscale, and known remote-control apps. The default is simple: stay awake as long as you're connected.
 
 ### Telegram notifications (off by default)
 
@@ -80,19 +80,19 @@ Connect your own Telegram bot and you'll get a ping when an agent stops or your 
 - **CLI + named sessions** — drive it straight from the terminal (see [Usage](#usage)).
 - **Optional agent hooks** — installing injects an activity-signal hook into Claude / Codex / Hermes configs; uninstalling restores them.
 - **Guaranteed sleep restore on exit** — three layers: synchronous restore on quit, a SIGTERM handler, and a 20-second watchdog if the app crashes.
-- **Open at login (optional)** — start Electronic Clam automatically when you log in; off by default.
+- **Open at login (optional)** — start Argus automatically when you log in; off by default.
 - **Update notifications** — checks GitHub for new releases and points you to the download; it only notifies, never installs on its own.
 - **Clamshell VPN lock guard (opt-in).** With no external display on battery, closing the lid normally *locks* the screen — which drops a FortiClient SSL VPN (it needs a fresh sign-in to reconnect). An invisible virtual display anchors the session so the screen doesn't lock and the tunnel survives — no backlight, so essentially no power and no extra hardware. The **Blank screen** action also splits into **Dim** (dark but VPN-safe, default) vs **Sleep**, with an optional VPN-disconnect notification. Off by default, tucked deep in Settings.
-- **Resilient helper setup** — won't register the background helper from a quarantined download or a temporary (translocated) location where macOS blocks it; it guides you to move the app to Applications instead. Settings flags duplicate copies and version mismatches, and `eclam repair` recovers a wedged or unreachable helper.
+- **Resilient helper setup** — won't register the background helper from a quarantined download or a temporary (translocated) location where macOS blocks it; it guides you to move the app to Applications instead. Settings flags duplicate copies and version mismatches, and `argus repair` recovers a wedged or unreachable helper.
 
 ## Install
 
 ```bash
-brew install --cask jadhvank/tap/eclam
-open /Applications/ElectronicClam.app
+brew install --cask LKRCharon/tap/argus
+open /Applications/Argus.app
 ```
 
-Turn on **Electronic Clam Helper** in **System Settings → General → Login Items & Extensions**.
+Turn on **Argus Helper** in **System Settings → General → Login Items & Extensions**.
 
 ## Usage
 
@@ -113,18 +113,18 @@ The icon is a clam shell with three states: an outline shell (asleep), a filled 
 
 ### CLI
 
-The Homebrew cask creates a `$HOMEBREW_PREFIX/bin/eclam` symlink.
+The Homebrew cask creates a `$HOMEBREW_PREFIX/bin/argus` symlink.
 
 ```
-eclam on [--for <dur>] [--forever]   # keep awake; default 2h, then the helper auto-releases (no GUI needed, survives reboot)
-eclam off
-eclam status [--json]                # also flags a quarantined app, a failed helper, and duplicate copies
-eclam repair                         # recover a wedged/unreachable helper
-eclam keep --while <pid>
-eclam watch <agent> [--grace s] [--check-interval s] [--max min] [--json]
-eclam session start <name> [--message <text>] / stop <name> / list [--json]
-eclam debug [agents] [--json]
-eclam help
+argus on [--for <dur>] [--forever]   # keep awake; default 2h, then the helper auto-releases (no GUI needed, survives reboot)
+argus off
+argus status [--json]                # also flags a quarantined app, a failed helper, and duplicate copies
+argus repair                         # recover a wedged/unreachable helper
+argus keep --while <pid>
+argus watch <agent> [--grace s] [--check-interval s] [--max min] [--json]
+argus session start <name> [--message <text>] / stop <name> / list [--json]
+argus debug [agents] [--json]
+argus help
 ```
 
 **Exit codes:** `0` success · `1` bad arguments · `2` helper unreachable · `3` approval required · `4` user cancelled.
@@ -160,11 +160,11 @@ See [Security & privacy](docs/security.md) for details.
 
 ```bash
 ./scripts/build.sh            # app + helper + hook binaries (Developer ID signed)
-open build/ElectronicClam.app
+open build/Argus.app
 ```
 
-- Direct `swiftc` invocation, `arm64-apple-macos13.0` target. Set `ECLAM_SIGN_ID=-` for fast ad-hoc local builds.
-- Bundle layout: `Contents/MacOS/{ElectronicClam, ElectronicClamHelper, eclam-hook}` + `Contents/Library/LaunchDaemons/com.jadhvank.eclam.helper.plist`.
+- Direct `swiftc` invocation, `arm64-apple-macos13.0` target. Set `ARGUS_SIGN_ID=-` for fast ad-hoc local builds.
+- Bundle layout: `Contents/MacOS/{Argus, ArgusHelper, argus-hook}` + `Contents/Library/LaunchDaemons/com.kairong.argus.helper.plist`.
 - Release builds are Developer ID–signed and notarized (stapled by `release.sh`).
 
 ## Release history
@@ -172,17 +172,15 @@ open build/ElectronicClam.app
 Recent releases — full history in [CHANGELOG.md](CHANGELOG.md):
 
 - **0.6.3** — Fix: with the clamshell lock guard enabled, attaching a real external display no longer disturbs your saved built-in + external arrangement. The invisible anchor now steps aside immediately (no re-mirror) when a real display appears, letting macOS restore your saved layout; it returns automatically when the external is removed. Headless clamshell lock protection is unchanged.
-- **0.6.2** — Clamshell VPN lock guard (opt-in): with no external display on battery, closing the lid no longer locks the screen, so a FortiClient SSL VPN survives instead of dropping — an invisible virtual display anchors the session, the "Blank screen" action now lets you choose **Dim** (VPN-safe, default) or **Sleep**, and an optional notification warns you if the VPN drops. Plus a more resilient helper setup that refuses to register from a quarantined or translocated copy, flags duplicate copies and version mismatches, and recovers via `eclam repair`.
-- **0.6.1** — Honest helper status: a dead-but-registered helper no longer shows a false "enabled". `eclam status` reports it as `unreachable` (exit 2), the app self-repairs on relaunch, a new `eclam repair` command and a menu-bar warning surface it, and `eclam status` now also reports the Open-at-Login state.
+- **0.6.2** — Clamshell VPN lock guard (opt-in): with no external display on battery, closing the lid no longer locks the screen, so a FortiClient SSL VPN survives instead of dropping — an invisible virtual display anchors the session, the "Blank screen" action now lets you choose **Dim** (VPN-safe, default) or **Sleep**, and an optional notification warns you if the VPN drops. Plus a more resilient helper setup that refuses to register from a quarantined or translocated copy, flags duplicate copies and version mismatches, and recovers via `argus repair`.
+- **0.6.1** — Honest helper status: a dead-but-registered helper no longer shows a false "enabled". `argus status` reports it as `unreachable` (exit 2), the app self-repairs on relaunch, a new `argus repair` command and a menu-bar warning surface it, and `argus status` now also reports the Open-at-Login state.
 - **0.6.0** — Open at Login, in-app update notifications, awake history, internationalization (English · 한국어 · 中文 · 日本語 · Español), single-click toggle, menu-bar icon themes, remote idle policy, Telegram status notifications, Developer ID signing + notarization.
 
 Earlier: agent-aware detection and the `watch` / `session` CLI (0.5.x), state-conditioned battery / thermal / timer safety guards (0.4.x), remote-activity awareness and the first CLI (0.3.x).
 
-## Support
+## Origins
 
-Electronic Clam is free and open source. It keeps your agent awake; your coffee keeps the developer awake. ☕
-
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-%E2%98%95-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/jadhvank)
+Argus began as a fork of [jadhvank/eclam](https://github.com/jadhvank/eclam) (Electronic Clam) and has since been rebranded and extended. Thanks to the original author for the foundation.
 
 ## License
 

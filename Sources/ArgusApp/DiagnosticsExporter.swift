@@ -3,7 +3,7 @@ import Foundation
 
 /// 사용자 제보용 진단 번들 생성기 (proposal §2).
 ///
-/// `export()` 를 호출하면 ~/Desktop/eclam-diagnostics-YYYYMMDD-HHmmss.zip 을 만들고
+/// `export()` 를 호출하면 ~/Desktop/argus-diagnostics-YYYYMMDD-HHmmss.zip 을 만들고
 /// URL 을 반환한다. 실패하면 nil.
 ///
 /// 수집 항목 각각이 실패해도 나머지는 계속 진행되며, 해당 파일에
@@ -33,7 +33,7 @@ enum DiagnosticsExporter {
 
     // MARK: - Collectors
 
-    /// `eclam debug agents` 출력 → agents.txt
+    /// `argus debug agents` 출력 → agents.txt
     private static func collectAgents(into dir: URL) {
         let dest = dir.appendingPathComponent("agents.txt")
         let execPath = Bundle.main.executablePath ?? ""
@@ -82,12 +82,9 @@ enum DiagnosticsExporter {
         }
     }
 
-    /// ~/Library/Application Support/eclam/history.json 복사 → history.json
+    /// ~/Library/Application Support/Argus/history.json 복사 → history.json
     private static func collectHistory(into dir: URL) {
-        let src = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?
-            .appendingPathComponent("eclam/history.json")
+        let src = AppSupportDirectory.url?.appendingPathComponent("history.json")
         let dest = dir.appendingPathComponent("history.json")
         guard let src = src, FileManager.default.fileExists(atPath: src.path) else {
             write("{\"unavailable\": \"history.json not found\"}", to: dest)
@@ -124,7 +121,7 @@ enum DiagnosticsExporter {
         // 앱 버전 (Info.plist CFBundleShortVersionString)
         let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
         let buildNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
-        lines.append("eclam version: \(appVersion) (\(buildNumber))")
+        lines.append("argus version: \(appVersion) (\(buildNumber))")
 
         write(lines.joined(separator: "\n"), to: dest)
     }
@@ -174,12 +171,12 @@ enum DiagnosticsExporter {
 
     // MARK: - Zip & Place
 
-    /// 임시 디렉터리 내용을 ~/Desktop/eclam-diagnostics-YYYYMMDD-HHmmss.zip 으로 압축.
+    /// 임시 디렉터리 내용을 ~/Desktop/argus-diagnostics-YYYYMMDD-HHmmss.zip 으로 압축.
     private static func zipAndPlace(source: URL) -> URL? {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         let stamp = formatter.string(from: Date())
-        let zipName = "eclam-diagnostics-\(stamp).zip"
+        let zipName = "argus-diagnostics-\(stamp).zip"
 
         let desktop = FileManager.default
             .urls(for: .desktopDirectory, in: .userDomainMask)
@@ -206,7 +203,7 @@ enum DiagnosticsExporter {
 
     private static func makeTempDir() -> URL {
         let base = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("eclam-diagnostics-\(UUID().uuidString)")
+            .appendingPathComponent("argus-diagnostics-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
     }

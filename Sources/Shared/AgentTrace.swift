@@ -50,11 +50,11 @@ public struct AgentTrace: Codable, Equatable, Hashable {
 
 public extension AgentTrace {
     /// Agents auto-detected by default (watched-by-default via
-    /// `StateStore.defaultWatchedAgents`, which derives from this list). v0.5 —
-    /// high-confidence set: claude/codex (hook) + cursor + opencode. v0.5.x —
-    /// cursor & antigravity glob paths corrected and antigravity promoted here
+    /// `StateStore.defaultWatchedAgents`, which derives from this list). The
+    /// high-confidence set: claude/codex (hook) + cursor + opencode. Later,
+    /// cursor & antigravity glob paths were corrected and antigravity promoted here
     /// after live measurement (2026-06-11; see memory:agent-trace-path-audit and
-    /// ADR-0006 §B v0.5.x). ADR-0006 §B.
+    /// ADR-0006 §B). ADR-0006 §B.
     static let M1Defaults: [AgentTrace] = [
         AgentTrace(
             id: "claude",
@@ -72,7 +72,7 @@ public extension AgentTrace {
             hookKey: "codex",
             comm: "codex"
         ),
-        // v0.5.x — live-measured (Cursor 3.7.27, Agent mode, 2026-06-11). GUI shares
+        // Live-measured (Cursor 3.7.27, Agent mode, 2026-06-11). GUI shares
         // `~/.cursor` with the cursor-agent CLI, so this single glob covers both.
         // Per-turn append-in-place, idle-stale (0 noise in 75s). Path corrected from
         // the dead `~/.cursor/cli-logs/*.json` (never matched on any machine).
@@ -103,7 +103,7 @@ public extension AgentTrace {
             hookKey: nil,
             comm: "opencode"  // same standalone binary as the log-file trace
         ),
-        // v0.5.x — live-measured (Antigravity 2.0.11, 2026-06-11). Per-turn append
+        // Live-measured (Antigravity 2.0.11, 2026-06-11). Per-turn append
         // to the active conversation's transcript; verified across Agent Manager
         // parallel / dynamic-subagent / `/schedule` modes (worst integrated gap 55s,
         // < freshness 90). `.system_generated` is a literal hidden dir — glob(3)
@@ -117,7 +117,7 @@ public extension AgentTrace {
             hookKey: nil,
             comm: "agy"
         ),
-        // v0.6.x — promoted from CustomizeOnly after live verification (2026-07-28):
+        // Promoted from CustomizeOnly after live verification (2026-07-28):
         // the agentlink transcript watcher runs on this exact glob and streamed
         // thousands of events end-to-end, so "path detection unverified" no longer
         // holds. Electron main process reports comm "Electron"; LaxProcessAlive
@@ -133,7 +133,7 @@ public extension AgentTrace {
     ]
 
     /// Customize-only entries (no default check). ADR-0006 §B.
-    /// User explicitly enables in Settings → Agents. v0.5 — demoted from defaults
+    /// User explicitly enables in Settings → Agents. Demoted from defaults
     /// (path detection unverified); detection rules preserved, just off by default.
     static let CustomizeOnly: [AgentTrace] = [
         AgentTrace(
@@ -177,7 +177,7 @@ public extension AgentTrace {
             hookKey: "hermes",  // pre_tool_call / post_tool_call shell hook (M3 auto-install)
             comm: "hermes"
         ),
-        // v0.5.x — path corrected from source (openclaw/openclaw
+        // Path corrected from source (openclaw/openclaw
         // `backup-volatile-filter.ts`, `jsonl-repo.ts`): files live at
         // `<stateDir>/agents/<agentId>/sessions/<encodeCwd>/<ts>_<id>.jsonl`, i.e.
         // one directory deeper than the old `agents/*/sessions/*.jsonl` (never

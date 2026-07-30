@@ -26,7 +26,7 @@ enum CLI {
             // Preserve back-compat for `--debug-agents` (handled in main.swift)
             // and any future GUI-only flags; anything else falls through to GUI
             // mode. We DO NOT print "unknown command" here — that would break
-            // the legacy `ElectronicClam --debug-agents` form.
+            // the legacy `Argus --debug-agents` form.
             return nil
         }
     }

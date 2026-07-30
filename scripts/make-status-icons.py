@@ -15,8 +15,8 @@ from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAIRS = [
-    ("Resources/icon-src/eclam_on.png",  "Resources/status-on.png"),
-    ("Resources/icon-src/eclam_off.png", "Resources/status-off.png"),
+    ("Resources/icon-src/argus_on.png",  "Resources/status-on.png"),
+    ("Resources/icon-src/argus_off.png", "Resources/status-off.png"),
 ]
 OUT_HEIGHT = 144   # NSImage downscales to ~18pt; 144 keeps Retina crisp.
 TRIM_THRESH = 12   # alpha above this counts as content when cropping whitespace.

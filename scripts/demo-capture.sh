@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Electronic Clam — REAL menu-bar screen capture → animated GIF.
+# Argus — REAL menu-bar screen capture → animated GIF.
 #
 # Unlike the mockup (docs/assets/demo/make-mockup-gif.sh), this records the live
 # app. It therefore needs the terminal app to hold macOS **Screen Recording**
@@ -13,25 +13,25 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$ROOT/build/ElectronicClam.app"
-OUT="$ROOT/docs/assets/eclam-menu-demo.real.gif"
+APP="$ROOT/build/Argus.app"
+OUT="$ROOT/docs/assets/argus-menu-demo.real.gif"
 SECONDS_REC="${SECONDS_REC:-9}"        # capture window
 SCREEN_IDX="${SCREEN_IDX:-1}"          # avfoundation "Capture screen 0"; verify: ffmpeg -f avfoundation -list_devices true -i ""
 WORK="$(mktemp -d)"
 APP_LAUNCHED=0
 
-# eclam CLI: prefer an installed one, else fall back to nothing (state setup skipped).
-ECLAM="$(command -v eclam || true)"
+# argus CLI: prefer an installed one, else fall back to nothing (state setup skipped).
+ARGUS="$(command -v argus || true)"
 
 cleanup() {
   set +e
   # 불변 규약 #1 — never leave the Mac unable to sleep.
-  if [ -n "$ECLAM" ]; then "$ECLAM" session stop demo >/dev/null 2>&1; "$ECLAM" off >/dev/null 2>&1; fi
+  if [ -n "$ARGUS" ]; then "$ARGUS" session stop demo >/dev/null 2>&1; "$ARGUS" off >/dev/null 2>&1; fi
   # Belt-and-suspenders: if SleepDisabled is still 1 and we own no helper, warn.
   if pmset -g 2>/dev/null | grep -qiE 'sleepdisabled[[:space:]]+1'; then
-    echo "⚠️  SleepDisabled is still 1 — run 'eclam off' or toggle the app off."
+    echo "⚠️  SleepDisabled is still 1 — run 'argus off' or toggle the app off."
   fi
-  [ "$APP_LAUNCHED" = 1 ] && osascript -e 'quit app "ElectronicClam"' >/dev/null 2>&1
+  [ "$APP_LAUNCHED" = 1 ] && osascript -e 'quit app "Argus"' >/dev/null 2>&1
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -61,11 +61,11 @@ probe() {
 record() {
   echo "==> launching app + demo state"
   open -n "$APP"; APP_LAUNCHED=1; sleep 3
-  if [ -n "$ECLAM" ]; then
-    "$ECLAM" session start demo --message "demo agent" >/dev/null 2>&1 || true   # → header "Awake — demo active"
-    "$ECLAM" on >/dev/null 2>&1 || true
+  if [ -n "$ARGUS" ]; then
+    "$ARGUS" session start demo --message "demo agent" >/dev/null 2>&1 || true   # → header "Awake — demo active"
+    "$ARGUS" on >/dev/null 2>&1 || true
   else
-    echo "    (no 'eclam' on PATH — recording whatever state the app shows)"
+    echo "    (no 'argus' on PATH — recording whatever state the app shows)"
   fi
 
   echo "==> RECORDING ${SECONDS_REC}s. Click the 🐚 menu bar icon NOW and hold the menu open."

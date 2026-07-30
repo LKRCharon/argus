@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 TARGET="arm64-apple-macos13.0"
-TMP="$(mktemp -d /tmp/eclam_tests.XXXXXX)"
+TMP="$(mktemp -d /tmp/argus_tests.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
 # ── Policy tests ──────────────────────────────────────────────────────────
@@ -20,22 +20,22 @@ trap 'rm -rf "$TMP"' EXIT
 # file (top-level code = entry point).
 echo "==> Compiling policy tests"
 swiftc -target "$TARGET" \
-    -o "$TMP/eclam_policytests" \
+    -o "$TMP/argus_policytests" \
     "$ROOT/Sources/ArgusApp/SafetyPolicy.swift" \
     "$ROOT/Tests/PolicyTests.swift"
 echo "==> Running policy tests"
-"$TMP/eclam_policytests"
+"$TMP/argus_policytests"
 
 # ── Helper protocol tests (added by a sibling branch) ─────────────────────
 # Guarded: absent in this worktree (skipped), runs automatically after merge.
 if [ -f "$ROOT/Tests/HelperProtocolTests.swift" ]; then
     echo "==> Compiling helper protocol tests"
     swiftc -target "$TARGET" \
-        -o "$TMP/eclam_helpertests" \
+        -o "$TMP/argus_helpertests" \
         "$ROOT/Sources/Shared/HelperProtocol.swift" \
         "$ROOT/Tests/HelperProtocolTests.swift"
     echo "==> Running helper protocol tests"
-    "$TMP/eclam_helpertests"
+    "$TMP/argus_helpertests"
 else
     echo "==> Skipping helper protocol tests (Tests/HelperProtocolTests.swift absent)"
 fi
@@ -48,11 +48,11 @@ if [ -f "$ROOT/Tests/HelperCallerIdentityTests.swift" ]; then
     echo "==> Compiling helper caller identity tests"
     swiftc -target "$TARGET" \
         -framework Foundation -framework Security \
-        -o "$TMP/eclam_calleridtests" \
+        -o "$TMP/argus_calleridtests" \
         "$ROOT/Sources/ArgusHelper/HelperCallerIdentity.swift" \
         "$ROOT/Tests/HelperCallerIdentityTests.swift"
     echo "==> Running helper caller identity tests"
-    "$TMP/eclam_calleridtests"
+    "$TMP/argus_calleridtests"
 else
     echo "==> Skipping helper caller identity tests (Tests/HelperCallerIdentityTests.swift absent)"
 fi
@@ -62,11 +62,11 @@ fi
 if [ -f "$ROOT/Tests/PathingTests.swift" ]; then
     echo "==> Compiling pathing tests"
     swiftc -target "$TARGET" \
-        -o "$TMP/eclam_pathingtests" \
+        -o "$TMP/argus_pathingtests" \
         "$ROOT/Sources/ArgusApp/ClaudeWorkspacePathing.swift" \
         "$ROOT/Tests/PathingTests.swift"
     echo "==> Running pathing tests"
-    "$TMP/eclam_pathingtests"
+    "$TMP/argus_pathingtests"
 else
     echo "==> Skipping pathing tests (Tests/PathingTests.swift absent)"
 fi
@@ -76,11 +76,11 @@ fi
 if [ -f "$ROOT/Tests/DurationParseTests.swift" ]; then
     echo "==> Compiling duration tests"
     swiftc -target "$TARGET" \
-        -o "$TMP/eclam_durationtests" \
+        -o "$TMP/argus_durationtests" \
         "$ROOT/Sources/Shared/DurationParse.swift" \
         "$ROOT/Tests/DurationParseTests.swift"
     echo "==> Running duration tests"
-    "$TMP/eclam_durationtests"
+    "$TMP/argus_durationtests"
 else
     echo "==> Skipping duration tests (Tests/DurationParseTests.swift absent)"
 fi
@@ -91,12 +91,12 @@ if [ -f "$ROOT/Tests/WeeklySummaryTests.swift" ]; then
     echo "==> Compiling weekly summary tests"
     swiftc -target "$TARGET" \
         -framework Foundation \
-        -o "$TMP/eclam_weeklysummarytests" \
+        -o "$TMP/argus_weeklysummarytests" \
         "$ROOT/Sources/ArgusApp/SafetyPolicy.swift" \
         "$ROOT/Sources/ArgusApp/AwakeEpisode.swift" \
         "$ROOT/Tests/WeeklySummaryTests.swift"
     echo "==> Running weekly summary tests"
-    "$TMP/eclam_weeklysummarytests"
+    "$TMP/argus_weeklysummarytests"
 else
     echo "==> Skipping weekly summary tests (Tests/WeeklySummaryTests.swift absent)"
 fi
@@ -108,11 +108,11 @@ if [ -f "$ROOT/Tests/HookConfigEditingTests.swift" ]; then
     echo "==> Compiling hook config editing tests"
     swiftc -target "$TARGET" \
         -framework Foundation \
-        -o "$TMP/eclam_hookconfigtests" \
+        -o "$TMP/argus_hookconfigtests" \
         "$ROOT/Sources/ArgusApp/HookConfigEditing.swift" \
         "$ROOT/Tests/HookConfigEditingTests.swift"
     echo "==> Running hook config editing tests"
-    "$TMP/eclam_hookconfigtests"
+    "$TMP/argus_hookconfigtests"
 else
     echo "==> Skipping hook config editing tests (Tests/HookConfigEditingTests.swift absent)"
 fi
@@ -124,11 +124,11 @@ if [ -f "$ROOT/Tests/AgentActivityTests.swift" ]; then
     echo "==> Compiling agent activity tests"
     swiftc -target "$TARGET" \
         -framework Foundation \
-        -o "$TMP/eclam_agentactivitytests" \
+        -o "$TMP/argus_agentactivitytests" \
         "$ROOT/Sources/ArgusApp/AgentActivity.swift" \
         "$ROOT/Tests/AgentActivityTests.swift"
     echo "==> Running agent activity tests"
-    "$TMP/eclam_agentactivitytests"
+    "$TMP/argus_agentactivitytests"
 else
     echo "==> Skipping agent activity tests (Tests/AgentActivityTests.swift absent)"
 fi
@@ -140,11 +140,11 @@ if [ -f "$ROOT/Tests/ClaudeRemoteDetectTests.swift" ]; then
     echo "==> Compiling claude remote detect tests"
     swiftc -target "$TARGET" \
         -framework Foundation \
-        -o "$TMP/eclam_clauderemotetests" \
+        -o "$TMP/argus_clauderemotetests" \
         "$ROOT/Sources/ArgusApp/ClaudeRemoteDetect.swift" \
         "$ROOT/Tests/ClaudeRemoteDetectTests.swift"
     echo "==> Running claude remote detect tests"
-    "$TMP/eclam_clauderemotetests"
+    "$TMP/argus_clauderemotetests"
 else
     echo "==> Skipping claude remote detect tests (Tests/ClaudeRemoteDetectTests.swift absent)"
 fi
@@ -155,11 +155,11 @@ if [ -f "$ROOT/Tests/CodexRemoteDetectTests.swift" ]; then
     echo "==> Compiling codex remote detect tests"
     swiftc -target "$TARGET" \
         -framework Foundation \
-        -o "$TMP/eclam_codexremotetests" \
+        -o "$TMP/argus_codexremotetests" \
         "$ROOT/Sources/ArgusApp/CodexRemoteDetect.swift" \
         "$ROOT/Tests/CodexRemoteDetectTests.swift"
     echo "==> Running codex remote detect tests"
-    "$TMP/eclam_codexremotetests"
+    "$TMP/argus_codexremotetests"
 else
     echo "==> Skipping codex remote detect tests (Tests/CodexRemoteDetectTests.swift absent)"
 fi
@@ -170,13 +170,13 @@ if [ -f "$ROOT/Tests/TelegramSupportTests.swift" ]; then
     echo "==> Compiling telegram support tests"
     swiftc -target "$TARGET" \
         -framework Foundation \
-        -o "$TMP/eclam_telegramtests" \
+        -o "$TMP/argus_telegramtests" \
         "$ROOT/Sources/ArgusApp/SafetyPolicy.swift" \
         "$ROOT/Sources/ArgusApp/AwakeEpisode.swift" \
         "$ROOT/Sources/ArgusApp/TelegramSupport.swift" \
         "$ROOT/Tests/TelegramSupportTests.swift"
     echo "==> Running telegram support tests"
-    "$TMP/eclam_telegramtests"
+    "$TMP/argus_telegramtests"
 else
     echo "==> Skipping telegram support tests (Tests/TelegramSupportTests.swift absent)"
 fi
@@ -188,11 +188,11 @@ if [ -f "$ROOT/Tests/HoldStateTests.swift" ]; then
     echo "==> Compiling hold state tests"
     swiftc -target "$TARGET" \
         -framework Foundation \
-        -o "$TMP/eclam_holdstatetests" \
+        -o "$TMP/argus_holdstatetests" \
         "$ROOT/Sources/Shared/HoldState.swift" \
         "$ROOT/Tests/HoldStateTests.swift"
     echo "==> Running hold state tests"
-    "$TMP/eclam_holdstatetests"
+    "$TMP/argus_holdstatetests"
 else
     echo "==> Skipping hold state tests (Tests/HoldStateTests.swift absent)"
 fi
@@ -203,11 +203,11 @@ fi
 if [ -f "$ROOT/Tests/HelperHealthTests.swift" ]; then
     echo "==> Compiling helper health tests"
     swiftc -target "$TARGET" \
-        -o "$TMP/eclam_helperhealthtests" \
+        -o "$TMP/argus_helperhealthtests" \
         "$ROOT/Sources/Shared/HelperHealth.swift" \
         "$ROOT/Tests/HelperHealthTests.swift"
     echo "==> Running helper health tests"
-    "$TMP/eclam_helperhealthtests"
+    "$TMP/argus_helperhealthtests"
 else
     echo "==> Skipping helper health tests (Tests/HelperHealthTests.swift absent)"
 fi
@@ -219,11 +219,11 @@ if [ -f "$ROOT/Tests/InstallLocationTests.swift" ]; then
     echo "==> Compiling install location tests"
     swiftc -target "$TARGET" \
         -framework Foundation \
-        -o "$TMP/eclam_installlocationtests" \
+        -o "$TMP/argus_installlocationtests" \
         "$ROOT/Sources/Shared/InstallLocation.swift" \
         "$ROOT/Tests/InstallLocationTests.swift"
     echo "==> Running install location tests"
-    "$TMP/eclam_installlocationtests"
+    "$TMP/argus_installlocationtests"
 else
     echo "==> Skipping install location tests (Tests/InstallLocationTests.swift absent)"
 fi
@@ -235,12 +235,12 @@ if [ -f "$ROOT/Tests/LaunchctlInspectTests.swift" ]; then
     echo "==> Compiling launchctl inspect tests"
     swiftc -target "$TARGET" \
         -framework Foundation \
-        -o "$TMP/eclam_launchctlinspecttests" \
+        -o "$TMP/argus_launchctlinspecttests" \
         "$ROOT/Sources/ArgusApp/LaunchctlInspect.swift" \
         "$ROOT/Sources/ArgusApp/Subprocess.swift" \
         "$ROOT/Tests/LaunchctlInspectTests.swift"
     echo "==> Running launchctl inspect tests"
-    "$TMP/eclam_launchctlinspecttests"
+    "$TMP/argus_launchctlinspecttests"
 else
     echo "==> Skipping launchctl inspect tests (Tests/LaunchctlInspectTests.swift absent)"
 fi

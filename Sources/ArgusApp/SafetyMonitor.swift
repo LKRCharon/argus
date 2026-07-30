@@ -95,7 +95,7 @@ final class SafetyMonitor {
         log.info("SafetyMonitor started")
     }
 
-    /// v0.3.4 — Low Power Mode is broadcast via `NSNotification.Name.NSProcessInfoPowerStateDidChange`.
+    /// Low Power Mode is broadcast via `NSNotification.Name.NSProcessInfoPowerStateDidChange`.
     /// We re-evaluate the environment whenever the user toggles it.
     private var lowPowerObserver: NSObjectProtocol?
     private func installLowPowerModeObserver() {
@@ -189,7 +189,7 @@ final class SafetyMonitor {
         }
         if debouncedBattery != nil { hasCommittedBatterySample = true }
         lastSeenAC = ac
-        // v0.4.0 — Phase 1: battery °C (public). Phase 2: SMC CPU/GPU/fan
+        // Phase 1: battery °C (public). Phase 2: SMC CPU/GPU/fan
         // (Apple Silicon only; nil on unsupported hardware).
         let batteryC = readBatteryTempCelsius()
         let cpuC = SMCReader.cpuTemperatureCelsius()
@@ -244,7 +244,7 @@ final class SafetyMonitor {
         return nil
     }
 
-    /// v0.4.0 — battery temperature in °C from `kIOPSTemperatureKey` if the
+    /// Battery temperature in °C from `kIOPSTemperatureKey` if the
     /// power source publishes it. Some Macs report centi-Kelvin (3032 → 30.17°C
     /// after `value/100 - 273.15`); others report deci-°C (302 → 30.2°C). We
     /// auto-detect by magnitude: > 1000 ⇒ centi-Kelvin, > 100 ⇒ deci-°C,
@@ -282,7 +282,7 @@ final class SafetyMonitor {
         return true
     }
 
-    /// v0.3.4 — `kIOPSIsChargingKey`. False on a desktop / battery-only laptop,
+    /// `kIOPSIsChargingKey`. False on a desktop / battery-only laptop,
     /// false also at 100% (charge maintains). Combined with `acConnected` and
     /// `batteryPercent` upstream in `StateStore.effectiveACConnected`.
     private func readIsCharging() -> Bool {
@@ -550,7 +550,7 @@ final class SafetyMonitor {
         let thermalCutoff = Self.thermalLevelInt(effectiveThermalCutoffWithLowPower(settings: s))
         let battery = store.batteryPercent
         let batteryThreshold = batteryThresholdWithLowPower(settings: s)
-        // v0.3.4 E — the safest scenario (AC + lid open + ext display) is
+        // E — the safest scenario (AC + lid open + ext display) is
         // "user is at a desk and meant to keep working"; skip the timer cap there.
         let safeScenario = store.effectiveACConnected
             && !store.lidClosed
@@ -696,7 +696,7 @@ final class SafetyMonitor {
     /// and surfaced to the user via the battery row's ⓘ help
     /// (`safety.battery.floorHelp`).
     ///
-    /// v0.3.4 B — when Low Power Mode is on, the threshold then rises by
+    /// B — when Low Power Mode is on, the threshold then rises by
     /// another 10 percentage points (capped at 80%). User signaled "battery
     /// matters more"; we honor that even when our policy alone would say
     /// "still fine".
@@ -732,7 +732,7 @@ final class SafetyMonitor {
         return min(by: contextCutoff, userCutoff)
     }
 
-    /// v0.3.4 B — Low Power Mode tightens the cutoff one notch: `.serious` →
+    /// B — Low Power Mode tightens the cutoff one notch: `.serious` →
     /// `.fair`. Already-strict cutoffs (`.fair`, `.nominal`) are unchanged so
     /// we don't end up tripping on a freshly-booted Mac.
     private func effectiveThermalCutoffWithLowPower(settings: StateStore.SafetySettings)

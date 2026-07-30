@@ -14,9 +14,9 @@ enum UpdateChecker {
     private static let log = Logger(subsystem: "com.kairong.argus", category: "update")
 
     /// Releases are published on this repo (the Homebrew cask downloads from
-    /// github.com/kairong/argus).
-    private static let latestAPI = URL(string: "https://api.github.com/repos/jadhvank/eclam/releases/latest")!
-    private static let releasesPage = URL(string: "https://github.com/kairong/argus/releases/latest")!
+    /// github.com/LKRCharon/argus).
+    private static let latestAPI = URL(string: "https://api.github.com/repos/LKRCharon/argus/releases/latest")!
+    private static let releasesPage = URL(string: "https://github.com/LKRCharon/argus/releases/latest")!
 
     private static let autoCheckKey = "UpdateAutoCheckEnabled"
     private static let lastCheckKey = "UpdateLastCheckEpoch"
@@ -53,7 +53,7 @@ enum UpdateChecker {
             guard case .updateAvailable(let latest, _, _) = result else { return }
             Task {
                 await ReleaseNotifier.shared.notifyInfo(
-                    identifier: "eclam.update.available",
+                    identifier: "argus.update.available",
                     title: NSL("update.available", "Update available"),
                     body: NSLf("update.notify.body",
                                "Argus %@ is available — open Settings to update.", latest))

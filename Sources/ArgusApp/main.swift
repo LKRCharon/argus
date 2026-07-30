@@ -10,7 +10,7 @@ if let exitCode = CLI.dispatch(argv) {
     exit(exitCode)
 }
 
-// ADR-0006 §M — back-compat: the v0.2.1 `--debug-agents` flag form has no
+// ADR-0006 §M — back-compat: the legacy `--debug-agents` flag form has no
 // leading subcommand, so `CLI.dispatch` returns nil and we land here.
 if argv.contains("--debug-agents") {
     let json = argv.contains("--json")

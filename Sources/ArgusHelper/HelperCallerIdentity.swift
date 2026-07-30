@@ -43,7 +43,7 @@ enum HelperCallerIdentity {
     /// 보증한 신뢰 경계(우리 Team 의 앱/CLI/hook) 안에서 보수적으로 통과시킨다.
     /// (hook 이 power 를 호출하지 못하게 막는 것이 목표지, 앱/CLI 를 막는 게 아님.)
     static func isHook(_ connection: NSXPCConnection) -> Bool {
-        guard let token = connection.eclamAuditToken else { return false }
+        guard let token = connection.argusAuditToken else { return false }
         return matchesHookRequirement(auditToken: token)
     }
 
@@ -81,7 +81,7 @@ enum HelperCallerIdentity {
 /// `NSValue` 박싱을 거쳐 읽는다. SPI 부재 시(미래 OS 변경 등) nil 로 떨어진다.
 extension NSXPCConnection {
     /// connection peer 의 audit token. SPI 부재 시 nil.
-    var eclamAuditToken: audit_token_t? {
+    var argusAuditToken: audit_token_t? {
         let sel = NSSelectorFromString("auditToken")
         guard responds(to: sel) else { return nil }
         // `auditToken` 은 struct 반환이라 KVC `value(forKey:)` 로 NSValue 박싱을

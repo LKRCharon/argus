@@ -66,7 +66,7 @@ final class GeneralPaneViewController: NSViewController {
     /// ADR-0020 업그레이드 트랩 안내 노트. helper가 unavailable(.notFound /
     /// .notRegistered / .registerThrew)일 때만 표시; .enabled / .requiresApproval 때는
     /// 숨긴다 (.requiresApproval은 기존 상태줄 + Open Settings 버튼으로 충분).
-    /// v0.5 P1 — 버전 핸드셰이크 불일치 경고 (구버전 daemon 잔존).
+    /// P1 — 버전 핸드셰이크 불일치 경고 (구버전 daemon 잔존).
     /// `store.helperVersionMismatch` 가 true 일 때만 표시; Reinstall Helper
     /// 액션으로 안내한다.
     /// P1-a (handoff 2026-06-24) — registration 은 `.enabled` 인데 helper 가
@@ -322,7 +322,7 @@ final class GeneralPaneViewController: NSViewController {
 
         // ADR-0020 업그레이드 트랩 안내 노트.
 
-        // v0.5 P1 — 버전 핸드셰이크 불일치 경고 (구버전 daemon 잔존).
+        // P1 — 버전 핸드셰이크 불일치 경고 (구버전 daemon 잔존).
 
         // P1-a — helper 도달 불가 경고 (registered 인데 XPC 무응답).
         helperUnreachableNote.translatesAutoresizingMaskIntoConstraints = false

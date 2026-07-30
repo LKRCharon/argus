@@ -1,6 +1,6 @@
 import Foundation
 
-/// XPC 프로토콜 버전 (v0.5 P1 — 업그레이드 트랩 감지, ADR-0020 후속).
+/// XPC 프로토콜 버전 (P1 — 업그레이드 트랩 감지, ADR-0020 후속).
 /// selector 추가/시그니처 변경 등 앱↔daemon 호환이 깨지는 변경마다 +1.
 /// 앱(`HelperBridge`)이 연결 수립(재수립) 시 `protocolVersion` RPC 1회로
 /// 대조하고, 이 RPC 자체가 없는 pre-handshake daemon 은 reply 타임아웃 +
@@ -9,7 +9,7 @@ public enum HelperProtocolVersion {
     public static let current = 1
 }
 
-@objc public protocol ElectronicClamHelperProtocol {
+@objc public protocol ArgusHelperProtocol {
     func setSleepDisabled(_ enabled: Bool, reply: @escaping (Error?) -> Void)
     func currentState(reply: @escaping (Bool, Error?) -> Void)
 
@@ -49,20 +49,20 @@ public enum HelperProtocolVersion {
     /// The app reads this after reconnect to surface the cause to the user.
     func lastTripReason(reply: @escaping (String?, Error?) -> Void)
 
-    /// v0.3.2 — publish the current "actively-working" agent set so out-of-band
+    /// Publish the current "actively-working" agent set so out-of-band
     /// CLI calls (`argus status --json`) can read it without polling the
     /// filesystem themselves. The app calls this whenever its
     /// `StateStore.activeAgents` set changes (debounced 250ms). IDs include
     /// both `AgentTrace.id` values and synthetic `session:<name>` entries from
-    /// the `eclam session` family.
+    /// the `argus session` family.
     func setActiveAgents(_ ids: [String], reply: @escaping (Error?) -> Void)
 
-    /// v0.3.2 — snapshot of the most recent `setActiveAgents` call.
+    /// Snapshot of the most recent `setActiveAgents` call.
     /// Returns an empty array if the app has never reported one (e.g. helper
     /// just launched, app not running).
     func activeAgents(reply: @escaping ([String], Error?) -> Void)
 
-    /// v0.5 P1 — 버전 핸드셰이크. 항상 `HelperProtocolVersion.current` 를
+    /// P1 — 버전 핸드셰이크. 항상 `HelperProtocolVersion.current` 를
     /// 보고한다. 구버전 daemon 에는 이 selector 가 없어 호출이 에러 핸들러
     /// /무응답으로 끝나므로, 앱은 reply 타임아웃(2.5s)을 "버전 불명(구버전
     /// 추정)" 으로 다룬다 — `HelperBridge.performVersionHandshake`.
@@ -113,7 +113,7 @@ public enum HelperServiceName {
 /// is `sem.wait(timeout:)` — after a timeout the caller reads the value on its
 /// own thread while a *late* XPC callback may still be writing it, so a plain
 /// `var` there is a data race. Every access goes through the lock instead.
-/// Lives in Shared because the app/CLI target and the eclam-hook binary are
+/// Lives in Shared because the app/CLI target and the argus-hook binary are
 /// compiled separately and both need it.
 public final class LockedBox<T> {
     private let lock = NSLock()

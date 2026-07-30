@@ -3,7 +3,7 @@ import OSLog
 
 /// proposal §1 — 외부 trace 선언 로더.
 ///
-/// `~/.config/eclam/traces.d/*.json` 의 `AgentTrace` JSON(단일 객체 또는
+/// `~/.config/argus/traces.d/*.json` 의 `AgentTrace` JSON(단일 객체 또는
 /// 배열)을 읽어 known pool 에 합류시킨다. 형식은 `AgentTrace` 의 Codable
 /// 그대로: `id`/`label`/`globPattern` (+선택 `freshness`/`hookKey`/`comm`).
 /// 새 에이전트를 코드 수정 없이 지원하는 통로이자 커뮤니티 기여 포맷
@@ -20,7 +20,12 @@ enum ExternalTraces {
     private static var lastScan: Date = .distantPast
     private static var loggedFiles: Set<String> = []
 
-    static var directory: String { NSHomeDirectory() + "/.config/eclam/traces.d" }
+    static var directory: String { NSHomeDirectory() + "/.config/argus/traces.d" }
+
+    /// pre-rename 마이그레이션 호환: 구이름 시절의 `~/.config/eclam/traces.d` 를
+    /// 읽기 전용으로만 더 스캔한다 (새 경로가 없거나 비어 있을 때). 사용자의
+    /// 기여 파일을 옮기거나 만들지 않고 불러오기만 한다.
+    static var legacyDirectory: String { NSHomeDirectory() + "/.config/eclam/traces.d" }
 
     static func load(now: Date = Date()) -> [AgentTrace] {
         lock.lock(); defer { lock.unlock() }
@@ -28,37 +33,36 @@ enum ExternalTraces {
         lastScan = now
 
         let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(atPath: directory) else {
-            cached = []
-            return []
-        }
         var out: [AgentTrace] = []
         let decoder = JSONDecoder()
-        for name in entries.sorted().prefix(64) where name.hasSuffix(".json") {
-            let path = directory + "/" + name
-            guard let data = fm.contents(atPath: path) else { continue }
-            var traces: [AgentTrace] = []
-            if let arr = try? decoder.decode([AgentTrace].self, from: data) {
-                traces = arr
-            } else if let one = try? decoder.decode(AgentTrace.self, from: data) {
-                traces = [one]
-            } else {
-                if !loggedFiles.contains(name) {
-                    loggedFiles.insert(name)
-                    log.warning("traces.d/\(name, privacy: .public): not valid AgentTrace JSON — skipped")
-                }
-                continue
-            }
-            for t in traces {
-                let cleanId = HelperServiceName.sanitizeActivitySource(t.id)
-                guard !cleanId.isEmpty, cleanId == t.id else {
-                    if !loggedFiles.contains(name + ":" + t.id) {
-                        loggedFiles.insert(name + ":" + t.id)
-                        log.warning("traces.d/\(name, privacy: .public): id '\(t.id, privacy: .public)' rejected (lowercase [a-z0-9_-.] only)")
+        for dir in scanDirectories(fm) {
+            for name in fileNames(in: dir, fm: fm) {
+                let path = dir + "/" + name
+                guard let data = fm.contents(atPath: path) else { continue }
+                var traces: [AgentTrace] = []
+                if let arr = try? decoder.decode([AgentTrace].self, from: data) {
+                    traces = arr
+                } else if let one = try? decoder.decode(AgentTrace.self, from: data) {
+                    traces = [one]
+                } else {
+                    if !loggedFiles.contains(path) {
+                        loggedFiles.insert(path)
+                        log.warning("traces.d/\(name, privacy: .public): not valid AgentTrace JSON — skipped")
                     }
                     continue
                 }
-                out.append(t)
+                for t in traces {
+                    let cleanId = HelperServiceName.sanitizeActivitySource(t.id)
+                    guard !cleanId.isEmpty, cleanId == t.id else {
+                        if !loggedFiles.contains(path + ":" + t.id) {
+                            loggedFiles.insert(path + ":" + t.id)
+                            log.warning("traces.d/\(name, privacy: .public): id '\(t.id, privacy: .public)' rejected (lowercase [a-z0-9_-.] only)")
+                        }
+                        continue
+                    }
+                    out.append(t)
+                    if out.count >= 128 { break }
+                }
                 if out.count >= 128 { break }
             }
             if out.count >= 128 { break }
@@ -68,5 +72,19 @@ enum ExternalTraces {
         }
         cached = out
         return out
+    }
+
+    /// 새 경로 단독, 또는 새 경로가 비어 있거나 없을 때만 구 경로를 더한다.
+    private static func scanDirectories(_ fm: FileManager) -> [String] {
+        let primary = fileNames(in: directory, fm: fm)
+        if !primary.isEmpty { return [directory] }
+        // pre-rename 마이그레이션 호환 (읽기 전용 폴백).
+        return [directory, legacyDirectory]
+    }
+
+    /// 정렬된 `.json` 파일명, 파일 수 cap 적용. 디렉터리 부재 시 빈 배열.
+    private static func fileNames(in dir: String, fm: FileManager) -> [String] {
+        guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
+        return Array(entries.sorted().filter { $0.hasSuffix(".json") }.prefix(64))
     }
 }

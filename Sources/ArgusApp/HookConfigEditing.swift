@@ -13,18 +13,18 @@ enum HookConfigEditing {
     // MARK: - Constants (single source of truth; HookInstaller reads these)
 
     static let version = 3
-    static let markerBegin = "# >>> eclam-hook"
-    static let markerEnd   = "# <<< eclam-hook"
-    static let featuresInlineMarker = "# eclam-hook"
-    static let jsonVersionKey = "_eclam_hook_version"
-    static let jsonTagKey     = "_eclam"
+    static let markerBegin = "# >>> argus-hook"
+    static let markerEnd   = "# <<< argus-hook"
+    static let featuresInlineMarker = "# argus-hook"
+    static let jsonVersionKey = "_argus_hook_version"
+    static let jsonTagKey     = "_argus"
 
     // MARK: - Command wrapping
 
     /// Shell wrapper used by every platform's installed hook command. If the
     /// app was deleted but the hook entry is still in the agent's config, the
     /// `test -x` branch fails and we exit 0 silently — agents see a clean
-    /// no-op instead of ENOENT noise. This is "C" of the v0.3.3 cleanup story;
+    /// no-op instead of ENOENT noise. This is "C" of the hook cleanup story;
     /// real config removal is handled by the Settings "Uninstall all hooks"
     /// button (B) and the brew cask uninstall_preflight stanza (A).
     static func wrappedCommand(hookBinary: String, source: String) -> String {
@@ -53,14 +53,14 @@ enum HookConfigEditing {
         ]
     }
 
-    static func replaceElectronicClamEntries(in raw: Any?, with new: [String: Any]) -> [Any] {
+    static func replaceArgusEntries(in raw: Any?, with new: [String: Any]) -> [Any] {
         var arr = raw as? [Any] ?? []
         arr.removeAll { ($0 as? [String: Any])?[jsonTagKey] as? Bool == true }
         arr.append(new)
         return arr
     }
 
-    static func stripElectronicClamEntries(in raw: Any?) -> [Any] {
+    static func stripArgusEntries(in raw: Any?) -> [Any] {
         var arr = raw as? [Any] ?? []
         arr.removeAll { ($0 as? [String: Any])?[jsonTagKey] as? Bool == true }
         return arr
@@ -68,17 +68,17 @@ enum HookConfigEditing {
 
     /// Whole-object install transform: given the parsed `settings.json` root,
     /// return it with our Pre/PostToolUse entries (re)inserted and the version
-    /// key stamped. Idempotent — a prior eclam entry is replaced, not
+    /// key stamped. Idempotent — a prior argus entry is replaced, not
     /// duplicated. JSON (de)serialization stays in `HookInstaller`.
     static func claudeRoot(installingInto root: [String: Any], hookBinary: String) -> [String: Any] {
         var root = root
         var hooks = root["hooks"] as? [String: Any] ?? [:]
-        hooks["PreToolUse"]  = replaceElectronicClamEntries(in: hooks["PreToolUse"],
-                                                            with: claudeEntry(hookBinary: hookBinary,
-                                                                              phase: "pre"))
-        hooks["PostToolUse"] = replaceElectronicClamEntries(in: hooks["PostToolUse"],
-                                                            with: claudeEntry(hookBinary: hookBinary,
-                                                                              phase: "post"))
+        hooks["PreToolUse"]  = replaceArgusEntries(in: hooks["PreToolUse"],
+                                                   with: claudeEntry(hookBinary: hookBinary,
+                                                                     phase: "pre"))
+        hooks["PostToolUse"] = replaceArgusEntries(in: hooks["PostToolUse"],
+                                                   with: claudeEntry(hookBinary: hookBinary,
+                                                                     phase: "post"))
         root["hooks"] = hooks
         root[jsonVersionKey] = version
         return root
@@ -90,8 +90,8 @@ enum HookConfigEditing {
         var root = root
         root.removeValue(forKey: jsonVersionKey)
         if var hooks = root["hooks"] as? [String: Any] {
-            hooks["PreToolUse"]  = stripElectronicClamEntries(in: hooks["PreToolUse"])
-            hooks["PostToolUse"] = stripElectronicClamEntries(in: hooks["PostToolUse"])
+            hooks["PreToolUse"]  = stripArgusEntries(in: hooks["PreToolUse"])
+            hooks["PostToolUse"] = stripArgusEntries(in: hooks["PostToolUse"])
             // Drop now-empty arrays.
             if (hooks["PreToolUse"]  as? [Any])?.isEmpty == true { hooks.removeValue(forKey: "PreToolUse") }
             if (hooks["PostToolUse"] as? [Any])?.isEmpty == true { hooks.removeValue(forKey: "PostToolUse") }
@@ -213,7 +213,7 @@ enum HookConfigEditing {
     }
 
     /// Inverse of `mergeFeaturesHooksFlag`: removes our injected
-    /// `hooks = true  # eclam-hook` line. Lines we didn't inject (the
+    /// `hooks = true  # argus-hook` line. Lines we didn't inject (the
     /// user's own `hooks = true`) are left alone — there's no safe way to tell
     /// them apart without the marker comment.
     static func removeInjectedFeaturesFlag(_ text: String) -> String {
@@ -250,7 +250,7 @@ enum HookConfigEditing {
     /// block and our inline-injected `[features]` flag.
     static func codexConfig(uninstallingFrom text: String) -> String {
         let stripped = stripCodexBlock(text)
-        // Also remove our inline-injected `hooks = true # eclam-hook` line, if
+        // Also remove our inline-injected `hooks = true # argus-hook` line, if
         // the install path injected it into a pre-existing `[features]` section.
         return removeInjectedFeaturesFlag(stripped)
     }

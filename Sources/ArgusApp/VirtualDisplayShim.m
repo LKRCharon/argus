@@ -1,4 +1,4 @@
-// ADR-0037 S1 — EClamVirtualDisplay 구현. 비공개 CGVirtualDisplay 계열 SPI 로
+// ADR-0037 S1 — ArgusVirtualDisplay 구현. 비공개 CGVirtualDisplay 계열 SPI 로
 // 보이지 않는 가상 디스플레이를 만들고(생성만 private), public CoreGraphics
 // API 로 메인 디스플레이에 미러한다. 미러·재구성 콜백·디스플레이 ID 조회는 전부
 // public(`CGConfigureDisplayMirrorOfDisplay`/`CGDisplayRegisterReconfiguration
@@ -28,14 +28,14 @@
 @end
 
 // ── 내부 헬퍼 선언 ───────────────────────────────────────────────────────────
-@interface EClamVirtualDisplay ()
+@interface ArgusVirtualDisplay ()
 - (void)reapplyMirror;
 @end
 
-static os_log_t EClamVDLog(void) {
+static os_log_t ArgusVDLog(void) {
     static os_log_t log;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ log = os_log_create("com.jadhvank.eclam", "vdisplay"); });
+    dispatch_once(&once, ^{ log = os_log_create("com.kairong.argus", "vdisplay"); });
     return log;
 }
 
@@ -43,17 +43,17 @@ static os_log_t EClamVDLog(void) {
 // reapplyMirror 자체가 멱등(이미 메인 미러면 skip, 메인이 가상 자신이면 skip)
 // 이라 CGCompleteDisplayConfiguration 이 다시 부르는 이 콜백과 무한루프를 만들지
 // 않는다.
-static void EClamReconfigCallback(CGDirectDisplayID display,
+static void ArgusReconfigCallback(CGDirectDisplayID display,
                                   CGDisplayChangeSummaryFlags flags,
                                   void *userInfo) {
     // "변경 직전" 콜백(kCGDisplayBeginConfigurationFlag)에는 아무것도 하지 않는다.
     if (flags & kCGDisplayBeginConfigurationFlag) return;
     if (userInfo == NULL) return;
-    EClamVirtualDisplay *anchor = (__bridge EClamVirtualDisplay *)userInfo;
+    ArgusVirtualDisplay *anchor = (__bridge ArgusVirtualDisplay *)userInfo;
     [anchor reapplyMirror];
 }
 
-@implementation EClamVirtualDisplay {
+@implementation ArgusVirtualDisplay {
     id _display;                 // 진짜 CGVirtualDisplay 인스턴스
     CGDirectDisplayID _displayID;
     dispatch_queue_t _queue;
@@ -73,13 +73,13 @@ static void EClamReconfigCallback(CGDirectDisplayID display,
     Class settingsCls = NSClassFromString(@"CGVirtualDisplaySettings");
     Class modeCls     = NSClassFromString(@"CGVirtualDisplayMode");
     if (!descCls || !displayCls || !settingsCls || !modeCls) {
-        os_log_error(EClamVDLog(),
+        os_log_error(ArgusVDLog(),
             "CGVirtualDisplay SPI absent on this macOS; clamshell lock guard unavailable");
         return NO;
     }
 
     @try {
-        _queue = dispatch_queue_create("com.jadhvank.eclam.vdisplay", DISPATCH_QUEUE_SERIAL);
+        _queue = dispatch_queue_create("com.kairong.argus.vdisplay", DISPATCH_QUEUE_SERIAL);
 
         // 1) Descriptor — KVC 로 설정(프로퍼티 이름 드리프트에 견고). 1920x1080,
         //    물리 크기는 ~81 DPI(비-retina)가 되도록 600x340mm.
@@ -99,19 +99,19 @@ static void EClamReconfigCallback(CGDirectDisplayID display,
             void (^termination)(void) = ^{ /* OS 가 디스플레이 회수 시 호출 */ };
             [descriptor setValue:termination forKey:@"terminationHandler"];
         } @catch (NSException *e) {
-            os_log(EClamVDLog(), "terminationHandler unset (optional): %{public}s",
+            os_log(ArgusVDLog(), "terminationHandler unset (optional): %{public}s",
                    e.reason.UTF8String ?: "");
         }
 
         // 2) 가상 디스플레이 생성. 헤드리스/WindowServer 부재 시 nil 가능.
         if (![displayCls instancesRespondToSelector:@selector(initWithDescriptor:)]) {
-            os_log_error(EClamVDLog(), "CGVirtualDisplay -initWithDescriptor: missing");
+            os_log_error(ArgusVDLog(), "CGVirtualDisplay -initWithDescriptor: missing");
             [self teardown];
             return NO;
         }
         CGVirtualDisplay *display = [[displayCls alloc] initWithDescriptor:descriptor];
         if (!display) {
-            os_log_error(EClamVDLog(),
+            os_log_error(ArgusVDLog(),
                 "initWithDescriptor: returned nil (headless / no WindowServer session?)");
             [self teardown];
             return NO;
@@ -119,7 +119,7 @@ static void EClamReconfigCallback(CGDirectDisplayID display,
 
         // 3) Mode + Settings — 1920x1080@60, hiDPI off.
         if (![modeCls instancesRespondToSelector:@selector(initWithWidth:height:refreshRate:)]) {
-            os_log_error(EClamVDLog(), "CGVirtualDisplayMode -initWithWidth:height:refreshRate: missing");
+            os_log_error(ArgusVDLog(), "CGVirtualDisplayMode -initWithWidth:height:refreshRate: missing");
             [self teardown];
             return NO;
         }
@@ -129,12 +129,12 @@ static void EClamReconfigCallback(CGDirectDisplayID display,
         [settings setValue:@0       forKey:@"hiDPI"];
 
         if (![display respondsToSelector:@selector(applySettings:)]) {
-            os_log_error(EClamVDLog(), "CGVirtualDisplay -applySettings: missing");
+            os_log_error(ArgusVDLog(), "CGVirtualDisplay -applySettings: missing");
             [self teardown];
             return NO;
         }
         if (![display applySettings:settings]) {
-            os_log_error(EClamVDLog(), "CGVirtualDisplay applySettings: returned NO");
+            os_log_error(ArgusVDLog(), "CGVirtualDisplay applySettings: returned NO");
             [self teardown];
             return NO;
         }
@@ -142,7 +142,7 @@ static void EClamReconfigCallback(CGDirectDisplayID display,
         CGDirectDisplayID vid = 0;
         if ([display respondsToSelector:@selector(displayID)]) vid = display.displayID;
         if (vid == 0) {
-            os_log_error(EClamVDLog(), "virtual display has id 0; aborting mirror");
+            os_log_error(ArgusVDLog(), "virtual display has id 0; aborting mirror");
             [self teardown];
             return NO;
         }
@@ -152,14 +152,14 @@ static void EClamReconfigCallback(CGDirectDisplayID display,
 
         // 4) public CoreGraphics 미러 + 재구성 콜백 등록.
         [self reapplyMirror];
-        CGDisplayRegisterReconfigurationCallback(EClamReconfigCallback, (__bridge void *)self);
+        CGDisplayRegisterReconfigurationCallback(ArgusReconfigCallback, (__bridge void *)self);
         _reconfigRegistered = YES;
         _active = YES;
-        os_log(EClamVDLog(), "clamshell lock guard: virtual display anchor active (id=%u)", vid);
+        os_log(ArgusVDLog(), "clamshell lock guard: virtual display anchor active (id=%u)", vid);
         return YES;
     } @catch (NSException *ex) {
         // KVC 키 부재 등 인터페이스가 실측과 달라졌을 때 — 크래시 대신 NO.
-        os_log_error(EClamVDLog(),
+        os_log_error(ArgusVDLog(),
             "CGVirtualDisplay interface differs from expected (%{public}s); guard disabled",
             ex.reason.UTF8String ?: "?");
         [self teardown];
@@ -169,7 +169,7 @@ static void EClamReconfigCallback(CGDirectDisplayID display,
 
 - (void)stop {
     if (_reconfigRegistered) {
-        CGDisplayRemoveReconfigurationCallback(EClamReconfigCallback, (__bridge void *)self);
+        CGDisplayRemoveReconfigurationCallback(ArgusReconfigCallback, (__bridge void *)self);
         _reconfigRegistered = NO;
     }
     if (_displayID != 0) {
@@ -209,7 +209,7 @@ static void EClamReconfigCallback(CGDirectDisplayID display,
 - (void)scheduleExternalTeardown {
     if (_stopScheduled) return;
     _stopScheduled = YES;
-    os_log(EClamVDLog(),
+    os_log(ArgusVDLog(),
         "clamshell lock guard: real external display attached — yielding anchor immediately (no re-mirror)");
     dispatch_async(dispatch_get_main_queue(), ^{
         [self stop];

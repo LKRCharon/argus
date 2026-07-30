@@ -1,6 +1,6 @@
 import Foundation
 
-/// `eclam help` — static usage block.
+/// `argus help` — static usage block.
 enum HelpCommand: CLISubcommand {
     static let usage = """
     Argus — menu bar utility to keep macOS awake while agents work.
@@ -10,13 +10,13 @@ enum HelpCommand: CLISubcommand {
       argus off
       argus status [--json]
       argus repair                         (repair a wedged/unreachable helper)
-      eclam keep --while <pid>
-      eclam watch <agent> [--grace s] [--check-interval s] [--max minutes] [--json]
-      eclam session start <name> [--message <text>] [--json]
-      eclam session stop <name>
-      eclam session list [--json]
-      eclam debug [agents] [--json]
-      eclam help
+      argus keep --while <pid>
+      argus watch <agent> [--grace s] [--check-interval s] [--max minutes] [--json]
+      argus session start <name> [--message <text>] [--json]
+      argus session stop <name>
+      argus session list [--json]
+      argus debug [agents] [--json]
+      argus help
 
     EXIT CODES:
       0  success

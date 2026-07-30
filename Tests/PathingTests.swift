@@ -53,8 +53,8 @@ private func testSanitize() {
         SanitizeCase(input: "/Users/foo/My Projects/work",
                      expected: "Users-foo-My-Projects-work"),
         // 루트 바로 아래 — 선두 `-` 제거 확인
-        SanitizeCase(input: "/eclam",
-                     expected: "eclam"),
+        SanitizeCase(input: "/argus",
+                     expected: "argus"),
     ]
 
     for c in cases {

@@ -20,7 +20,7 @@ Describe the feature in as much detail as you have. Screenshots, mockups, or she
 
 ## PRINCIPLES alignment
 
-Electronic Clam has a [product constitution](../../docs/PRINCIPLES.md). Please indicate which principle your proposal aligns with, or note if it requires an exception.
+Argus has a [product constitution](../../docs/PRINCIPLES.md). Please indicate which principle your proposal aligns with, or note if it requires an exception.
 
 > *This proposal aligns with Principle N (…) because …*
 

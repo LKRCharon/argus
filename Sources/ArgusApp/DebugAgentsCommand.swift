@@ -73,7 +73,7 @@ enum DebugAgentsCommand {
         }
         print("")
 
-        print("PID-file fallback (/tmp/eclam_working_pids/*):")
+        print("PID-file fallback (<tmp>/argus_working_pids/*):")
         if snap.pidFileSources.isEmpty {
             print("  (no fresh entries)")
         } else {

@@ -83,7 +83,7 @@ final class StateStore {
         }
     }
 
-    /// ElectronicClam-managed user toggle for "Keep Mac Awake". The detector layer
+    /// Argus-managed user toggle for "Keep Mac Awake". The detector layer
     /// produces `activeAgents`; the union of `manualToggle ∨ (mode rule)` is what
     /// flips the helper.
     private(set) var manualToggle: Bool = false
@@ -99,7 +99,7 @@ final class StateStore {
     private(set) var registration: RegistrationView = .notRegistered
     private(set) var lastError: String?
 
-    /// v0.5 P1 — 버전 핸드셰이크 결과 (`HelperBridge.performVersionHandshake`
+    /// P1 — 버전 핸드셰이크 결과 (`HelperBridge.performVersionHandshake`
     /// 가 연결 수립/재수립마다 1회 갱신). true ⇒ 살아있는 daemon 이 앱과
     /// 다른(대개 업그레이드 후 잔존한 구버전) 프로토콜을 말한다 —
     /// Settings→General 권한 섹션이 Reinstall Helper 안내를 노출.
@@ -155,7 +155,7 @@ final class StateStore {
     /// FortiClient/SSL VPN 을 자동 탐지한다.
     private(set) var vpnServiceName: String
 
-    /// v0.4.0 — User explicitly forced sleep on despite active auto signals.
+    /// User explicitly forced sleep on despite active auto signals.
     /// Set by a double-left-click on the menu bar icon (ADR-0010). Suppresses
     /// every "would have kept awake" branch except `manualToggle`. Cleared as
     /// soon as the user single-clicks (which means "I changed my mind, follow
@@ -215,11 +215,11 @@ final class StateStore {
     /// Raw `kIOPSPowerSourceStateKey == ACPower`. May report `true` even when
     /// the adapter is too weak to actually charge. See `effectiveACConnected`.
     private(set) var acConnected: Bool = true
-    /// v0.3.4 — `kIOPSIsChargingKey`. Combined with `acConnected` to decide
+    /// `kIOPSIsChargingKey`. Combined with `acConnected` to decide
     /// whether the laptop is genuinely on AC or pretend-AC (weak adapter +
     /// heavy load). Always `true` when at 100% on AC (charge stops).
     private(set) var isCharging: Bool = false
-    /// v0.3.4 — `ProcessInfo.processInfo.isLowPowerModeEnabled`. User-stated
+    /// `ProcessInfo.processInfo.isLowPowerModeEnabled`. User-stated
     /// "battery matters more than performance" — policies tighten one notch.
     private(set) var lowPowerMode: Bool = false
     private(set) var thermalState: ProcessInfo.ThermalState = .nominal
@@ -228,11 +228,11 @@ final class StateStore {
     private(set) var thermalPressureLevel: Int?
     private(set) var lidClosed: Bool = false
     private(set) var extDisplayPresent: Bool = false
-    /// v0.4.0 — Battery temperature in °C (from `kIOPSTemperatureKey` if the
+    /// Battery temperature in °C (from `kIOPSTemperatureKey` if the
     /// power source publishes it; raw value is centi-Kelvin so the read code
     /// divides by 100 and subtracts 273.15). `nil` ⇒ no battery / not reported.
     private(set) var batteryTempCelsius: Double?
-    /// v0.4.0 — Phase-2 sensor snapshot (SMC). All nil on Intel or when SMC
+    /// Phase-2 sensor snapshot (SMC). All nil on Intel or when SMC
     /// keys aren't exposed for the current model. Sampled every 5s by the
     /// thermal poller.
     private(set) var cpuTempCelsius: Double?
@@ -258,7 +258,7 @@ final class StateStore {
         }
     }
 
-    /// v0.3.4 — "effective AC" treats a weak adapter as battery. AC is real
+    /// "effective AC" treats a weak adapter as battery. AC is real
     /// only when the source claims AC AND (we're actively charging OR battery
     /// is already at ≥95%, which is when charging stops normally).
     var effectiveACConnected: Bool {
@@ -283,8 +283,8 @@ final class StateStore {
     private static let remoteIdleTimeoutKey     = "RemoteIdleTimeoutMin"
     private static let remoteCountsLegacyKey    = "RemoteCountsAsActivity"  // pre-ADR-0016
     private static let safetySettingsKey        = "SafetySettings"
-    /// v0.5 ADR-0006 §B — the documented "Default (5)" detection set. This was
-    /// left at `["claude"]` when the v0.5 agent trim landed, so codex / cursor /
+    /// ADR-0006 §B — the documented "Default (5)" detection set. This was
+    /// left at `["claude"]` when the agent trim landed, so codex / cursor /
     /// opencode were never watched unless the user opened Settings → Agents.
     private static let defaultWatchedAgents: Set<String> = Set(AgentTrace.M1Defaults.map(\.id))
     /// One-shot marker for the `["claude"]`-stored-default migration below.
@@ -453,7 +453,7 @@ final class StateStore {
         onChange?()
     }
 
-    /// v0.4.0 — double-left-click handler. Forces sleep even when auto signals
+    /// Double-left-click handler. Forces sleep even when auto signals
     /// (agent activity, remote session) would otherwise keep us awake.
     func setManualOverrideOff(_ on: Bool) {
         guard manualOverrideOff != on else { return }
@@ -561,7 +561,7 @@ final class StateStore {
         onChange?()
     }
 
-    /// v0.5 P1 — 버전 핸드셰이크 결과 반영. 변화 없으면 no-op (일치 시 기존
+    /// P1 — 버전 핸드셰이크 결과 반영. 변화 없으면 no-op (일치 시 기존
     /// 동작 비용 0 — onChange 재수렴조차 일으키지 않는다).
     func update(helperVersionMismatch: Bool) {
         guard self.helperVersionMismatch != helperVersionMismatch else { return }
@@ -730,7 +730,7 @@ final class StateStore {
         if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
     }
 
-    /// v0.4.0 — append one sample to the rolling thermal history. Caller is
+    /// Append one sample to the rolling thermal history. Caller is
     /// expected to throttle (~5s). Trims to the most recent 60 seconds.
     func pushThermalSample(_ sample: ThermalSample) {
         let work = {

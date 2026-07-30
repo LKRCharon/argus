@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# power-cost.sh — Electronic Clam 자체 자원 비용 측정 (proposal §7).
+# power-cost.sh — Argus 자체 자원 비용 측정 (proposal §7).
 #
 # 비-sudo 근사: ps 샘플링으로 앱+helper의 평균/최대 CPU%와 RSS를 잰다.
 # 진짜 에너지(전력 임팩트)는 sudo가 필요하다:
 #   sudo powermetrics --samplers tasks --show-process-energy -i 1000 -n 60 \
-#     | grep -iE "ElectronicClam|eclam"
+#     | grep -iE "Argus|argus"
 #
 # 사용법: ./scripts/power-cost.sh [지속초=60]
 set -euo pipefail
 
 DUR="${1:-60}"
 INT=2
-APP_PID="$(pgrep -f 'ElectronicClam.app/Contents/MacOS/ElectronicClam$' | head -1 || true)"
-HELPER_PID="$(pgrep -x ElectronicClamHelper | head -1 || true)"
+APP_PID="$(pgrep -f 'Argus.app/Contents/MacOS/Argus$' | head -1 || true)"
+HELPER_PID="$(pgrep -x ArgusHelper | head -1 || true)"
 
 if [[ -z "$APP_PID" ]]; then
-    echo "ERROR: ElectronicClam.app 프로세스를 찾지 못함 — 앱을 먼저 실행하세요." >&2
+    echo "ERROR: Argus.app 프로세스를 찾지 못함 — 앱을 먼저 실행하세요." >&2
     exit 1
 fi
 echo "==> 측정 대상: app=$APP_PID helper=${HELPER_PID:-없음(권한대기?)} / ${DUR}s, ${INT}s 간격"

@@ -1,9 +1,9 @@
 // Standalone test program for `HelperServiceName.sanitizeActivitySource`.
 // Compiled together with Sources/Shared/HelperProtocol.swift:
 //
-//   swiftc -o /tmp/eclam_helpertests \
+//   swiftc -o /tmp/argus_helpertests \
 //     Sources/Shared/HelperProtocol.swift Tests/HelperProtocolTests.swift
-//   /tmp/eclam_helpertests
+//   /tmp/argus_helpertests
 //
 // No XCTest dependency. Uses a `@main` entry point (top-level code is only
 // allowed in a file literally named `main.swift`, which this is not). Exits

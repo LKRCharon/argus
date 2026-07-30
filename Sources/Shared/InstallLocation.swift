@@ -11,7 +11,7 @@ import Foundation
 /// Why the two blocked conditions are dev-safe (no escape hatch needed): local
 /// builds are structurally never quarantined or translocated. Gatekeeper only
 /// stamps `com.apple.quarantine` on *downloaded* files, and translocation only
-/// happens when Finder opens a quarantined app — so `build/ElectronicClam.app`
+/// happens when Finder opens a quarantined app — so `build/Argus.app`
 /// (ad-hoc or Developer-ID, `open build/...`) always passes. See ADR-0038
 /// "왜 이 게이트는 dev-safe 한가".
 ///

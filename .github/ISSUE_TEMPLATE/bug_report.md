@@ -28,12 +28,12 @@ What actually happened.
 
 Please attach the output of both commands. Without this, most bugs are very hard to diagnose.
 
-**`eclam status`**
+**`argus status`**
 ```
 (paste output here)
 ```
 
-**`eclam debug agents`**
+**`argus debug agents`**
 ```
 (paste output here)
 ```
@@ -42,7 +42,7 @@ Please attach the output of both commands. Without this, most bugs are very hard
 
 - **macOS version**: (e.g. 15.4.1)
 - **Mac model**: (e.g. MacBook Pro M3 14", MacBook Air M2)
-- **Electronic Clam version**: (from menu → About, or `eclam --version`)
+- **Argus version**: (from menu → About, or `argus --version`)
 - **Install method**: Homebrew cask / built from source / other
 - **Agents in use**: (e.g. Claude Code, Codex, custom glob)
 

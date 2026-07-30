@@ -425,7 +425,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // (The lines now render inside `MenuStatusHeaderView` — the old per-line
     // disabled NSMenuItems were dimmed by NSMenu and hard to read.)
 
-    /// v0.5 — status-line emoji → monochrome SF Symbols.
+    /// Status-line emoji → monochrome SF Symbols.
     private static let statusSymbols: [Character: String] = [
         "🔋": "battery.100",
         "🌡": "thermometer.medium",

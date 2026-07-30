@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-/// v0.3.2 — process-wide snapshot of "actively-working" agent ids reported by
+/// Process-wide snapshot of "actively-working" agent ids reported by
 /// the app via `setActiveAgents`. Lives outside `HelperService` because the
 /// XPC listener creates a fresh `HelperService` per connection (ADR-0002 §6),
 /// but the published set must survive across those short-lived instances.
@@ -31,10 +31,10 @@ final class ActiveAgentsStore {
     }
 }
 
-final class HelperService: NSObject, ElectronicClamHelperProtocol {
+final class HelperService: NSObject, ArgusHelperProtocol {
     private let log = Logger(subsystem: "com.kairong.argus", category: "helper")
 
-    /// 이 연결의 caller 가 `eclam-hook` 인가 (ADR-0023 §④ 방법 A). hook 은
+    /// 이 연결의 caller 가 `argus-hook` 인가 (ADR-0023 §④ 방법 A). hook 은
     /// `pingActivity` 만 호출해야 하므로 전원/상태 변경 메서드를 거부한다.
     /// `HelperListenerDelegate` 가 connection 의 코드사인 정체성으로 판정해
     /// 주입한다 (dev-adhoc 빌드는 항상 false — 식별 불가 graceful fallback).
@@ -155,7 +155,7 @@ final class HelperService: NSObject, ElectronicClamHelperProtocol {
         reply(ActiveAgentsStore.shared.snapshot(), nil)
     }
 
-    /// v0.5 P1 — 버전 핸드셰이크. 상수 보고만; 상태 없음.
+    /// P1 — 버전 핸드셰이크. 상수 보고만; 상태 없음.
     func protocolVersion(reply: @escaping (Int) -> Void) {
         reply(HelperProtocolVersion.current)
     }

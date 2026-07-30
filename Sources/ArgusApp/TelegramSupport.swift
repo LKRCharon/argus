@@ -63,7 +63,7 @@ struct TelegramSettings: Codable, Equatable {
         self.notifyAwakeStart = try c.decodeIfPresent(Bool.self,   forKey: .notifyAwakeStart) ?? false
         self.notifyAwakeEnd   = try c.decodeIfPresent(Bool.self,   forKey: .notifyAwakeEnd) ?? true
         self.notifySafety     = try c.decodeIfPresent(Bool.self,   forKey: .notifySafety) ?? true
-        // v0.5.x 추가 — 기존 telegram.json 에는 없음 → off.
+        // 나중에 추가된 필드 — 기존 telegram.json 에는 없음 → off.
         self.digestIntervalMin = try c.decodeIfPresent(Int.self, forKey: .digestIntervalMin) ?? 0
     }
 }

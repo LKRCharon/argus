@@ -42,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Most recently submitted helper value, to suppress no-op writes.
     private var lastWrittenSleepDisabled: Bool?
 
-    /// v0.3.2 — 250ms debounce for `setActiveAgents` XPC pushes. Avoids
+    /// 250ms debounce for `setActiveAgents` XPC pushes. Avoids
     /// chattering the helper when the detector and SessionWatcher fan out
     /// near-simultaneous tick events.
     private var pendingActiveAgentsPush: DispatchWorkItem?
@@ -183,7 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let detector = AgentDetector()
         detector.onChange = { [weak self] active in
             self?.store.update(activeAgents: active)
-            // v0.3.2 — propagate to the helper (debounced) so the CLI's
+            // Propagate to the helper (debounced) so the CLI's
             // `status --json` can read the same set out of band.
             self?.schedulePushActiveAgents(active)
         }
@@ -202,7 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self = self else { return }
                 self.menuBar?.refresh()
                 self.scheduleConverge()
-                // v0.3.2 — if the helper just transitioned to `.enabled`
+                // If the helper just transitioned to `.enabled`
                 // (e.g. user approved the Login Item), start every long-lived
                 // subsystem we previously gated on registration.
                 self.startSubsystemsIfNewlyEnabled()
@@ -370,7 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.relocalize()
     }
 
-    // MARK: - v0.3.2 — live registration transition
+    // MARK: - Live registration transition
 
     /// Idempotently brings up detector / remote / safety / heartbeat the moment
     /// the helper becomes `.enabled`. Covers the `.requiresApproval → .enabled`
@@ -405,13 +405,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 + "green while it works, and your Mac stays awake. Click the "
                 + "shell anytime to toggle.")
             Task { await ReleaseNotifier.shared.notifyInfo(
-                identifier: "eclam.onboarding.enabled", title: title, body: body) }
+                identifier: "argus.onboarding.enabled", title: title, body: body) }
         }
         // Refresh helper state so the menu reflects current SleepDisabled.
         bridge?.refreshCurrentState()
     }
 
-    // MARK: - v0.3.2 — debounced activeAgents push
+    // MARK: - Debounced activeAgents push
 
     private func schedulePushActiveAgents(_ active: Set<String>) {
         pendingActiveAgentsPush?.cancel()
