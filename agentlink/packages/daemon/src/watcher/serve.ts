@@ -371,7 +371,7 @@ export async function serveWatch(
         // match no command branch below and are just noise in the log.
         const PHONE_COMMANDS = new Set([
           "list-sessions", "new-session", "user-input", "permission-response",
-          "codex-threads", "codex-resume", "codex-input", "codex-interrupt",
+          "codex-threads", "codex-resume", "codex-history-cancel", "codex-input", "codex-interrupt",
           "cloud-session", "remote-control",
         ]);
         if (payload?.kind && PHONE_COMMANDS.has(payload.kind)) {
@@ -402,6 +402,11 @@ export async function serveWatch(
           } catch (e) {
             await sendPayload({ kind: "codex-error", note: `${e instanceof Error ? e.message : e}` });
           }
+        } else if (payload?.kind === "codex-history-cancel" && payload.sessionId) {
+          // The legacy Mac watcher returns one completed snapshot, so there is
+          // no cancellable paged worker here.  Accept the shared command as a
+          // no-op; newer Hosts stop their read, and Android ignores an obsolete
+          // legacy reply once its local request has been cancelled.
         } else if (payload?.kind === "codex-input" && payload.sessionId && payload.text) {
           // Real two-way control: this lands in the same thread the desktop app
           // or VS Code has open, not a separate headless run.

@@ -103,7 +103,17 @@ describe("relay", () => {
   test("health 端点", async () => {
     const res = await fetch(`http://127.0.0.1:${server.port}/health`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean };
+    const body = (await res.json()) as {
+      ok: boolean;
+      relay: { channels: number; bufferedFrames: number; receivedMessages: number };
+    };
     expect(body.ok).toBe(true);
+    expect(body.relay).toEqual(expect.objectContaining({
+      channels: expect.any(Number),
+      bufferedFrames: expect.any(Number),
+      receivedMessages: expect.any(Number),
+    }));
+    expect(Object.keys(body.relay)).not.toContain("token");
+    expect(Object.keys(body.relay)).not.toContain("payload");
   });
 });

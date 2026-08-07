@@ -124,7 +124,12 @@ export class WsConn {
 // ---------- 配对与通道 ----------
 
 function deviceInfo(): DeviceInfo {
-  return { name: hostname(), platform: process.platform };
+  // A headless host often has an opaque OS hostname (for example `node19`).
+  // Let its user-facing pairing identity be configured without changing its
+  // cryptographic identity or the relay protocol.
+  const name = process.env.AGENTLINK_DEVICE_NAME?.trim() || hostname();
+  const platform = process.env.AGENTLINK_DEVICE_PLATFORM?.trim() || process.platform;
+  return { name, platform };
 }
 
 async function doPairing(conn: WsConn, session: PairingSession, role: "A" | "B"): Promise<PairingResult> {
@@ -171,7 +176,7 @@ function finalizePair(identity: KeyPair, result: PairingResult): Uint8Array {
 }
 
 export async function joinChan(conn: WsConn, longTermKey: Uint8Array): Promise<SecureChannel> {
-  conn.send({ op: "join-chan", token: deriveChanToken(longTermKey) });
+  conn.send({ op: "join-chan", token: deriveChanToken(longTermKey), endpoint: "host" });
   const res = await conn.wait((m) => m.op === "chan-joined" || m.op === "error");
   if (res.op === "error") throw new Error(`进入设备通道失败: ${res.message ?? res.code}`);
   return new SecureChannel(longTermKey);
