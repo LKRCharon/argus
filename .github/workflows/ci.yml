@@ -22,10 +22,33 @@ jobs:
     runs-on: macos-14
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Smoke test
         # 러너 키체인에는 Developer ID 인증서가 없으므로 ad-hoc 서명으로 빌드.
         # (build.sh 기본값이 Developer ID — ADR-0028. 서명/노터라이즈 검증은
         # release.sh 수동 단계의 몫이고, CI는 컴파일·테스트·CLI 동작만 본다.)
         run: ARGUS_SIGN_ID=- ./scripts/smoke.sh
+
+  android:
+    name: Android debug build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon

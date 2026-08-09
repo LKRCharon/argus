@@ -54,6 +54,11 @@ open build/Argus.app
 
 The Android companion APK is available in [Releases](https://github.com/LKRCharon/argus/releases).
 
+Its source lives in [`android/`](android/). The public build contains no relay
+endpoint: deploy your own relay, then enter its `wss://` address in the app
+Settings page or scan a pairing QR link that provides it. See
+[`android/README.md`](android/README.md) for build and device-test instructions.
+
 The phone companion requires a self-hosted relay server. See `agentlink/deploy/` for a ready-made systemd + nginx + Let's Encrypt setup — any VPS with a domain will do. Once deployed, enter your relay's `wss://` address in **Settings > Remote Sync**. The daemon source lives in the `agentlink/` directory of this repo and starts automatically when configured.
 
 ## Usage

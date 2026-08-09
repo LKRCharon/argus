@@ -1,13 +1,13 @@
 # AGENTS.md — Argus
 
-Menu-bar keep-awake app for macOS plus its phone companion. Three repos, one
-product; read the section for whichever one you are touching.
+Menu-bar keep-awake app for macOS plus its phone companion. Three components,
+one product; read the section for whichever one you are touching.
 
 | Repo | Path | Stack |
 |---|---|---|
 | Argus (this repo) | this checkout | Swift / AppKit, no SwiftUI, no SPM manifest — `scripts/build.sh` drives swiftc directly |
 | agentlink | `agentlink/` in this repo | TypeScript / Bun workspaces (daemon + wire + relay) |
-| Android client | a sibling checkout (`android/`) | Kotlin / Compose, Gradle (`./gradlew`) |
+| Android client | `android/` in this repo | Kotlin / Compose, Gradle (`./gradlew`) |
 
 Stack is Swift, Kotlin and TypeScript. Do not introduce another language —
 including throwaway scripts for editing source. Batch edits belong in the
