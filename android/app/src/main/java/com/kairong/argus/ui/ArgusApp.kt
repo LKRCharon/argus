@@ -1299,6 +1299,8 @@ private fun ConnectionMenuButton(vm: ArgusViewModel) {
             expanded = menu,
             onDismissRequest = { menu = false },
             modifier = Modifier.width(288.dp),
+            containerColor = c.sheet,
+            tonalElevation = 0.dp,
         ) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
