@@ -152,6 +152,8 @@ class ArgusViewModel : ViewModel() {
     private var clientSeq = 0
     /** Monotonic per-process id; queued frames from a superseded read are ignored. */
     private var historyRequestSeq = 0L
+    /** A cold-start deep link can arrive before Keystore-backed state is ready. */
+    private var pendingPairLink: Pair<String, String?>? = null
 
     fun init(activity: ComponentActivity) {
         if (store != null) return
@@ -210,6 +212,10 @@ class ArgusViewModel : ViewModel() {
                 // Cached first: a cold start shows the last known state while
                 // the channel reconnects, instead of an empty list.
                 if (sessions.isEmpty()) sessions = restored
+                pendingPairLink?.also {
+                    pendingPairLink = null
+                    applyPairLink(it.first, it.second)
+                }
             }
         }
     }
@@ -1029,8 +1035,12 @@ class ArgusViewModel : ViewModel() {
 
     /** Deep-link / scan entry: optionally switch relay, then pair right away. */
     fun applyPairLink(code: String, relay: String?) {
-        relay?.takeIf { it.isNotBlank() }?.let { updateRelayUrl(it) }
         overlay = Overlay.Pair
+        if (store == null || identity == null) {
+            pendingPairLink = Pair(code, relay)
+            return
+        }
+        relay?.takeIf { it.isNotBlank() }?.let { updateRelayUrl(it) }
         pair(code)
     }
 

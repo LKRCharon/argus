@@ -20,6 +20,10 @@ Install a locally built debug APK without clearing pairing data:
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+Debug builds use the `com.kairong.argus.debug` application ID, so they can be
+installed beside the signed release app without replacing its identity or
+pairings.
+
 Run device-only Keystore tests with `scripts/test-device.sh`. Do not use
 `connectedDebugAndroidTest`: Android Gradle Plugin uninstalls the app afterwards
 and would erase its identity and pairings.
