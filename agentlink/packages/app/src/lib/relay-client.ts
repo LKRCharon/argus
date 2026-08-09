@@ -184,7 +184,7 @@ export class RelayClient {
   private async joinChannel(longTermKey: Uint8Array): Promise<void> {
     const token = deriveChanToken(longTermKey);
     this.chan = new SecureChannel(longTermKey);
-    this.send({ op: "join-chan", token });
+    this.send({ op: "join-chan", token, endpoint: "controller" });
     const res = await this.wait((m) => m.op === "chan-joined" || m.op === "error");
     if (res.op === "error") throw new Error(res.message ?? res.code);
     this.onConnectionChange?.("channel-ready");

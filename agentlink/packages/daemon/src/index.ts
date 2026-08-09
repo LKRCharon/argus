@@ -2,7 +2,7 @@
  * agentlink daemon CLI
  *
  *   agentlink init                生成/查看设备身份
- *   agentlink pair                生成配对码，等待手机端配对（配对后进入在线服务）
+ *   agentlink pair [--watch]      生成配对码，可在配对后进入 Host 监听
  *   agentlink probe <配对码>       模拟手机端加入并发送 echo 验证链路
  *   agentlink up                  常驻在线，等待已配对设备连接
  *   agentlink peers               列出已配对设备
@@ -26,7 +26,7 @@ function usage(): void {
 
 用法:
   agentlink init                生成/查看设备身份
-  agentlink pair                生成配对码，等待手机端配对
+  agentlink pair [--watch]      生成配对码，--watch 配对后直接进入 Host 监听
   agentlink probe <NNNN-XXXXXX> 模拟手机端加入并发送 echo
   agentlink up                  常驻在线，等待已配对设备连接
   agentlink peers               列出已配对设备
@@ -49,7 +49,17 @@ async function main(): Promise<void> {
       break;
     }
     case "pair": {
-      await runPair({ json: args.includes("--json"), serve: !args.includes("--no-serve") });
+      const watchAfterPair = args.includes("--watch");
+      await runPair({
+        json: args.includes("--json"),
+        // The historical default keeps the echo service alive. A host instead
+        // reconnects through runWatch so the real Codex bridge owns the channel.
+        serve: !watchAfterPair && !args.includes("--no-serve"),
+      });
+      if (watchAfterPair) {
+        const hookPort = flagValue(args, "--hook-port");
+        await runWatch(hookPort ? { hookPort: Number(hookPort) } : {});
+      }
       break;
     }
     case "probe": {

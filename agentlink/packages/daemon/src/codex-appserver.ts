@@ -16,10 +16,20 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 /** Where the Codex desktop app keeps its bundled binary. */
 const APP_BUNDLED = "/Applications/ChatGPT.app/Contents/Resources/codex";
+
+/** Resolve a command from PATH without asking a shell to interpret it. */
+function commandOnPath(command: string): string | null {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, command);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
 
 export interface CodexThread {
   id: string;
@@ -158,12 +168,20 @@ export class CodexAppServer {
 
   constructor(private port = 9099) {}
 
-  /** Codex binary to drive: prefer the desktop app's, fall back to a CLI on PATH. */
+  /**
+   * Codex binary to drive.
+   *
+   * Desktop installs keep a bundled binary, but a headless Linux host normally
+   * has only a CLI on PATH. `CODEX_BIN` is deliberately first so a user-level
+   * service can pin its own binary without relying on a login shell's PATH.
+   */
   static binaryPath(): string | null {
+    const configured = process.env.CODEX_BIN?.trim();
+    if (configured) return configured;
     if (existsSync(APP_BUNDLED)) return APP_BUNDLED;
     const standalone = join(homedir(), ".codex/packages/standalone/current/codex");
     if (existsSync(standalone)) return standalone;
-    return null;
+    return commandOnPath("codex");
   }
 
   /** Spawn app-server (if needed) and complete the JSON-RPC handshake. */
@@ -171,7 +189,7 @@ export class CodexAppServer {
     if (this.ready) return this.ready;
     this.ready = (async () => {
       const bin = CodexAppServer.binaryPath();
-      if (!bin) throw new Error("未找到 codex 可执行文件（需安装 Codex 桌面版）");
+      if (!bin) throw new Error("未找到 codex 可执行文件（设置 CODEX_BIN 或将 codex 加入 PATH）");
 
       // Reuse an already-listening server rather than fighting it for the port:
       // the desktop app may have one up, and two servers on one port is a
@@ -192,6 +210,10 @@ export class CodexAppServer {
       await this.call("initialize", {
         clientInfo: { name: "argus", title: "Argus", version: "0.1.0" },
       });
+      // The app-server handshake is two-step. Older builds accepted calls
+      // without this acknowledgement, but current builds document it as
+      // required and it keeps this WebSocket client in parity with codex.ts.
+      this.notify("initialized");
     })();
     return this.ready;
   }
@@ -264,6 +286,15 @@ export class CodexAppServer {
       this.pending.set(id, { resolve, reject, timer });
       ws.send(JSON.stringify({ id, method, params }));
     });
+  }
+
+  /** Send a JSON-RPC notification; notifications deliberately have no id. */
+  private notify(method: string, params?: unknown): void {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      throw new Error("app-server 未连接");
+    }
+    ws.send(JSON.stringify(params === undefined ? { method } : { method, params }));
   }
 
   /** Answer a server-initiated request (this is how approvals get resolved). */

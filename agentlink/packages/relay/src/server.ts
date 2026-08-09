@@ -14,23 +14,31 @@ export function createRelayServer(port = 8787) {
     fetch(req, srv) {
       const url = new URL(req.url);
       if (url.pathname === "/health") {
-        return Response.json({ ok: true, uptime: Math.round(process.uptime()) });
+        return Response.json({ ok: true, uptime: Math.round(process.uptime()), relay: core.stats() });
       }
       if (url.pathname === "/ws") {
         const client: Client = {
           id: nextId++,
           ip: srv.requestIP(req)?.address ?? "unknown",
           send: () => {},
+          close: () => {},
         };
         return srv.upgrade(req, { data: client }) ? undefined : new Response("upgrade failed", { status: 400 });
       }
       return new Response("not found", { status: 404 });
     },
     websocket: {
-      idleTimeout: 120, // 2 分钟无 pong 响应则关闭（幽灵连接 eviction）
+      // Device channels are intentionally quiet for long stretches. Bun's
+      // WebSocket idle timer counts application data, not control-frame pongs,
+      // so the default/120-second setting tore down healthy phone↔Host links
+      // every two minutes.  TCP/Nginx still detect actual closes; reconnects
+      // remain explicit at the clients.
+      idleTimeout: 0,
       sendPings: true,
       open(ws) {
         const client = ws.data;
+        console.info(`[agentlink-relay] ws open id=${client.id}`);
+        client.close = (code = 1000, reason = "") => ws.close(code, reason);
         client.send = (data) => {
           try {
             ws.send(data);
@@ -47,7 +55,12 @@ export function createRelayServer(port = 8787) {
         }
         core.handleMessage(ws.data, text);
       },
-      close(ws) {
+      close(ws, code, reason) {
+        // Connection metadata only: never write relay payloads, encrypted or
+        // otherwise, into the server journal.
+        const detail = JSON.stringify(String(reason ?? "")).slice(0, 160);
+        console.info(`[agentlink-relay] ws close id=${ws.data.id} code=${code} reason=${detail}`);
+        ws.data.close = undefined;
         core.handleClose(ws.data);
       },
     },

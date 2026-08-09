@@ -285,11 +285,12 @@ These must be changed in lockstep or the phone silently drops data.
 this list. A kind that only one side knows about is a bug, not a feature flag.
 
 - daemon → phone: `agent-event`, `input-ack`, `permission-request`,
-  `session-list`, `codex-thread-list`, `codex-resumed`, `codex-event`,
+  `session-list`, `codex-thread-list`, `codex-resumed`, `codex-history-start`,
+  `codex-history-chunk`, `codex-history-complete`, `codex-event`,
   `codex-error`, `cloud-session-url`
 - phone → daemon: `user-input`, `permission-response`, `list-sessions`,
   `new-session`, `remote-control`, `cloud-session`, `codex-threads`,
-  `codex-resume`, `codex-input`, `codex-interrupt`
+  `codex-resume`, `codex-history-cancel`, `codex-input`, `codex-interrupt`
 
 **`agent-event.event` type enum — the phone renders nothing else:**
 `text{text}`, `user-text{text}`, `thinking{text}`, `tool-call{name, summary}`,
