@@ -1,0 +1,19 @@
+# Gradle / Android build output
+build/
+.gradle/
+local.properties
+.cxx/
+*.apk
+*.aab
+*.iml
+.env
+secrets.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+private/
+
+# IDE
+.idea/
+.DS_Store

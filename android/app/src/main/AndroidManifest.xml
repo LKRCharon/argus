@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Package-visibility (API 30+): without this, SpeechRecognizer
+         .isRecognitionAvailable() is always false and the mic button vanishes. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+    <!-- Encrypted prefs/files are sealed with a Keystore key that does not
+         travel with a backup, so a restored device could only fail to decrypt
+         them. Excluding them from backup keeps a restore usable (the user
+         re-pairs) instead of crash-looping on launch. -->
+    <application
+        android:allowBackup="false"
+        android:label="Argus"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.Argus"
+        android:supportsRtl="true">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- argus://pair?code=NNNN-XXXXXX&amp;relay=… — the QR the Mac Sync pane renders -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="argus" android:host="pair" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
