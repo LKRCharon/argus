@@ -7,6 +7,12 @@ import android.os.Build
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,11 +36,17 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -109,7 +121,7 @@ class ArgusViewModel : ViewModel() {
     var error by mutableStateOf<String?>(null)
         private set
     /** Which overlay covers the session list, if any. Sessions are the only
-     *  root screen now — pairing and devices are reached from the status pill. */
+     *  root screen now — pairing and devices are reached from the connection menu. */
     var overlay by mutableStateOf<Overlay?>(null)
     /** Full session inventory from the Mac, idle sessions included. */
     var catalog by mutableStateOf<List<SessionSummary>>(emptyList())
@@ -1153,7 +1165,37 @@ private fun DotGrid(modifier: Modifier = Modifier) {
 
 private val BASE_AGENTS = listOf("qoder", "codex")
 
-// ===== Top bar: status capsule + agent filter + new session =====
+private enum class ConnectionUiState { Connected, Connecting, Disconnected, Error }
+
+private fun connectionUiState(vm: ArgusViewModel): ConnectionUiState = when {
+    vm.connectionStatus == "channel-ready" -> ConnectionUiState.Connected
+    vm.connectionStatus == "connecting" || vm.connectionStatus == "pairing" -> ConnectionUiState.Connecting
+    vm.connectionStatus == "disconnected" && !vm.connectionDetail.isNullOrBlank() -> ConnectionUiState.Error
+    vm.connectionStatus == "disconnected" && vm.userWantsConnection && vm.autoReconnect && vm.activePeer != null -> {
+        ConnectionUiState.Connecting
+    }
+    else -> ConnectionUiState.Disconnected
+}
+
+private fun connectionStateLabel(vm: ArgusViewModel, state: ConnectionUiState): String = when (state) {
+    ConnectionUiState.Connected -> "已连接"
+    ConnectionUiState.Connecting -> if (vm.connectionStatus == "pairing") "正在配对" else "正在连接"
+    ConnectionUiState.Error -> if (vm.userWantsConnection && vm.autoReconnect) {
+        "连接出错，正在重试"
+    } else {
+        "连接出错"
+    }
+    ConnectionUiState.Disconnected -> "未连接"
+}
+
+private fun platformLabel(platform: String): String = when (platform.lowercase()) {
+    "windows", "win32" -> "Windows"
+    "macos", "darwin" -> "macOS"
+    "linux" -> "Linux"
+    else -> platform
+}
+
+// ===== Top bar: connection menu + agent filter + new session =====
 
 @Composable
 private fun TopBar(vm: ArgusViewModel) {
@@ -1162,7 +1204,7 @@ private fun TopBar(vm: ArgusViewModel) {
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        StatusCapsule(vm)
+        ConnectionMenuButton(vm)
         Spacer(Modifier.weight(1f))
         AgentSwitcher(vm)
         Spacer(Modifier.width(8.dp))
@@ -1173,58 +1215,163 @@ private fun TopBar(vm: ArgusViewModel) {
 }
 
 @Composable
-private fun StatusCapsule(vm: ArgusViewModel) {
+private fun ConnectionStateIcon(
+    vm: ArgusViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val c = ArgusTheme.colors
+    val state = connectionUiState(vm)
+    val rotation = if (state == ConnectionUiState.Connecting) {
+        val transition = rememberInfiniteTransition(label = "connection-spin")
+        val value by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1_000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "connection-spin-angle",
+        )
+        value
+    } else {
+        0f
+    }
+    val iconAlpha = if (state == ConnectionUiState.Error) {
+        val transition = rememberInfiniteTransition(label = "connection-error-pulse")
+        val value by transition.animateFloat(
+            initialValue = 0.45f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 800),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "connection-error-alpha",
+        )
+        value
+    } else {
+        1f
+    }
+    val icon = when (state) {
+        ConnectionUiState.Connected -> Icons.Default.Language
+        ConnectionUiState.Connecting -> Icons.Default.Sync
+        ConnectionUiState.Disconnected -> Icons.Default.LinkOff
+        ConnectionUiState.Error -> Icons.Default.ErrorOutline
+    }
+    val tint = when (state) {
+        ConnectionUiState.Connected -> c.textPrimary
+        ConnectionUiState.Connecting -> c.statusAmberText
+        ConnectionUiState.Disconnected -> c.textSecondary
+        ConnectionUiState.Error -> c.danger
+    }
+    Icon(
+        icon,
+        null,
+        tint = tint,
+        modifier = modifier.rotate(rotation).alpha(iconAlpha),
+    )
+}
+
+@Composable
+private fun ConnectionMenuButton(vm: ArgusViewModel) {
     val c = ArgusTheme.colors
     var menu by remember { mutableStateOf(false) }
-    val (state, dotColor) = when (vm.connectionStatus) {
-        "channel-ready" -> "已连接" to c.statusGreen
-        "disconnected" -> if (vm.userWantsConnection && vm.autoReconnect) {
-            "重连中…" to c.statusAmberText
-        } else {
-            "已断开" to c.textSecondary
-        }
-        "pairing" -> "配对中…" to c.statusAmberText
-        else -> "连接中…" to c.statusAmberText
-    }
-    val label = "${vm.activePeer?.deviceName ?: "未选主机"} · $state"
+    val state = connectionUiState(vm)
+    val stateLabel = connectionStateLabel(vm, state)
+    val peer = vm.activePeer
     Box {
-        Row(
+        Box(
             Modifier
+                .size(40.dp)
                 .clip(CircleShape)
                 .background(c.sheet)
                 .border(1.dp, c.textSecondary.copy(alpha = 0.25f), CircleShape)
                 .clickable { menu = true }
-                .padding(horizontal = 14.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .semantics {
+                    contentDescription = stateLabel
+                    role = Role.Button
+                }
+                .padding(9.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.size(8.dp).background(dotColor, CircleShape))
-            Spacer(Modifier.width(8.dp))
-            Text(label, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = c.textPrimary)
-            Spacer(Modifier.width(4.dp))
-            Icon(Icons.Default.ExpandMore, null, tint = c.textSecondary, modifier = Modifier.size(16.dp))
+            ConnectionStateIcon(vm, Modifier.size(22.dp))
         }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+        DropdownMenu(
+            expanded = menu,
+            onDismissRequest = { menu = false },
+            modifier = Modifier.width(288.dp),
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ConnectionStateIcon(vm, Modifier.size(22.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            peer?.deviceName ?: "未选择主机",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = c.textPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(stateLabel, fontSize = 12.sp, color = c.textSecondary)
+                    }
+                }
+                peer?.let {
+                    Text(
+                        "${platformLabel(it.platform)} · ${it.fingerprint}",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = c.textTertiary,
+                        modifier = Modifier.padding(top = 8.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             vm.connectionDetail?.let { detail ->
                 Text(
-                    "最近断开：$detail",
+                    if (state == ConnectionUiState.Error) "连接事件：$detail" else "上次连接事件：$detail",
                     fontSize = 12.sp,
                     color = c.textSecondary,
-                    modifier = Modifier.widthIn(max = 260.dp).padding(horizontal = 16.dp, vertical = 10.dp)
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
                 )
-                HorizontalDivider(color = c.textSecondary.copy(alpha = 0.18f))
             }
-            if (vm.connectionStatus == "channel-ready") {
-                DropdownMenuItem(text = { Text("断开连接") }, onClick = { menu = false; vm.disconnect() })
-            } else {
-                DropdownMenuItem(text = { Text("连接") }, onClick = { menu = false; vm.connectChannel() })
-            }
-            // Pairing and devices used to be duplicated as tabs; this menu is
-            // their only entry point now, which is what freed the whole sheet
-            // for the session list.
             HorizontalDivider(color = c.textSecondary.copy(alpha = 0.18f))
-            DropdownMenuItem(text = { Text("设置") }, onClick = { menu = false; vm.overlay = Overlay.Settings })
-            DropdownMenuItem(text = { Text("切换主机") }, onClick = { menu = false; vm.overlay = Overlay.Devices })
-            DropdownMenuItem(text = { Text("配对新主机") }, onClick = { menu = false; vm.overlay = Overlay.Pair })
+            if (peer != null) {
+                when (state) {
+                    ConnectionUiState.Connected -> DropdownMenuItem(
+                        text = { Text("断开连接") },
+                        leadingIcon = { Icon(Icons.Default.LinkOff, null) },
+                        onClick = { menu = false; vm.disconnect() },
+                    )
+                    ConnectionUiState.Connecting -> DropdownMenuItem(
+                        text = { Text("取消连接") },
+                        leadingIcon = { Icon(Icons.Default.Close, null) },
+                        onClick = { menu = false; vm.disconnect() },
+                    )
+                    ConnectionUiState.Disconnected, ConnectionUiState.Error -> DropdownMenuItem(
+                        text = { Text(if (state == ConnectionUiState.Error) "立即重试" else "连接") },
+                        leadingIcon = { Icon(Icons.Default.Refresh, null) },
+                        onClick = { menu = false; vm.connectChannel() },
+                    )
+                }
+            }
+            HorizontalDivider(color = c.textSecondary.copy(alpha = 0.18f))
+            DropdownMenuItem(
+                text = { Text("设置") },
+                leadingIcon = { Icon(Icons.Default.Settings, null) },
+                onClick = { menu = false; vm.overlay = Overlay.Settings },
+            )
+            DropdownMenuItem(
+                text = { Text("切换主机") },
+                leadingIcon = { Icon(Icons.Default.Computer, null) },
+                onClick = { menu = false; vm.overlay = Overlay.Devices },
+            )
+            DropdownMenuItem(
+                text = { Text("配对新主机") },
+                leadingIcon = { Icon(Icons.Default.AddLink, null) },
+                onClick = { menu = false; vm.overlay = Overlay.Pair },
+            )
         }
     }
 }
@@ -1373,49 +1520,6 @@ private fun OverlayHeader(title: String, onBack: () -> Unit) {
 
 // ===== Sessions =====
 
-/** One visible explanation while reconnecting, instead of a stale green dot. */
-@Composable
-private fun ConnectionNotice(vm: ArgusViewModel) {
-    val c = ArgusTheme.colors
-    val host = vm.activePeer?.deviceName ?: "主机"
-    val reconnecting = vm.connectionStatus == "disconnected"
-    val retrying = reconnecting && vm.autoReconnect
-    val title = when {
-        retrying -> "与 $host 的连接已断开，正在重试"
-        reconnecting -> "与 $host 的连接已断开"
-        else -> "正在连接 $host"
-    }
-    val detail = vm.connectionDetail ?: "正在通过中继建立安全通道"
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(ArgusRadius.ROW.dp))
-            .background(c.statusAmberFill)
-            .border(1.dp, c.statusAmberText.copy(alpha = 0.25f), RoundedCornerShape(ArgusRadius.ROW.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(Icons.Default.WifiOff, null, tint = c.statusAmberText, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = c.textPrimary)
-            Text(detail, fontSize = 12.sp, color = c.statusAmberText, modifier = Modifier.padding(top = 2.dp))
-        }
-        if (reconnecting && !vm.autoReconnect) {
-            Text(
-                "连接",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = c.statusAmberText,
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable { vm.connectChannel() }
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-            )
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SessionListScreen(vm: ArgusViewModel) {
@@ -1470,9 +1574,6 @@ private fun SessionListScreen(vm: ArgusViewModel) {
                 Modifier.fillMaxSize().padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (vm.userWantsConnection && vm.connectionStatus != "channel-ready") {
-                    item { ConnectionNotice(vm) }
-                }
                 vm.cloudUrl?.let { url ->
                     item { CloudSessionCard(url) { vm.cloudUrl = null } }
                 }
@@ -2414,12 +2515,7 @@ private fun SettingsScreen(vm: ArgusViewModel) {
     var relayError by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(vm.relayUrl) { relayDraft = vm.relayUrl }
 
-    val connectionState = when (vm.connectionStatus) {
-        "channel-ready" -> "已连接"
-        "disconnected" -> if (vm.userWantsConnection && vm.autoReconnect) "正在重连" else "已断开"
-        "pairing" -> "配对中"
-        else -> "连接中"
-    }
+    val connectionState = connectionStateLabel(vm, connectionUiState(vm))
 
     Column(
         Modifier
