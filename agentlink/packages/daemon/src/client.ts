@@ -175,8 +175,12 @@ function finalizePair(identity: KeyPair, result: PairingResult): Uint8Array {
   return longTermKey;
 }
 
-export async function joinChan(conn: WsConn, longTermKey: Uint8Array): Promise<SecureChannel> {
-  conn.send({ op: "join-chan", token: deriveChanToken(longTermKey), endpoint: "host" });
+export async function joinChan(
+  conn: WsConn,
+  longTermKey: Uint8Array,
+  endpoint: "host" | "android" = "host",
+): Promise<SecureChannel> {
+  conn.send({ op: "join-chan", token: deriveChanToken(longTermKey), endpoint });
   const res = await conn.wait((m) => m.op === "chan-joined" || m.op === "error");
   if (res.op === "error") throw new Error(`进入设备通道失败: ${res.message ?? res.code}`);
   return new SecureChannel(longTermKey);
@@ -291,7 +295,7 @@ export async function runProbe(codeStr: string, opts: RunProbeOptions = {}): Pro
     const longTermKey = finalizePair(identity, result);
     conn.send({ op: "leave-pair" });
 
-    const chan = await joinChan(conn, longTermKey);
+    const chan = await joinChan(conn, longTermKey, "android");
     if (opts.agentDemo) {
       return await probeAgentDemo(conn, chan);
     }
