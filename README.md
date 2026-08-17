@@ -34,6 +34,7 @@ No cloud, no telemetry, no reading your code or conversations — only file time
 - **Telegram notifications (opt-in).** Pings your bot when the Mac sleeps or wakes.
 - **CLI.** `argus on/off/status/watch/session/debug/repair/help` — drive it without the GUI.
 - **Android companion.** Pair via QR code, monitor agent status and control sessions from your phone.
+- **Mesh task boundary.** Pair trusted devices into explicit groups and route typed, auditable tasks to another machine; v0 supports bounded inspect and reversible quarantine, never remote arbitrary shell or hard delete. See [`docs/mesh.md`](docs/mesh.md).
 - **Privacy-first.** Reads file clocks only. No analytics, no tracking, no network calls except your own Telegram bot and optional relay.
 
 ## Install
@@ -60,6 +61,11 @@ Settings page or scan a pairing QR link that provides it. See
 [`android/README.md`](android/README.md) for build and device-test instructions.
 
 The phone companion requires a self-hosted relay server. See `agentlink/deploy/` for a ready-made systemd + nginx + Let's Encrypt setup — any VPS with a domain will do. Once deployed, enter your relay's `wss://` address in **Settings > Remote Sync**. The daemon source lives in the `agentlink/` directory of this repo and starts automatically when configured.
+
+For cross-device task coordination, configure one local `mesh.json` per target
+machine and run the `agentlink watch` bridge. The Mesh boundary is opt-in and
+fails closed when its group, resource, signing, or audit configuration is
+invalid. See [`docs/mesh.md`](docs/mesh.md) for the first-release workflow.
 
 ## Usage
 

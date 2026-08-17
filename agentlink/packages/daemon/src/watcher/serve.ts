@@ -8,7 +8,7 @@
  */
 
 import type { SecureChannel } from "@agentlink/wire";
-import { b64decode } from "@agentlink/wire";
+import { b64decode, fingerprint } from "@agentlink/wire";
 import type { NormalizedEvent } from "../agent/types";
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
@@ -18,15 +18,17 @@ import { join } from "node:path";
 import { WsConn, joinChan } from "../client";
 import { TranscriptWatcher, findQoderFiles, findCodexFiles, normalizeQoderLine, normalizeCodexLine } from "./transcript";
 import { HookServer } from "./hook-server";
-import { listPeers } from "../store";
+import { listPeers, loadOrCreateIdentity } from "../store";
 import { createCloudSession, listSessions, startRemoteControl, startSession } from "../sessions";
 import { CodexAppServer } from "../codex-appserver";
 import { QoderAcp } from "../qoder-acp";
+import type { MeshService } from "../mesh/service";
+import { createMeshServiceForPeer, loadMeshConfig, meshConfigPath } from "../mesh/config";
 
 export async function serveWatch(
   conn: WsConn,
   chan: SecureChannel,
-  opts: { hookPort?: number } = {},
+  opts: { hookPort?: number; mesh?: MeshService; meshStrict?: boolean; meshLegacyControl?: boolean } = {},
 ): Promise<{ hookServer: HookServer; watcher: TranscriptWatcher; codexWatcher: TranscriptWatcher; stop: () => void }> {
   const sendPayload = async (payload: unknown): Promise<void> => {
     conn.send({ op: "chan-data", data: { enc: await chan.seal(payload) } });
@@ -364,6 +366,9 @@ export async function serveWatch(
           cwd?: string;
           /** Which agent a new session should use ("qoder" | "codex"). */
           agent?: string;
+          task?: unknown;
+          grant?: unknown;
+          approval?: unknown;
         }>(msg.data?.enc);
 
         // Only log genuine phone->daemon commands. Relay buffering can echo a
@@ -372,12 +377,32 @@ export async function serveWatch(
         const PHONE_COMMANDS = new Set([
           "list-sessions", "new-session", "user-input", "permission-response",
           "codex-threads", "codex-resume", "codex-history-cancel", "codex-input", "codex-interrupt",
-          "cloud-session", "remote-control",
+          "cloud-session", "remote-control", "mesh-task-request",
         ]);
         if (payload?.kind && PHONE_COMMANDS.has(payload.kind)) {
           console.log(`[watch] 收到手机指令: ${payload.kind}`);
         }
-        if (payload?.kind === "codex-threads") {
+        const MESH_BLOCKED_LEGACY_COMMANDS = new Set([
+          "new-session", "user-input", "codex-input", "remote-control", "cloud-session",
+          "permission-response",
+        ]);
+        if ((opts.mesh || opts.meshStrict) && !opts.meshLegacyControl && typeof payload?.kind === "string"
+                    && MESH_BLOCKED_LEGACY_COMMANDS.has(payload.kind)) {
+          await sendPayload({
+            kind: "input-ack",
+            sessionId: payload.sessionId ?? "",
+            status: "queued",
+            note: "Mesh 安全模式已禁用未经过策略的远程 Agent 指令",
+          });
+        } else if (payload?.kind === "mesh-task-request") {
+          if (!opts.mesh) {
+            await sendPayload({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else {
+            const result = opts.mesh.handle(payload);
+            if (result) await sendPayload(result);
+            else await sendPayload({ kind: "mesh-error", code: "invalid-task", message: "Mesh 任务格式无效" });
+          }
+        } else if (payload?.kind === "codex-threads") {
           // Codex's own view of its threads — richer and more accurate than our
           // transcript scan (model-generated titles, live status, cwd).
           try {
@@ -639,10 +664,27 @@ export async function runWatch(opts: { hookPort?: number } = {}): Promise<void> 
   };
   const longTermKey = b64decode(peer.longTermKey);
   const chan = await joinChan(conn, longTermKey);
+  let mesh: MeshService | undefined;
+  let meshStrict = false;
+  let meshLegacyControl = false;
+  try {
+    const identity = loadOrCreateIdentity();
+    meshStrict = existsSync(meshConfigPath());
+    const config = loadMeshConfig();
+    if (config) {
+      mesh = createMeshServiceForPeer(fingerprint(identity.publicKey), peer.fingerprint, config);
+      meshLegacyControl = config.legacyControl;
+    }
+    if (mesh) console.log(`[mesh] 已启用：${mesh.listResources().length} 个本地资源`);
+  } catch (error) {
+    // A malformed Mesh config disables Mesh only. It must never fall back to a
+    // generic remote shell or to the legacy user-input route.
+    console.log(`[mesh] 配置无效，已安全禁用: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
   console.log(`已连接对端 ${peer.deviceName}，启动 watch 模式…`);
   process.stdout.write(JSON.stringify({ type: "status", connection: "connecting" }) + "\n");
 
-  const { stop } = await serveWatch(conn, chan, opts);
+  const { stop } = await serveWatch(conn, chan, { ...opts, mesh, meshStrict, meshLegacyControl });
 
   process.on("SIGINT", () => {
     stop();

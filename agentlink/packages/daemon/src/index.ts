@@ -5,6 +5,8 @@
  *   agentlink pair [--watch]      生成配对码，可在配对后进入 Host 监听
  *   agentlink probe <配对码>       模拟手机端加入并发送 echo 验证链路
  *   agentlink up                  常驻在线，等待已配对设备连接
+ *   agentlink mesh status         查看 Mesh 配置与本机资源（不会输出私钥）
+ *   agentlink mesh request ...    发送一个 typed Mesh 任务
  *   agentlink peers               列出已配对设备
   agentlink rename <指纹> <名称>  重命名已配对设备
   agentlink forget <指纹>        移除已配对设备
@@ -18,6 +20,7 @@ import { fingerprint } from "@agentlink/wire";
 import { listPeers, loadOrCreateIdentity, renamePeer, removePeer } from "./store";
 import { runAgent, runPair, runProbe, runUp } from "./client";
 import { runWatch } from "./watcher/serve";
+import { runMeshApprove, runMeshGrant, runMeshRequest, runMeshStatus } from "./mesh/cli";
 
 const [cmd, ...args] = process.argv.slice(2);
 
@@ -29,6 +32,10 @@ function usage(): void {
   agentlink pair [--watch]      生成配对码，--watch 配对后直接进入 Host 监听
   agentlink probe <NNNN-XXXXXX> 模拟手机端加入并发送 echo
   agentlink up                  常驻在线，等待已配对设备连接
+  agentlink mesh status         查看 Mesh 配置与本机资源（不会输出私钥）
+  agentlink mesh grant ...       由本地资源所有者签发 grant
+  agentlink mesh approve ...     由本地资源所有者签发 approval
+  agentlink mesh request ...     发送一个 typed Mesh 任务
   agentlink peers               列出已配对设备
   agentlink rename <指纹> <名称>  重命名已配对设备
   agentlink forget <指纹>        移除已配对设备
@@ -90,6 +97,23 @@ async function main(): Promise<void> {
     case "watch": {
       const hookPort = flagValue(args, "--hook-port");
       await runWatch(hookPort ? { hookPort: Number(hookPort) } : {});
+      break;
+    }
+    case "mesh": {
+      const subcommand = args[0];
+      const subargs = args.slice(1);
+      if (subcommand === "status") {
+        runMeshStatus(subargs);
+      } else if (subcommand === "grant") {
+        runMeshGrant(subargs);
+      } else if (subcommand === "approve") {
+        runMeshApprove(subargs);
+      } else if (subcommand === "request") {
+        await runMeshRequest(subargs);
+      } else {
+        console.error("用法: agentlink mesh <status|grant|approve|request> ...");
+        process.exit(1);
+      }
       break;
     }
     case "rename": {

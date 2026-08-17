@@ -6,8 +6,12 @@ import {
   MeshCapabilityGrantSchema,
   MeshPayloadSchema,
   MeshResourcePayloadSchema,
+  MeshTaskResultPayloadSchema,
   MeshTaskRequestPayloadSchema,
+  generateMeshSigningKeyPair,
   isMeshCapabilityGrantExpired,
+  signMeshCapabilityGrant,
+  verifyMeshCapabilityGrant,
 } from "../src";
 
 const issuedAt = "2026-08-17T00:00:00.000Z";
@@ -22,6 +26,7 @@ const resource = {
 };
 
 const task = {
+  groupId: "group-alpha",
   taskId: "task-001",
   requesterNodeId: "node-mac",
   targetNodeId: "node-linux-gpu",
@@ -30,6 +35,8 @@ const task = {
 };
 
 const grant = {
+  groupId: task.groupId,
+  taskId: task.taskId,
   grantId: "grant-001",
   subjectNodeId: "node-mac",
   targetNodeId: "node-linux-gpu",
@@ -44,6 +51,7 @@ const grant = {
   expiresAt,
   nonce: "nonce-001",
   issuerNodeId: "node-linux-gpu",
+  issuerPublicKey: "owner-public-key",
   signature: "sig-ed25519-placeholder",
 };
 
@@ -51,12 +59,15 @@ const approval = {
   approvalId: "approval-001",
   grantId: grant.grantId,
   approverNodeId: "node-linux-gpu",
+  approverPublicKey: "owner-public-key",
   decision: "allow" as const,
   summary: "Run the task in the isolated staging directory",
   createdAt: issuedAt,
+  signature: "sig-approval-placeholder",
 };
 
 const auditEvent = {
+  groupId: task.groupId,
   eventId: "event-001",
   taskId: task.taskId,
   actorNodeId: task.requesterNodeId,
@@ -65,6 +76,18 @@ const auditEvent = {
   decision: "allow" as const,
   reason: "owner-approved grant",
   createdAt: issuedAt,
+};
+
+const taskResult = {
+  kind: "mesh-task-result" as const,
+  groupId: task.groupId,
+  taskId: task.taskId,
+  targetNodeId: task.targetNodeId,
+  operation: task.operation,
+  status: "completed" as const,
+  decision: "allow" as const,
+  message: "inspection completed",
+  result: { entryCount: 3, truncated: false },
 };
 
 function jsonRoundTrip<T>(value: T): T {
@@ -79,6 +102,7 @@ describe("Mesh wire schema", () => {
       { kind: "mesh-capability-grant" as const, grant },
       { kind: "mesh-approval" as const, approval },
       { kind: "mesh-audit-event" as const, event: auditEvent },
+      taskResult,
     ];
 
     for (const payload of payloads) {
@@ -106,6 +130,7 @@ describe("Mesh wire schema", () => {
       kind: "mesh-audit-event",
       event: auditEvent,
     });
+    expect(MeshTaskResultPayloadSchema.parse(jsonRoundTrip(taskResult))).toEqual(taskResult);
   });
 
   test("rejects operations outside the explicit whitelist", () => {
@@ -127,6 +152,15 @@ describe("Mesh wire schema", () => {
 
     expect(isMeshCapabilityGrantExpired(grant, Date.parse("2026-08-17T00:30:00.000Z"))).toBe(false);
     expect(isMeshCapabilityGrantExpired(grant, Date.parse("2026-08-17T01:00:00.000Z"))).toBe(true);
+  });
+
+  test("capability signatures bind the grant fields", () => {
+    const key = generateMeshSigningKeyPair();
+    const { signature: _signature, ...unsigned } = grant;
+    const signed = signMeshCapabilityGrant(unsigned, key.secretKey);
+    expect(verifyMeshCapabilityGrant(signed, key.publicKey)).toBe(true);
+    expect(verifyMeshCapabilityGrant({ ...signed, operation: "delete" }, key.publicKey)).toBe(false);
+    expect(verifyMeshCapabilityGrant(signed, generateMeshSigningKeyPair().publicKey)).toBe(false);
   });
 
   test("unknown resource kinds are rejected by the known schema and can be ignored by a safe parser", () => {

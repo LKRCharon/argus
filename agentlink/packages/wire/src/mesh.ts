@@ -9,6 +9,8 @@
  */
 
 import { z } from "zod";
+import { b64decode, b64encode, stableStringify, utf8 } from "./crypto";
+import { ed25519 } from "@noble/curves/ed25519";
 
 /** IDs are opaque protocol values, but an empty/whitespace-only ID is never valid. */
 export const MeshIdSchema = z.string().refine((value) => value.trim().length > 0, {
@@ -71,16 +73,20 @@ export const MeshResourceSchema = z.object({
 export type MeshResource = z.infer<typeof MeshResourceSchema>;
 
 export const MeshTaskRequestSchema = z.object({
+  groupId: MeshIdSchema,
   taskId: MeshIdSchema,
   requesterNodeId: MeshIdSchema,
   targetNodeId: MeshIdSchema,
   resourceId: MeshIdSchema,
   operation: MeshOperationSchema,
+  scope: MeshScopeSchema.optional(),
 });
 export type MeshTaskRequest = z.infer<typeof MeshTaskRequestSchema>;
 
 export const MeshCapabilityGrantSchema = z
   .object({
+    groupId: MeshIdSchema,
+    taskId: MeshIdSchema,
     grantId: MeshIdSchema,
     subjectNodeId: MeshIdSchema,
     targetNodeId: MeshIdSchema,
@@ -91,6 +97,7 @@ export const MeshCapabilityGrantSchema = z
     expiresAt: MeshTimestampSchema,
     nonce: MeshIdSchema,
     issuerNodeId: MeshIdSchema,
+    issuerPublicKey: MeshIdSchema,
     signature: MeshIdSchema,
   })
   .superRefine((grant, ctx) => {
@@ -118,9 +125,11 @@ export const MeshApprovalSchema = z.object({
   approvalId: MeshIdSchema,
   grantId: MeshIdSchema,
   approverNodeId: MeshIdSchema,
+  approverPublicKey: MeshIdSchema,
   decision: MeshApprovalDecisionSchema,
   summary: z.string(),
   createdAt: MeshTimestampSchema,
+  signature: MeshIdSchema,
 });
 export type MeshApproval = z.infer<typeof MeshApprovalSchema>;
 
@@ -128,6 +137,7 @@ export const MeshAuditDecisionSchema = z.enum(["allow", "deny", "approval-requir
 export type MeshAuditDecision = z.infer<typeof MeshAuditDecisionSchema>;
 
 export const MeshAuditEventSchema = z.object({
+  groupId: MeshIdSchema,
   eventId: MeshIdSchema,
   taskId: MeshIdSchema,
   actorNodeId: MeshIdSchema,
@@ -150,6 +160,8 @@ export type MeshResourcePayload = z.infer<typeof MeshResourcePayloadSchema>;
 export const MeshTaskRequestPayloadSchema = z.object({
   kind: z.literal("mesh-task-request"),
   task: MeshTaskRequestSchema,
+  grant: MeshCapabilityGrantSchema.optional(),
+  approval: MeshApprovalSchema.optional(),
 });
 export type MeshTaskRequestPayload = z.infer<typeof MeshTaskRequestPayloadSchema>;
 
@@ -171,11 +183,101 @@ export const MeshAuditEventPayloadSchema = z.object({
 });
 export type MeshAuditEventPayload = z.infer<typeof MeshAuditEventPayloadSchema>;
 
+export const MeshTaskResultStatusSchema = z.enum(["completed", "denied", "approval-required", "failed"]);
+export type MeshTaskResultStatus = z.infer<typeof MeshTaskResultStatusSchema>;
+
+export const MeshTaskResultPayloadSchema = z.object({
+  kind: z.literal("mesh-task-result"),
+  groupId: MeshIdSchema,
+  taskId: MeshIdSchema,
+  targetNodeId: MeshIdSchema,
+  operation: MeshOperationSchema,
+  status: MeshTaskResultStatusSchema,
+  decision: MeshAuditDecisionSchema,
+  message: z.string(),
+  result: MeshJsonValueSchema.optional(),
+});
+export type MeshTaskResultPayload = z.infer<typeof MeshTaskResultPayloadSchema>;
+
 export const MeshPayloadSchema = z.discriminatedUnion("kind", [
   MeshResourcePayloadSchema,
   MeshTaskRequestPayloadSchema,
   MeshCapabilityGrantPayloadSchema,
   MeshApprovalPayloadSchema,
   MeshAuditEventPayloadSchema,
+  MeshTaskResultPayloadSchema,
 ]);
 export type MeshPayload = z.infer<typeof MeshPayloadSchema>;
+
+/**
+ * Capability signatures use a separate Ed25519 owner key.  The signature is
+ * transport-independent, so a relay can forward/replay bytes but cannot alter
+ * the target, resource, operation, expiry or nonce without detection. The
+ * target daemon must pin the owner's public key locally; the public key carried
+ * in a grant is metadata, not a trust decision.
+ */
+function unsignedGrant(grant: MeshCapabilityGrant): Omit<MeshCapabilityGrant, "signature"> {
+  const { signature: _signature, ...unsigned } = grant;
+  return unsigned;
+}
+
+function unsignedApproval(approval: MeshApproval): Omit<MeshApproval, "signature"> {
+  const { signature: _signature, ...unsigned } = approval;
+  return unsigned;
+}
+
+export function meshCapabilitySigningInput(grant: MeshCapabilityGrant): Uint8Array {
+  return utf8(`agentlink/mesh-capability/v1:${stableStringify(unsignedGrant(grant))}`);
+}
+
+export interface MeshSigningKeyPair {
+  secretKey: Uint8Array;
+  publicKey: Uint8Array;
+}
+
+export function generateMeshSigningKeyPair(): MeshSigningKeyPair {
+  const secretKey = ed25519.utils.randomPrivateKey();
+  return { secretKey, publicKey: ed25519.getPublicKey(secretKey) };
+}
+
+export function signMeshCapabilityGrant(
+  grant: Omit<MeshCapabilityGrant, "signature">,
+  secretKey: Uint8Array,
+): MeshCapabilityGrant {
+  const unsigned = { ...grant, signature: "pending" } as MeshCapabilityGrant;
+  return {
+    ...grant,
+    signature: b64encode(ed25519.sign(meshCapabilitySigningInput(unsigned), secretKey)),
+  };
+}
+
+export function verifyMeshCapabilityGrant(grant: MeshCapabilityGrant, publicKey: Uint8Array): boolean {
+  try {
+    return ed25519.verify(b64decode(grant.signature), meshCapabilitySigningInput(grant), publicKey);
+  } catch {
+    return false;
+  }
+}
+
+export function meshApprovalSigningInput(approval: MeshApproval): Uint8Array {
+  return utf8(`agentlink/mesh-approval/v1:${stableStringify(unsignedApproval(approval))}`);
+}
+
+export function signMeshApproval(
+  approval: Omit<MeshApproval, "signature">,
+  secretKey: Uint8Array,
+): MeshApproval {
+  const unsigned = { ...approval, signature: "pending" } as MeshApproval;
+  return {
+    ...approval,
+    signature: b64encode(ed25519.sign(meshApprovalSigningInput(unsigned), secretKey)),
+  };
+}
+
+export function verifyMeshApproval(approval: MeshApproval, publicKey: Uint8Array): boolean {
+  try {
+    return ed25519.verify(b64decode(approval.signature), meshApprovalSigningInput(approval), publicKey);
+  } catch {
+    return false;
+  }
+}

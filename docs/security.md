@@ -22,6 +22,17 @@ Team `GBQ3DN529X`, hardened runtime. Passes Gatekeeper cleanly — no quarantine
 
 Telegram tokens are stored only in `0600` files on your machine.
 
+## Mesh is a typed, fail-closed boundary
+
+The optional Agentlink Mesh layer does not forward a peer's `cwd`, command, or
+natural-language prompt to a local shell or agent. The target resolves an
+opaque resource ID from its own configuration and applies group membership,
+requester, target, expiry, Ed25519 grant, owner approval, and one-shot replay
+checks before invoking a typed executor. Hard delete, `sudo`, secret reads,
+deployment, and arbitrary shell are denied in the first release; quarantine is
+the reversible destructive substitute. See [docs/mesh.md](mesh.md) for the
+configuration and audit model.
+
 ## Sleep is always restored on exit or crash
 
 Three layers: synchronous restore on quit, a SIGTERM handler, and a 20-second helper watchdog.
