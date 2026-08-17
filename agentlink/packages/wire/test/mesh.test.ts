@@ -106,7 +106,11 @@ describe("Mesh wire schema", () => {
         kind: "mesh-resource-list" as const,
         requestId: "resources-001",
         nodeId: "node-linux-gpu",
-        resources: [{ ...resource, capabilities: ["inspect", "run"], runnerIds: ["gpu-runner-v1"] }],
+        resources: [{
+          ...resource,
+          capabilities: ["inspect", "run"] satisfies Array<"inspect" | "run">,
+          runnerIds: ["gpu-runner-v1"],
+        }],
       },
       { kind: "mesh-task-request" as const, task },
       { kind: "mesh-capability-grant" as const, grant },
