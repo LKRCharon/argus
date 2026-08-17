@@ -25,5 +25,17 @@
       "displayName": "gpu-project",
       "root": "/srv/argus/workspaces/gpu-project"
     }
+  ],
+  "runners": [
+    {
+      "id": "gpu-project-runner-v1",
+      "resourceId": "repo:gpu-project",
+      "executable": "/srv/argus/runners/gpu-project-runner",
+      "fixedArgs": [],
+      "workdir": ".",
+      "maxRuntimeMs": 900000,
+      "maxOutputBytes": 262144,
+      "exposeOutput": false
+    }
   ]
 }

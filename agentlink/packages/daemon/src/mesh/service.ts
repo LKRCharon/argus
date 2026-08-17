@@ -11,6 +11,7 @@ import {
   MeshTaskRequestPayloadSchema,
   MeshTaskRequestSchema,
   MeshCapabilityGrantSchema,
+  MeshRunScopeSchema,
   isMeshCapabilityGrantExpired,
   b64encode,
   signMeshApproval,
@@ -20,6 +21,7 @@ import {
   type MeshApproval,
   type MeshCapabilityGrant,
   type MeshResource,
+  type MeshResourceListPayload,
   type MeshTaskRequest,
   type MeshTaskRequestPayload,
   type MeshTaskResultPayload,
@@ -27,6 +29,8 @@ import {
 } from "@agentlink/wire";
 import { randomUUID } from "node:crypto";
 import { MeshExecutor, type LocalMeshResource } from "./executor";
+import { MeshRunnerRegistry, type MeshRunnerResult, type MeshRunnerSpec } from "./runner";
+import { MeshTaskStore, type MeshTaskLifecycleStatus } from "./task-store";
 import { MeshPolicyEngine, type MeshPolicyEngineOptions } from "./policy";
 import { loadOrCreateMeshSigningKey } from "./signing";
 import { appendMeshAuditEvent } from "./audit";
@@ -40,6 +44,8 @@ export interface MeshServiceOptions {
   allowedRoots?: string[];
   quarantineRoot?: string;
   maxEntries?: number;
+  runners?: MeshRunnerSpec[];
+  taskStore?: MeshTaskStore;
   auditSink?: MeshPolicyEngineOptions["auditSink"];
   /** Test/integration injection; production defaults to the persisted owner key. */
   signingKey?: MeshSigningKeyPair;
@@ -48,9 +54,13 @@ export interface MeshServiceOptions {
 export class MeshService {
   readonly nodeId: string;
   readonly executor: MeshExecutor;
+  readonly runners: MeshRunnerRegistry;
+  readonly tasks: MeshTaskStore;
   readonly policy: MeshPolicyEngine;
   private readonly signingKey: MeshSigningKeyPair;
   private readonly resources = new Map<string, LocalMeshResource>();
+  /** In-memory marker distinguishes a live task from a journal entry left by a restart. */
+  private readonly activeTasks = new Set<string>();
 
   constructor(options: MeshServiceOptions) {
     if (!options.nodeId.trim()) throw new Error("Mesh nodeId 不能为空");
@@ -62,6 +72,8 @@ export class MeshService {
       maxEntries: options.maxEntries,
     });
     for (const resource of options.resources ?? []) this.registerResource(resource);
+    this.runners = new MeshRunnerRegistry(this.executor, options.runners);
+    this.tasks = options.taskStore ?? new MeshTaskStore();
 
     const ownerPublicKey = b64encode(this.signingKey.publicKey);
     this.policy = new MeshPolicyEngine({
@@ -80,6 +92,10 @@ export class MeshService {
   }
 
   registerResource(resource: LocalMeshResource): void {
+    if (resource.ownerNodeId !== this.nodeId) {
+      throw new Error("Mesh 本地资源的 ownerNodeId 必须是当前目标节点");
+    }
+    if (this.resources.has(resource.id)) throw new Error(`Mesh resource id 重复: ${resource.id}`);
     this.executor.registerResource(resource);
     this.resources.set(resource.id, { ...resource });
   }
@@ -92,7 +108,24 @@ export class MeshService {
       displayName: resource.displayName,
       // Deliberately avoid sending an absolute local path over the channel.
       rootHint: resource.displayName,
+      capabilities: [
+        "inspect",
+        ...(this.runners.forResource(resource.id).length > 0 ? ["run" as const] : []),
+        "quarantine",
+      ],
+      runnerIds: this.runners.forResource(resource.id),
     }));
+  }
+
+  /** Return discovery metadata without exposing local paths or environment. */
+  resourceList(requestId: string): MeshResourceListPayload {
+    if (!requestId.trim()) throw new Error("Mesh resource discovery 缺少 requestId");
+    return {
+      kind: "mesh-resource-list",
+      requestId,
+      nodeId: this.nodeId,
+      resources: this.listResources(),
+    };
   }
 
   /** Issue an owner-signed grant. Call this only from a local owner approval UI. */
@@ -109,6 +142,13 @@ export class MeshService {
     }
     if (["deploy", "delete", "sudo", "secret-read", "arbitrary-shell"].includes(task.operation)) {
       throw new Error("Mesh v0 不为部署、删除、sudo、密钥或任意 shell 签发 grant");
+    }
+    if (task.operation === "run") {
+      const runScope = MeshRunScopeSchema.safeParse(task.scope ?? {});
+      const runner = runScope.success ? this.runners.get(runScope.data.runnerId) : undefined;
+      if (!runScope.success || !runner || runner.resourceId !== task.resourceId) {
+        throw new Error("run grant 必须绑定一个有效的本地 runnerId 和受限 scope");
+      }
     }
     const issuedAt = Date.now();
     const unsigned = {
@@ -134,6 +174,12 @@ export class MeshService {
     if (!MeshCapabilityGrantSchema.safeParse(grant).success) {
       throw new Error("Mesh approval 的 grant 格式无效");
     }
+    const ownerPublicKey = b64encode(this.signingKey.publicKey);
+    if (grant.issuerNodeId !== this.nodeId
+      || grant.issuerPublicKey !== ownerPublicKey
+      || !verifyMeshCapabilityGrant(grant, this.signingKey.publicKey)) {
+      throw new Error("不能批准未经本机资源所有者签发的 Mesh grant");
+    }
     const resource = this.resources.get(grant.resourceId);
     if (!resource || resource.ownerNodeId !== this.nodeId
       || grant.targetNodeId !== this.nodeId || grant.issuerNodeId !== this.nodeId) {
@@ -155,35 +201,75 @@ export class MeshService {
   }
 
   /** Parse and process one authenticated-channel payload. */
-  handle(payload: unknown): MeshTaskResultPayload | undefined {
+  async handle(payload: unknown): Promise<MeshTaskResultPayload | undefined> {
     const parsed = MeshTaskRequestPayloadSchema.safeParse(payload);
     if (!parsed.success) return undefined;
     return this.handleRequest(parsed.data);
   }
 
-  handleRequest(payload: MeshTaskRequestPayload): MeshTaskResultPayload {
+  async handleRequest(payload: MeshTaskRequestPayload): Promise<MeshTaskResultPayload> {
     const task = payload.task;
-    const resource = this.resources.get(task.resourceId);
-    const decision = this.policy.authorize(task, {
-      resource: resource ? {
-        id: resource.id,
-        ownerNodeId: resource.ownerNodeId,
-        kind: resource.kind,
-        displayName: resource.displayName,
-        rootHint: resource.displayName,
-      } : undefined,
-      grant: payload.grant,
-      approval: payload.approval,
-    });
-
-    if (decision.decision === "approval-required") {
-      return this.result(task, "approval-required", decision.decision, "等待目标资源所有者批准");
-    }
-    if (!decision.allowed) {
-      return this.result(task, "denied", decision.decision, `策略拒绝: ${decision.reason}`);
-    }
-
+    let begun;
     try {
+      begun = this.tasks.begin(task);
+    } catch {
+      return this.result(task, "failed", "deny", "task journal unavailable");
+    }
+    if (begun.conflict) return this.result(task, "failed", "deny", "task id conflict");
+    if (!begun.created && begun.record.result) {
+      const canContinueApproval = begun.record.status === "approval-required" && Boolean(payload.approval);
+      if (!canContinueApproval) return begun.record.result;
+    }
+    if (!begun.created && (begun.record.status === "queued" || begun.record.status === "running")) {
+      if (this.activeTasks.has(task.taskId)) return this.result(task, "running", "allow", "任务仍在执行");
+      const interrupted = this.result(task, "failed", "deny", "目标 daemon 曾在任务完成前重启，任务未自动重试");
+      this.rememberResult(task.taskId, "failed", interrupted);
+      return interrupted;
+    }
+    try {
+      this.tasks.update(task.taskId, { status: "queued" });
+    } catch {
+      return this.result(task, "failed", "deny", "task journal unavailable");
+    }
+    this.activeTasks.add(task.taskId);
+    try {
+      const resource = this.resources.get(task.resourceId);
+      const decision = this.policy.authorize(task, {
+        resource: resource ? {
+          id: resource.id,
+          ownerNodeId: resource.ownerNodeId,
+          kind: resource.kind,
+          displayName: resource.displayName,
+          rootHint: resource.displayName,
+        } : undefined,
+        grant: payload.grant,
+        approval: payload.approval,
+      });
+
+      if (decision.decision === "approval-required") {
+        const result = this.result(task, "approval-required", decision.decision, "等待目标资源所有者批准");
+        this.rememberResult(task.taskId, "approval-required", result);
+        return result;
+      }
+      if (!decision.allowed) {
+        const result = this.result(task, "denied", decision.decision, `策略拒绝: ${decision.reason}`);
+        this.rememberResult(task.taskId, "denied", result);
+        return result;
+      }
+
+      this.tasks.update(task.taskId, { status: "running" });
+      if (task.operation === "run") {
+        const runner = await this.runners.run(task);
+        const result = this.result(
+          task,
+          runner.status === "completed" ? "completed" : runner.status,
+          decision.decision,
+          runner.status === "completed" ? "任务已完成" : "typed runner 未成功完成任务",
+          this.runnerResult(runner, resource?.root),
+        );
+        this.rememberResult(task.taskId, runner.status, result);
+        return result;
+      }
       const execution = this.executor.execute(task, {
         allowed: true,
         resourceId: task.resourceId,
@@ -191,6 +277,13 @@ export class MeshService {
         taskId: task.taskId,
         grantId: payload.grant?.grantId,
       });
+      if (task.operation === "quarantine") {
+        // A quarantined resource is no longer an executable/listable target
+        // until the owner restores it locally from its manifest.
+        this.runners.unregisterForResource(task.resourceId);
+        this.executor.unregisterResource(task.resourceId);
+        this.resources.delete(task.resourceId);
+      }
       // Absolute quarantine paths are local control-plane data; do not expose
       // them to a peer. The local audit/manifest remains the recovery source.
       const result = {
@@ -201,13 +294,50 @@ export class MeshService {
         truncated: execution.truncated,
         bytes: execution.bytes,
       };
-      return this.result(task, "completed", decision.decision, "任务已完成", result);
+      const completed = this.result(task, "completed", decision.decision, "任务已完成", result);
+      this.rememberResult(task.taskId, "completed", completed);
+      return completed;
     } catch (error) {
       // Do not send OS paths, errno strings, or child-process output to a
       // peer. The local audit sink can retain a redacted diagnostic separately.
       void error;
-      return this.result(task, "failed", "deny", "typed executor failed");
+      const failed = this.result(task, "failed", "deny", task.operation === "run" ? "typed runner failed" : "typed executor failed");
+      this.rememberResult(task.taskId, "failed", failed);
+      return failed;
+    } finally {
+      this.activeTasks.delete(task.taskId);
     }
+  }
+
+  private rememberResult(taskId: string, status: MeshTaskLifecycleStatus, result: MeshTaskResultPayload): void {
+    try {
+      this.tasks.update(taskId, { status, result, message: result.message });
+    } catch {
+      // The execution result is already safe to return. A journal failure is
+      // deliberately not surfaced with filesystem details to the peer.
+    }
+  }
+
+  private runnerResult(runner: MeshRunnerResult, resourceRoot?: string): Record<string, string | number | boolean | null> {
+    const redact = (value: string): string => {
+      const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+      return value
+        .replaceAll(resourceRoot ?? "\u0000", "<resource>")
+        .replaceAll(home || "\u0000", "<home>");
+    };
+    return {
+      runnerId: runner.runnerId,
+      exitCode: runner.exitCode,
+      signal: runner.signal,
+      timedOut: runner.timedOut,
+      durationMs: runner.durationMs,
+      stdout: runner.outputExposed ? redact(runner.stdout) : "",
+      stderr: runner.outputExposed ? redact(runner.stderr) : "",
+      stdoutTruncated: runner.stdoutTruncated,
+      stderrTruncated: runner.stderrTruncated,
+      outputExposed: runner.outputExposed,
+      outputSuppressed: !runner.outputExposed,
+    };
   }
 
   private result(
@@ -215,7 +345,7 @@ export class MeshService {
     status: MeshTaskResultPayload["status"],
     decision: MeshTaskResultPayload["decision"],
     message: string,
-    result?: Record<string, string | number | boolean>,
+    result?: Record<string, string | number | boolean | null>,
   ): MeshTaskResultPayload {
     return {
       kind: "mesh-task-result",

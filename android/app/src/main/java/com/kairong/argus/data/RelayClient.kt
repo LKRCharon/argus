@@ -12,11 +12,73 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 import kotlin.coroutines.resume
 
 typealias Msg = Map<String, Any?>
 
 private const val TAG = "RelayClient"
+
+/** The operation names shared with agentlink's Mesh wire schema. */
+enum class MeshOperation(val wireValue: String) {
+    INSPECT("inspect"),
+    STAGE("stage"),
+    RUN("run"),
+    APPLY_PATCH("apply-patch"),
+    QUARANTINE("quarantine"),
+    DEPLOY("deploy"),
+    DELETE("delete"),
+    SUDO("sudo"),
+    SECRET_READ("secret-read"),
+    ARBITRARY_SHELL("arbitrary-shell"),
+}
+
+/** A typed request sent to another paired agent through the encrypted channel. */
+data class MeshTaskRequest(
+    val groupId: String,
+    val taskId: String,
+    val requesterNodeId: String,
+    val targetNodeId: String,
+    val resourceId: String,
+    val operation: MeshOperation = MeshOperation.INSPECT,
+    val scope: Map<String, Any?>? = null,
+)
+
+/** A typed result returned by the target daemon. `result` remains JSON-native. */
+data class MeshTaskResult(
+    val groupId: String,
+    val taskId: String,
+    val targetNodeId: String,
+    val operation: String,
+    val status: String,
+    val decision: String,
+    val message: String,
+    val result: Any? = null,
+)
+
+/** Discovery metadata from a paired target. Paths and environment never cross the channel. */
+data class MeshResource(
+    val id: String,
+    val ownerNodeId: String,
+    val kind: String,
+    val displayName: String,
+    val rootHint: String,
+    val capabilities: List<String> = emptyList(),
+    val runnerIds: List<String> = emptyList(),
+)
+
+data class MeshResourceList(
+    val requestId: String,
+    val nodeId: String,
+    val resources: List<MeshResource>,
+)
+
+/** A protocol-level Mesh error, distinct from a task result denied by policy. */
+data class MeshError(
+    val code: String,
+    val message: String,
+    val taskId: String? = null,
+)
 
 data class AgentEvent(val sessionId: String, val agent: String, val event: Map<String, Any?>)
 
@@ -98,6 +160,12 @@ class RelayClient(
     var onCodexHistory: ((String, List<Map<String, Any?>>, Boolean) -> Unit)? = null
     /** (sessionId, agent, first prompt) for a session the phone just started. */
     var onSessionStarted: ((String, String, String) -> Unit)? = null
+    /** Typed result from a remote Mesh task. Called on the WebSocket thread. */
+    var onMeshTaskResult: ((MeshTaskResult) -> Unit)? = null
+    /** Typed Mesh transport/configuration error. Called on the WebSocket thread. */
+    var onMeshError: ((MeshError) -> Unit)? = null
+    /** Resource/runner discovery result from a paired target. */
+    var onMeshResourceList: ((MeshResourceList) -> Unit)? = null
 
     private val queue = mutableListOf<Msg>()
     private val waiters = mutableListOf<Pair<(Msg) -> Boolean, kotlin.coroutines.Continuation<Msg>>>()
@@ -313,6 +381,15 @@ class RelayClient(
                             payload["summary"] as? String ?: "",
                             (payload["options"] as? List<*>)?.mapNotNull { it as? Map<String, String> } ?: emptyList()
                         ))
+                        "mesh-task-result" -> parseMeshTaskResult(payload)?.let { result ->
+                            onMeshTaskResult?.invoke(result)
+                        }
+                        "mesh-error" -> parseMeshError(payload)?.let { error ->
+                            onMeshError?.invoke(error)
+                        }
+                        "mesh-resource-list" -> parseMeshResourceList(payload)?.let { resources ->
+                            onMeshResourceList?.invoke(resources)
+                        }
                     }
                 } catch (_: Exception) {}
             }
@@ -456,6 +533,68 @@ class RelayClient(
         send(mapOf("op" to "chan-data", "data" to mapOf("enc" to enc)))
     }
 
+    /**
+     * Send one typed Mesh request. The target still performs all policy and
+     * signature checks; Android only serializes the request and optional
+     * owner-signed grant/approval envelopes.
+     *
+     * `grant` and `approval` are intentionally JSON maps rather than local
+     * trust objects. The phone forwards the exact wire values it received or
+     * obtained from an owner flow, and never treats their presence as consent.
+     */
+    suspend fun sendMeshTaskRequest(
+        request: MeshTaskRequest,
+        grant: Map<String, Any?>? = null,
+        approval: Map<String, Any?>? = null,
+    ): Boolean {
+        val task = mutableMapOf<String, Any?>(
+            "groupId" to request.groupId,
+            "taskId" to request.taskId,
+            "requesterNodeId" to request.requesterNodeId,
+            "targetNodeId" to request.targetNodeId,
+            "resourceId" to request.resourceId,
+            "operation" to request.operation.wireValue,
+        )
+        if (!request.scope.isNullOrEmpty()) task["scope"] = request.scope
+
+        val payload = mutableMapOf<String, Any?>(
+            "kind" to "mesh-task-request",
+            "task" to task,
+        )
+        if (grant != null) payload["grant"] = grant
+        if (approval != null) payload["approval"] = approval
+        return sendEncryptedPayload(payload)
+    }
+
+    /** Convenience API for the first safe Mesh operation: read-only inspect. */
+    suspend fun requestMeshInspect(
+        groupId: String,
+        taskId: String,
+        requesterNodeId: String,
+        targetNodeId: String,
+        resourceId: String,
+        scope: Map<String, Any?>? = null,
+    ): Boolean = sendMeshTaskRequest(
+        MeshTaskRequest(
+            groupId = groupId,
+            taskId = taskId,
+            requesterNodeId = requesterNodeId,
+            targetNodeId = targetNodeId,
+            resourceId = resourceId,
+            operation = MeshOperation.INSPECT,
+            scope = scope,
+        )
+    )
+
+    /** Ask a paired target for stable resource and named-runner metadata. */
+    suspend fun requestMeshResources(requestId: String = "resources-${UUID.randomUUID()}"): Boolean {
+        if (requestId.isBlank()) return false
+        return sendEncryptedPayload(mapOf(
+            "kind" to "mesh-resource-list-request",
+            "requestId" to requestId,
+        ))
+    }
+
     /** Returns false when the message could not be handed to the socket. */
     suspend fun sendUserInput(sessionId: String, text: String): Boolean {
         val chan = chan ?: run {
@@ -556,6 +695,65 @@ class RelayClient(
         socket?.close(1000, "bye")
         reportStatus("disconnected", detail)
     }
+
+    private suspend fun sendEncryptedPayload(payload: Map<String, Any?>): Boolean {
+        val channel = chan ?: run {
+            Log.w(TAG, "mesh payload dropped: channel not ready")
+            return false
+        }
+        val enc = channel.seal(payload)
+        return send(mapOf("op" to "chan-data", "data" to mapOf("enc" to enc)))
+    }
+}
+
+private fun parseMeshTaskResult(payload: Map<String, Any?>): MeshTaskResult? {
+    val groupId = payload["groupId"] as? String ?: return null
+    val taskId = payload["taskId"] as? String ?: return null
+    val targetNodeId = payload["targetNodeId"] as? String ?: return null
+    val operation = payload["operation"] as? String ?: return null
+    val status = payload["status"] as? String ?: return null
+    val decision = payload["decision"] as? String ?: return null
+    val message = payload["message"] as? String ?: return null
+    return MeshTaskResult(
+        groupId = groupId,
+        taskId = taskId,
+        targetNodeId = targetNodeId,
+        operation = operation,
+        status = status,
+        decision = decision,
+        message = message,
+        result = payload["result"],
+    )
+}
+
+private fun parseMeshError(payload: Map<String, Any?>): MeshError? {
+    val code = payload["code"] as? String ?: return null
+    val message = payload["message"] as? String ?: return null
+    return MeshError(code = code, message = message, taskId = payload["taskId"] as? String)
+}
+
+private fun parseMeshResourceList(payload: Map<String, Any?>): MeshResourceList? {
+    val requestId = payload["requestId"] as? String ?: return null
+    val nodeId = payload["nodeId"] as? String ?: return null
+    val rawResources = payload["resources"] as? List<*> ?: return null
+    val resources = rawResources.mapNotNull { item ->
+        val resource = item as? Map<*, *> ?: return@mapNotNull null
+        val id = resource["id"] as? String ?: return@mapNotNull null
+        val ownerNodeId = resource["ownerNodeId"] as? String ?: return@mapNotNull null
+        val kind = resource["kind"] as? String ?: return@mapNotNull null
+        val displayName = resource["displayName"] as? String ?: return@mapNotNull null
+        val rootHint = resource["rootHint"] as? String ?: ""
+        MeshResource(
+            id = id,
+            ownerNodeId = ownerNodeId,
+            kind = kind,
+            displayName = displayName,
+            rootHint = rootHint,
+            capabilities = (resource["capabilities"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
+            runnerIds = (resource["runnerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
+        )
+    }
+    return MeshResourceList(requestId = requestId, nodeId = nodeId, resources = resources)
 }
 
 private fun JSONObject.toMap(): Map<String, Any?> {

@@ -8,7 +8,7 @@
  */
 
 import type { SecureChannel } from "@agentlink/wire";
-import { b64decode, fingerprint } from "@agentlink/wire";
+import { b64decode, fingerprint, MeshResourceListRequestPayloadSchema } from "@agentlink/wire";
 import type { NormalizedEvent } from "../agent/types";
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
@@ -377,7 +377,7 @@ export async function serveWatch(
         const PHONE_COMMANDS = new Set([
           "list-sessions", "new-session", "user-input", "permission-response",
           "codex-threads", "codex-resume", "codex-history-cancel", "codex-input", "codex-interrupt",
-          "cloud-session", "remote-control", "mesh-task-request",
+          "cloud-session", "remote-control", "mesh-resource-list-request", "mesh-task-request",
         ]);
         if (payload?.kind && PHONE_COMMANDS.has(payload.kind)) {
           console.log(`[watch] 收到手机指令: ${payload.kind}`);
@@ -394,11 +394,20 @@ export async function serveWatch(
             status: "queued",
             note: "Mesh 安全模式已禁用未经过策略的远程 Agent 指令",
           });
+        } else if (payload?.kind === "mesh-resource-list-request") {
+          const request = MeshResourceListRequestPayloadSchema.safeParse(payload);
+          if (!opts.mesh) {
+            await sendPayload({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else if (!request.success) {
+            await sendPayload({ kind: "mesh-error", code: "invalid-resource-request", message: "Mesh 资源发现请求格式无效" });
+          } else {
+            await sendPayload(opts.mesh.resourceList(request.data.requestId));
+          }
         } else if (payload?.kind === "mesh-task-request") {
           if (!opts.mesh) {
             await sendPayload({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
           } else {
-            const result = opts.mesh.handle(payload);
+            const result = await opts.mesh.handle(payload);
             if (result) await sendPayload(result);
             else await sendPayload({ kind: "mesh-error", code: "invalid-task", message: "Mesh 任务格式无效" });
           }

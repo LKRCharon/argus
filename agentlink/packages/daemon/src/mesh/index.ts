@@ -1,4 +1,6 @@
 export * from "./executor";
+export * from "./runner";
+export * from "./task-store";
 export * from "./config";
 export * from "./policy";
 export * from "./service";

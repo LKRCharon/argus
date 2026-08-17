@@ -70,7 +70,7 @@ const DEFAULT_MAX_FUTURE_SKEW_MS = 5 * 60_000;
 export const defaultPolicy: Readonly<Record<MeshOperation, MeshOperationPolicy>> = Object.freeze({
   inspect: { risk: "low", grantRequired: false, ownerApprovalRequired: false, alwaysDeny: false },
   stage: { risk: "medium", grantRequired: true, ownerApprovalRequired: false, alwaysDeny: false },
-  run: { risk: "medium", grantRequired: true, ownerApprovalRequired: false, alwaysDeny: false },
+  run: { risk: "high", grantRequired: true, ownerApprovalRequired: true, alwaysDeny: false },
   "apply-patch": { risk: "high", grantRequired: true, ownerApprovalRequired: true, alwaysDeny: false },
   quarantine: { risk: "high", grantRequired: true, ownerApprovalRequired: true, alwaysDeny: false },
   deploy: { risk: "critical", grantRequired: true, ownerApprovalRequired: true, alwaysDeny: true },

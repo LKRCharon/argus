@@ -4,6 +4,7 @@ import {
   MeshApprovalSchema,
   MeshCapabilityGrantSchema,
   MeshOperationSchema,
+  MeshResourceListPayloadSchema,
   MeshTaskRequestSchema,
   type MeshScope,
   type MeshTaskRequest,
@@ -17,6 +18,7 @@ import {
   meshConfigPath,
 } from "./config";
 import { meshSigningPublicKeyBase64 } from "./signing";
+import { MeshTaskStore } from "./task-store";
 
 function flagValue(argv: string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
@@ -66,6 +68,16 @@ export function runMeshStatus(args: string[]): void {
   const identity = loadOrCreateIdentity();
   const nodeId = fingerprint(identity.publicKey);
   const config = loadMeshConfig();
+  const tasks = new MeshTaskStore().list(20).map((task) => ({
+    taskId: task.taskId,
+    groupId: task.groupId,
+    resourceId: task.resourceId,
+    operation: task.operation,
+    status: task.status,
+    message: task.message,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  }));
   const status = {
     type: "mesh-status",
     enabled: Boolean(config),
@@ -79,9 +91,59 @@ export function runMeshStatus(args: string[]): void {
       kind: resource.kind,
       displayName: resource.displayName,
     })) ?? [],
+    runners: config?.runners?.map((runner) => ({
+      id: runner.id,
+      resourceId: runner.resourceId,
+      maxRuntimeMs: runner.maxRuntimeMs,
+      maxOutputBytes: runner.maxOutputBytes,
+    })) ?? [],
+    tasks,
     legacyControl: config?.legacyControl ?? false,
   };
   output(status, args.includes("--json"));
+}
+
+export async function runMeshResources(args: string[]): Promise<void> {
+  const peers = Object.values(listPeers());
+  if (peers.length === 0) throw new Error("尚未配对任何设备，请先运行 pair");
+  const target = flagValue(args, "--target")?.trim();
+  const peer = target
+    ? peers.find((candidate) => candidate.fingerprint === target)
+    : peers.sort((a, b) => b.pairedAt - a.pairedAt)[0];
+  if (!peer) throw new Error(`未找到目标设备: ${target}`);
+
+  const requestId = `resources_${randomUUID()}`;
+  const conn = await WsConn.connect(process.env.AGENTLINK_RELAY ?? "ws://127.0.0.1:8787/ws");
+  try {
+    const chan = await joinChan(conn, b64decode(peer.longTermKey));
+    conn.send({
+      op: "chan-data",
+      data: { enc: await chan.seal({ kind: "mesh-resource-list-request", requestId }) },
+    });
+    for (;;) {
+      const msg = await conn.wait((candidate) => candidate.op === "chan-data", 60_000);
+      try {
+        const payload = await chan.open<{ kind?: string; requestId?: string; code?: string; message?: string }>(msg.data?.enc);
+        if (payload?.kind === "mesh-resource-list" && payload.requestId === requestId) {
+          const parsed = MeshResourceListPayloadSchema.safeParse(payload);
+          if (!parsed.success) {
+            output({ kind: "mesh-error", code: "invalid-resource-list", message: "目标设备返回了无效的资源列表" }, args.includes("--json"));
+          } else {
+            output(parsed.data, args.includes("--json"));
+          }
+          return;
+        }
+        if (payload?.kind === "mesh-error") {
+          output(payload, args.includes("--json"));
+          return;
+        }
+      } catch {
+        // Ignore unrelated or malformed channel payloads.
+      }
+    }
+  } finally {
+    conn.close();
+  }
 }
 
 export function runMeshGrant(args: string[]): void {

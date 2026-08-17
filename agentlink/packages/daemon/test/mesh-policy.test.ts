@@ -32,7 +32,9 @@ const request = (operation: MeshTaskRequest["operation"]): MeshTaskRequest => ({
   targetNodeId: "node-b",
   resourceId: resource.id,
   operation,
-  scope: operation === "run" ? { argv: ["bun", "test"], network: false } : undefined,
+  scope: operation === "run"
+    ? { runnerId: "gpu-project-runner-v1", args: ["--check"], timeoutMs: 900_000 }
+    : undefined,
 });
 
 function grantFor(task: MeshTaskRequest, overrides: Partial<MeshCapabilityGrant> = {}): MeshCapabilityGrant {
@@ -128,14 +130,35 @@ describe("MeshPolicyEngine", () => {
     expect(result).toMatchObject({ decision: "deny", reason: "audit-unavailable" });
   });
 
-  test("stage/run require a matching authenticated grant and consume its nonce once", () => {
+  test("stage uses a grant while run also requires owner approval", () => {
     const policy = engine();
-    const task = request("run");
-    expect(policy.authorize(task, { resource, nowMs: NOW })).toMatchObject({ decision: "deny", reason: "grant-required" });
-    const grant = grantFor(task);
-    const allowed = policy.authorize(task, { resource, grant, nowMs: NOW });
+    const stageTask = request("stage");
+    expect(policy.authorize(stageTask, { resource, nowMs: NOW })).toMatchObject({ decision: "deny", reason: "grant-required" });
+    const stageGrant = grantFor(stageTask);
+    const allowed = policy.authorize(stageTask, { resource, grant: stageGrant, nowMs: NOW });
     expect(allowed).toMatchObject({ decision: "allow", allowed: true, risk: "medium" });
-    expect(policy.authorize(task, { resource, grant, nowMs: NOW })).toMatchObject({ decision: "deny", reason: "grant-replay" });
+    expect(policy.authorize(stageTask, { resource, grant: stageGrant, nowMs: NOW })).toMatchObject({ decision: "deny", reason: "grant-replay" });
+
+    const runTask = request("run");
+    expect(policy.authorize(runTask, { resource, nowMs: NOW })).toMatchObject({ decision: "deny", reason: "grant-required" });
+    const runGrant = grantFor(runTask);
+    expect(policy.authorize(runTask, { resource, grant: runGrant, nowMs: NOW })).toMatchObject({
+      decision: "approval-required",
+      allowed: false,
+      risk: "high",
+    });
+    expect(policy.authorize(runTask, {
+      resource,
+      grant: runGrant,
+      approval: approvalFor(runGrant),
+      nowMs: NOW,
+    })).toMatchObject({ decision: "allow", allowed: true, risk: "high" });
+    expect(policy.authorize(runTask, {
+      resource,
+      grant: runGrant,
+      approval: approvalFor(runGrant),
+      nowMs: NOW,
+    })).toMatchObject({ decision: "deny", reason: "grant-replay" });
   });
 
   test("quarantine pauses for owner approval and then allows the exact grant", () => {

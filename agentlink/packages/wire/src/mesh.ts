@@ -62,6 +62,15 @@ export const MeshJsonValueSchema: z.ZodType<MeshJsonValue> = z.lazy(() =>
 export const MeshScopeSchema = z.record(z.string(), MeshJsonValueSchema);
 export type MeshScope = z.infer<typeof MeshScopeSchema>;
 
+/** Scope for the typed process runner. No cwd, executable, env, or shell field is accepted. */
+export const MeshRunScopeSchema = z.object({
+  runnerId: MeshIdSchema,
+  args: z.array(z.string().max(4096)).max(64).default([]),
+  input: z.string().max(1_048_576).optional(),
+  timeoutMs: z.number().int().min(1_000).max(24 * 60 * 60_000).optional(),
+}).strict();
+export type MeshRunScope = z.infer<typeof MeshRunScopeSchema>;
+
 /** A resource is identified by an opaque ID; rootHint is display metadata, not a secret. */
 export const MeshResourceSchema = z.object({
   id: MeshIdSchema,
@@ -69,6 +78,9 @@ export const MeshResourceSchema = z.object({
   kind: MeshResourceKindSchema,
   displayName: MeshIdSchema,
   rootHint: z.string(),
+  capabilities: z.array(MeshOperationSchema).optional(),
+  /** Stable names only; executable paths never cross the channel. */
+  runnerIds: z.array(MeshIdSchema).max(64).optional(),
 });
 export type MeshResource = z.infer<typeof MeshResourceSchema>;
 
@@ -157,6 +169,20 @@ export const MeshResourcePayloadSchema = z.object({
 });
 export type MeshResourcePayload = z.infer<typeof MeshResourcePayloadSchema>;
 
+export const MeshResourceListRequestPayloadSchema = z.object({
+  kind: z.literal("mesh-resource-list-request"),
+  requestId: MeshIdSchema,
+});
+export type MeshResourceListRequestPayload = z.infer<typeof MeshResourceListRequestPayloadSchema>;
+
+export const MeshResourceListPayloadSchema = z.object({
+  kind: z.literal("mesh-resource-list"),
+  requestId: MeshIdSchema,
+  nodeId: MeshIdSchema,
+  resources: z.array(MeshResourceSchema).max(256),
+});
+export type MeshResourceListPayload = z.infer<typeof MeshResourceListPayloadSchema>;
+
 export const MeshTaskRequestPayloadSchema = z.object({
   kind: z.literal("mesh-task-request"),
   task: MeshTaskRequestSchema,
@@ -183,7 +209,9 @@ export const MeshAuditEventPayloadSchema = z.object({
 });
 export type MeshAuditEventPayload = z.infer<typeof MeshAuditEventPayloadSchema>;
 
-export const MeshTaskResultStatusSchema = z.enum(["completed", "denied", "approval-required", "failed"]);
+export const MeshTaskResultStatusSchema = z.enum([
+  "queued", "running", "completed", "denied", "approval-required", "failed", "cancelled",
+]);
 export type MeshTaskResultStatus = z.infer<typeof MeshTaskResultStatusSchema>;
 
 export const MeshTaskResultPayloadSchema = z.object({
@@ -201,6 +229,8 @@ export type MeshTaskResultPayload = z.infer<typeof MeshTaskResultPayloadSchema>;
 
 export const MeshPayloadSchema = z.discriminatedUnion("kind", [
   MeshResourcePayloadSchema,
+  MeshResourceListRequestPayloadSchema,
+  MeshResourceListPayloadSchema,
   MeshTaskRequestPayloadSchema,
   MeshCapabilityGrantPayloadSchema,
   MeshApprovalPayloadSchema,

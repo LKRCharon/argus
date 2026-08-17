@@ -34,7 +34,7 @@ No cloud, no telemetry, no reading your code or conversations — only file time
 - **Telegram notifications (opt-in).** Pings your bot when the Mac sleeps or wakes.
 - **CLI.** `argus on/off/status/watch/session/debug/repair/help` — drive it without the GUI.
 - **Android companion.** Pair via QR code, monitor agent status and control sessions from your phone.
-- **Mesh task boundary.** Pair trusted devices into explicit groups and route typed, auditable tasks to another machine; v0 supports bounded inspect and reversible quarantine, never remote arbitrary shell or hard delete. See [`docs/mesh.md`](docs/mesh.md).
+- **Mesh task boundary.** Pair trusted devices into explicit groups, discover named resources/runners, and route typed, auditable tasks to another machine; v0 supports bounded inspect, named local runners, and reversible quarantine, never remote arbitrary shell or hard delete. See [`docs/mesh.md`](docs/mesh.md).
 - **Privacy-first.** Reads file clocks only. No analytics, no tracking, no network calls except your own Telegram bot and optional relay.
 
 ## Install

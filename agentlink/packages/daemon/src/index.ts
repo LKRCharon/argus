@@ -20,7 +20,7 @@ import { fingerprint } from "@agentlink/wire";
 import { listPeers, loadOrCreateIdentity, renamePeer, removePeer } from "./store";
 import { runAgent, runPair, runProbe, runUp } from "./client";
 import { runWatch } from "./watcher/serve";
-import { runMeshApprove, runMeshGrant, runMeshRequest, runMeshStatus } from "./mesh/cli";
+import { runMeshApprove, runMeshGrant, runMeshRequest, runMeshResources, runMeshStatus } from "./mesh/cli";
 
 const [cmd, ...args] = process.argv.slice(2);
 
@@ -33,6 +33,7 @@ function usage(): void {
   agentlink probe <NNNN-XXXXXX> 模拟手机端加入并发送 echo
   agentlink up                  常驻在线，等待已配对设备连接
   agentlink mesh status         查看 Mesh 配置与本机资源（不会输出私钥）
+  agentlink mesh resources      查看已配对目标的资源与 runner 能力
   agentlink mesh grant ...       由本地资源所有者签发 grant
   agentlink mesh approve ...     由本地资源所有者签发 approval
   agentlink mesh request ...     发送一个 typed Mesh 任务
@@ -104,6 +105,8 @@ async function main(): Promise<void> {
       const subargs = args.slice(1);
       if (subcommand === "status") {
         runMeshStatus(subargs);
+      } else if (subcommand === "resources") {
+        await runMeshResources(subargs);
       } else if (subcommand === "grant") {
         runMeshGrant(subargs);
       } else if (subcommand === "approve") {
@@ -111,7 +114,7 @@ async function main(): Promise<void> {
       } else if (subcommand === "request") {
         await runMeshRequest(subargs);
       } else {
-        console.error("用法: agentlink mesh <status|grant|approve|request> ...");
+        console.error("用法: agentlink mesh <status|resources|grant|approve|request> ...");
         process.exit(1);
       }
       break;

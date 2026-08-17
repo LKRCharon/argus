@@ -5,6 +5,7 @@ import { z } from "zod";
 import { MeshIdSchema, MeshResourceKindSchema } from "@agentlink/wire";
 import { configDir } from "../store";
 import { MeshService, type MeshServiceOptions } from "./service";
+import { type MeshRunnerSpec } from "./runner";
 
 const MeshConfigSchema = z.object({
   version: z.literal(1),
@@ -23,6 +24,17 @@ const MeshConfigSchema = z.object({
     displayName: MeshIdSchema,
     root: z.string().refine(isAbsolute, "resource root must be absolute"),
   })),
+  runners: z.array(z.object({
+    id: MeshIdSchema,
+    resourceId: MeshIdSchema,
+    executable: z.string().refine(isAbsolute, "runner executable must be absolute"),
+    fixedArgs: z.array(z.string().max(4096)).max(32).optional(),
+    workdir: z.string().optional(),
+    env: z.record(z.string(), z.string().max(4096)).optional(),
+    maxRuntimeMs: z.number().int().min(1_000).max(24 * 60 * 60_000).optional(),
+    maxOutputBytes: z.number().int().min(1_024).max(1 * 1024 * 1024).optional(),
+    exposeOutput: z.boolean().optional(),
+  })).optional(),
 });
 
 export type MeshConfig = z.infer<typeof MeshConfigSchema>;
@@ -55,6 +67,7 @@ export function createMeshServiceForPeer(nodeId: string, peerNodeId: string, con
     allowedRoots: config.allowedRoots,
     quarantineRoot: config.quarantineRoot ?? join(homedir(), ".agentlink", "quarantine"),
     resources: config.resources,
+    runners: config.runners as MeshRunnerSpec[] | undefined,
   };
   return new MeshService(options);
 }
