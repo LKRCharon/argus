@@ -22,6 +22,7 @@ import {
   type MeshCapabilityGrant,
   type MeshResource,
   type MeshResourceListPayload,
+  type MeshResourceStatusPayload,
   type MeshTaskRequest,
   type MeshTaskRequestPayload,
   type MeshTaskResultPayload,
@@ -34,6 +35,7 @@ import { MeshTaskStore, type MeshTaskLifecycleStatus } from "./task-store";
 import { MeshPolicyEngine, type MeshPolicyEngineOptions } from "./policy";
 import { loadOrCreateMeshSigningKey } from "./signing";
 import { appendMeshAuditEvent } from "./audit";
+import { failedGpuStatus, parseGpuStatus } from "./gpu-status";
 
 export interface MeshServiceOptions {
   nodeId: string;
@@ -114,6 +116,7 @@ export class MeshService {
         "quarantine",
       ],
       runnerIds: this.runners.forResource(resource.id),
+      ...(resource.statusRunnerId ? { statusRunnerId: resource.statusRunnerId } : {}),
     }));
   }
 
@@ -125,6 +128,35 @@ export class MeshService {
       requestId,
       nodeId: this.nodeId,
       resources: this.listResources(),
+    };
+  }
+
+  async resourceStatus(requestId: string, resourceId: string): Promise<MeshResourceStatusPayload> {
+    if (!requestId.trim()) throw new Error("GPU 状态请求缺少 requestId");
+    if (!resourceId.trim()) throw new Error("GPU 状态请求缺少 resourceId");
+    const resource = this.resources.get(resourceId);
+    if (!resource) throw new Error("未知资源");
+
+    const observedAt = new Date().toISOString();
+    let status;
+    if (resource.kind !== "gpu" || !resource.statusRunnerId) {
+      status = failedGpuStatus("资源未配置只读 GPU 状态探针", observedAt);
+    } else {
+      try {
+        const runner = await this.runners.runStatus(resource.statusRunnerId, resource.id);
+        status = runner.status === "completed"
+          ? parseGpuStatus(runner.stdout, observedAt)
+          : failedGpuStatus("GPU 状态探针未成功完成", observedAt);
+      } catch {
+        status = failedGpuStatus("GPU 状态探针不可用", observedAt);
+      }
+    }
+    return {
+      kind: "mesh-resource-status",
+      requestId,
+      nodeId: this.nodeId,
+      resourceId,
+      status,
     };
   }
 

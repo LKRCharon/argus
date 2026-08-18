@@ -17,6 +17,8 @@ import {
   MeshResourcePayloadSchema,
   MeshResourceListRequestPayloadSchema,
   MeshResourceListPayloadSchema,
+  MeshResourceStatusRequestPayloadSchema,
+  MeshResourceStatusPayloadSchema,
   MeshTaskResultPayloadSchema,
   MeshTaskRequestPayloadSchema,
 } from "./mesh";
@@ -102,6 +104,8 @@ export const BusinessPayloadSchema = z.discriminatedUnion("kind", [
   MeshResourcePayloadSchema,
   MeshResourceListRequestPayloadSchema,
   MeshResourceListPayloadSchema,
+  MeshResourceStatusRequestPayloadSchema,
+  MeshResourceStatusPayloadSchema,
   MeshTaskRequestPayloadSchema,
   MeshCapabilityGrantPayloadSchema,
   MeshApprovalPayloadSchema,

@@ -3,11 +3,13 @@ import {
   b64decode,
   fingerprint,
   MeshResourceListPayloadSchema,
+  MeshResourceStatusPayloadSchema,
   MeshTaskResultPayloadSchema,
   MeshTaskRequestPayloadSchema,
   type MeshApproval,
   type MeshCapabilityGrant,
   type MeshResource,
+  type MeshResourceStatus,
   type MeshTaskRequest,
 } from "@agentlink/wire";
 import { joinChan, WsConn } from "../client";
@@ -25,6 +27,7 @@ export interface ControllerPeerSnapshot {
   lastSeen: number | null;
   error: string | null;
   resources: MeshResource[];
+  resourceStatuses: Record<string, MeshResourceStatus>;
 }
 
 export interface ControllerOverview {
@@ -42,14 +45,23 @@ interface PendingResourceRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingResourceStatusRequest {
+  resolve: (status: MeshResourceStatus) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 interface PeerSession {
   peer: StoredPeer;
   conn: WsConn;
   chan: Awaited<ReturnType<typeof joinChan>>;
   closed: boolean;
   pendingResources: Map<string, PendingResourceRequest>;
+  pendingStatuses: Map<string, PendingResourceStatusRequest>;
   receiveLoop: Promise<void>;
 }
+
+const RESOURCE_REFRESH_INTERVAL_MS = 60_000;
 
 export interface MeshControllerOptions {
   relayUrl?: string;
@@ -93,7 +105,7 @@ export class MeshController {
     await this.refreshResources();
     this.refreshTimer = setInterval(() => {
       void this.refreshResources();
-    }, 15_000);
+    }, RESOURCE_REFRESH_INTERVAL_MS);
     this.refreshTimer.unref();
   }
 
@@ -136,6 +148,7 @@ export class MeshController {
         chan,
         closed: false,
         pendingResources: new Map(),
+        pendingStatuses: new Map(),
         receiveLoop: Promise.resolve(),
       };
       this.sessions.set(peerId, session);
@@ -175,9 +188,34 @@ export class MeshController {
     });
     try {
       await this.send(session, { kind: "mesh-resource-list-request", requestId });
-      return await resources;
+      const discovered = await resources;
+      await Promise.allSettled(
+        discovered
+          .filter((resource) => Boolean(resource.statusRunnerId))
+          .map((resource) => this.requestResourceStatus(peerId, resource.id)),
+      );
+      return discovered;
     } catch (error) {
       session.pendingResources.delete(requestId);
+      throw error;
+    }
+  }
+
+  async requestResourceStatus(peerId: string, resourceId: string): Promise<MeshResourceStatus> {
+    const session = this.requireSession(peerId);
+    const requestId = `status-${randomUUID()}`;
+    const status = new Promise<MeshResourceStatus>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        session.pendingStatuses.delete(requestId);
+        reject(new Error("等待资源状态响应超时"));
+      }, 15_000);
+      session.pendingStatuses.set(requestId, { resolve, reject, timer });
+    });
+    try {
+      await this.send(session, { kind: "mesh-resource-status-request", requestId, resourceId });
+      return await status;
+    } catch (error) {
+      session.pendingStatuses.delete(requestId);
       throw error;
     }
   }
@@ -224,6 +262,7 @@ export class MeshController {
       ...resource,
       nodeId: peer.fingerprint,
       deviceName: peer.deviceName,
+      ...(peer.resourceStatuses[resource.id] ? { status: peer.resourceStatuses[resource.id] } : {}),
     })));
     return {
       controllerNodeId: this.nodeId,
@@ -265,6 +304,26 @@ export class MeshController {
       return;
     }
 
+    const status = MeshResourceStatusPayloadSchema.safeParse(payload);
+    if (status.success) {
+      if (status.data.nodeId !== session.peer.fingerprint) return;
+      const pending = session.pendingStatuses.get(status.data.requestId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        session.pendingStatuses.delete(status.data.requestId);
+        const current = this.snapshots.get(session.peer.fingerprint);
+        this.setSnapshot(session.peer, {
+          resourceStatuses: {
+            ...(current?.resourceStatuses ?? {}),
+            [status.data.resourceId]: status.data.status,
+          },
+          lastSeen: Date.now(),
+        });
+        pending.resolve(status.data.status);
+      }
+      return;
+    }
+
     const result = MeshTaskResultPayloadSchema.safeParse(payload);
     if (result.success) {
       this.journal.update(result.data.taskId, {
@@ -300,6 +359,7 @@ export class MeshController {
           lastSeen: null,
           error: null,
           resources: [],
+          resourceStatuses: {},
         });
       }
     }
@@ -318,6 +378,7 @@ export class MeshController {
       lastSeen: null,
       error: null,
       resources: [],
+      resourceStatuses: {},
     };
     this.snapshots.set(peer.fingerprint, {
       ...current,
@@ -343,6 +404,11 @@ export class MeshController {
       pending.reject(error);
     }
     session.pendingResources.clear();
+    for (const pending of session.pendingStatuses.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    session.pendingStatuses.clear();
   }
 
   private scheduleReconnect(peerId: string): void {

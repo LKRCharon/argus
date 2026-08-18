@@ -8,7 +8,12 @@
  */
 
 import type { SecureChannel } from "@agentlink/wire";
-import { b64decode, fingerprint, MeshResourceListRequestPayloadSchema } from "@agentlink/wire";
+import {
+  b64decode,
+  fingerprint,
+  MeshResourceListRequestPayloadSchema,
+  MeshResourceStatusRequestPayloadSchema,
+} from "@agentlink/wire";
 import type { NormalizedEvent } from "../agent/types";
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
@@ -377,7 +382,7 @@ export async function serveWatch(
         const PHONE_COMMANDS = new Set([
           "list-sessions", "new-session", "user-input", "permission-response",
           "codex-threads", "codex-resume", "codex-history-cancel", "codex-input", "codex-interrupt",
-          "cloud-session", "remote-control", "mesh-resource-list-request", "mesh-task-request",
+          "cloud-session", "remote-control", "mesh-resource-list-request", "mesh-resource-status-request", "mesh-task-request",
         ]);
         if (payload?.kind && PHONE_COMMANDS.has(payload.kind)) {
           console.log(`[watch] 收到手机指令: ${payload.kind}`);
@@ -402,6 +407,19 @@ export async function serveWatch(
             await sendPayload({ kind: "mesh-error", code: "invalid-resource-request", message: "Mesh 资源发现请求格式无效" });
           } else {
             await sendPayload(opts.mesh.resourceList(request.data.requestId));
+          }
+        } else if (payload?.kind === "mesh-resource-status-request") {
+          const request = MeshResourceStatusRequestPayloadSchema.safeParse(payload);
+          if (!opts.mesh) {
+            await sendPayload({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else if (!request.success) {
+            await sendPayload({ kind: "mesh-error", code: "invalid-resource-status-request", message: "GPU 状态请求格式无效" });
+          } else {
+            try {
+              await sendPayload(await opts.mesh.resourceStatus(request.data.requestId, request.data.resourceId));
+            } catch {
+              await sendPayload({ kind: "mesh-error", code: "resource-status-failed", message: "目标设备无法读取资源状态" });
+            }
           }
         } else if (payload?.kind === "mesh-task-request") {
           if (!opts.mesh) {

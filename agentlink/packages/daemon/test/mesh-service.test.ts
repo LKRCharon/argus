@@ -52,6 +52,47 @@ function task(operation: "inspect" | "quarantine" | "delete") {
 }
 
 describe.serial("MeshService", () => {
+  test("runs only the owner-configured GPU status probe", async () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-gpu-status-"));
+    const root = join(base, "gpu");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const value = new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      quarantineRoot: join(base, "quarantine"),
+      auditSink: () => {},
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{
+        id: "gpu:fixture",
+        ownerNodeId: "node-b",
+        kind: "gpu",
+        displayName: "GPU fixture",
+        root,
+        statusRunnerId: "gpu:status",
+      }],
+      runners: [{
+        id: "gpu:status",
+        resourceId: "gpu:fixture",
+        executable: process.execPath,
+        fixedArgs: ["-e", "console.log('0, NVIDIA L40, 42, 1024, 46068, 12, 535.309.01')"],
+        exposeOutput: true,
+      }],
+    });
+
+    const result = await value.resourceStatus("status-1", "gpu:fixture");
+    expect(result).toMatchObject({
+      kind: "mesh-resource-status",
+      resourceId: "gpu:fixture",
+      status: {
+        state: "ready",
+        gpu: { devices: [{ name: "NVIDIA L40", utilizationGpuPercent: 12 }] },
+      },
+    });
+  });
+
   test("handles read-only inspect without exposing local paths", async () => {
     const { value } = service();
     const result = await value.handle({ kind: "mesh-task-request", task: task("inspect") });

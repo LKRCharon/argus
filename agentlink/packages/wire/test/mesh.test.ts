@@ -8,6 +8,8 @@ import {
   MeshResourceListPayloadSchema,
   MeshResourceListRequestPayloadSchema,
   MeshResourcePayloadSchema,
+  MeshResourceStatusPayloadSchema,
+  MeshResourceStatusRequestPayloadSchema,
   MeshTaskResultPayloadSchema,
   MeshTaskRequestPayloadSchema,
   generateMeshSigningKeyPair,
@@ -93,6 +95,23 @@ const taskResult = {
   result: { entryCount: 3, truncated: false },
 };
 
+const resourceStatus = {
+  state: "ready" as const,
+  summary: "2 个 GPU · 12% · 2048/92136 MiB",
+  observedAt: issuedAt,
+  gpu: {
+    devices: [{
+      index: 0,
+      name: "NVIDIA L40",
+      temperatureC: 42,
+      memoryUsedMiB: 1024,
+      memoryTotalMiB: 46068,
+      utilizationGpuPercent: 12,
+      driverVersion: "535.309.01",
+    }],
+  },
+};
+
 function jsonRoundTrip<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -111,6 +130,14 @@ describe("Mesh wire schema", () => {
           capabilities: ["inspect", "run"] satisfies Array<"inspect" | "run">,
           runnerIds: ["gpu-runner-v1"],
         }],
+      },
+      { kind: "mesh-resource-status-request" as const, requestId: "status-001", resourceId: resource.id },
+      {
+        kind: "mesh-resource-status" as const,
+        requestId: "status-001",
+        nodeId: "node-linux-gpu",
+        resourceId: resource.id,
+        status: resourceStatus,
       },
       { kind: "mesh-task-request" as const, task },
       { kind: "mesh-capability-grant" as const, grant },
@@ -141,6 +168,18 @@ describe("Mesh wire schema", () => {
       nodeId: "node-linux-gpu",
       resources: [{ ...resource, capabilities: ["inspect", "run"], runnerIds: ["gpu-runner-v1"] }],
     }))).toMatchObject({ kind: "mesh-resource-list", requestId: "resources-001" });
+    expect(MeshResourceStatusRequestPayloadSchema.parse(jsonRoundTrip({
+      kind: "mesh-resource-status-request",
+      requestId: "status-001",
+      resourceId: resource.id,
+    }))).toEqual({ kind: "mesh-resource-status-request", requestId: "status-001", resourceId: resource.id });
+    expect(MeshResourceStatusPayloadSchema.parse(jsonRoundTrip({
+      kind: "mesh-resource-status",
+      requestId: "status-001",
+      nodeId: "node-linux-gpu",
+      resourceId: resource.id,
+      status: resourceStatus,
+    }))).toMatchObject({ kind: "mesh-resource-status", requestId: "status-001" });
     expect(MeshTaskRequestPayloadSchema.parse(jsonRoundTrip({ kind: "mesh-task-request", task }))).toEqual({
       kind: "mesh-task-request",
       task,

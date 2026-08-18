@@ -40,6 +40,8 @@ export interface LocalMeshResource {
   displayName: string;
   /** Local path. Never accept this value from an untrusted task request. */
   root: string;
+  /** Owner-configured read-only probe used for status discovery. */
+  statusRunnerId?: string;
 }
 
 export interface MeshTaskLike {

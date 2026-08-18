@@ -81,6 +81,8 @@ export const MeshResourceSchema = z.object({
   capabilities: z.array(MeshOperationSchema).optional(),
   /** Stable names only; executable paths never cross the channel. */
   runnerIds: z.array(MeshIdSchema).max(64).optional(),
+  /** Optional owner-configured, read-only status probe. */
+  statusRunnerId: MeshIdSchema.optional(),
 });
 export type MeshResource = z.infer<typeof MeshResourceSchema>;
 
@@ -183,6 +185,44 @@ export const MeshResourceListPayloadSchema = z.object({
 });
 export type MeshResourceListPayload = z.infer<typeof MeshResourceListPayloadSchema>;
 
+export const MeshGpuDeviceStatusSchema = z.object({
+  index: z.number().int().nonnegative(),
+  name: z.string().min(1).max(128),
+  temperatureC: z.number().finite().min(-100).max(200).nullable(),
+  memoryUsedMiB: z.number().finite().nonnegative().nullable(),
+  memoryTotalMiB: z.number().finite().nonnegative().nullable(),
+  utilizationGpuPercent: z.number().finite().min(0).max(100).nullable(),
+  driverVersion: z.string().max(128).nullable(),
+}).strict();
+export type MeshGpuDeviceStatus = z.infer<typeof MeshGpuDeviceStatusSchema>;
+
+export const MeshResourceStatusSchema = z.object({
+  state: z.enum(["ready", "degraded", "error", "unknown"]),
+  summary: z.string().max(512),
+  observedAt: MeshTimestampSchema,
+  error: z.string().max(512).optional(),
+  gpu: z.object({
+    devices: z.array(MeshGpuDeviceStatusSchema).max(64),
+  }).strict().optional(),
+}).strict();
+export type MeshResourceStatus = z.infer<typeof MeshResourceStatusSchema>;
+
+export const MeshResourceStatusRequestPayloadSchema = z.object({
+  kind: z.literal("mesh-resource-status-request"),
+  requestId: MeshIdSchema,
+  resourceId: MeshIdSchema,
+});
+export type MeshResourceStatusRequestPayload = z.infer<typeof MeshResourceStatusRequestPayloadSchema>;
+
+export const MeshResourceStatusPayloadSchema = z.object({
+  kind: z.literal("mesh-resource-status"),
+  requestId: MeshIdSchema,
+  nodeId: MeshIdSchema,
+  resourceId: MeshIdSchema,
+  status: MeshResourceStatusSchema,
+});
+export type MeshResourceStatusPayload = z.infer<typeof MeshResourceStatusPayloadSchema>;
+
 export const MeshTaskRequestPayloadSchema = z.object({
   kind: z.literal("mesh-task-request"),
   task: MeshTaskRequestSchema,
@@ -231,6 +271,8 @@ export const MeshPayloadSchema = z.discriminatedUnion("kind", [
   MeshResourcePayloadSchema,
   MeshResourceListRequestPayloadSchema,
   MeshResourceListPayloadSchema,
+  MeshResourceStatusRequestPayloadSchema,
+  MeshResourceStatusPayloadSchema,
   MeshTaskRequestPayloadSchema,
   MeshCapabilityGrantPayloadSchema,
   MeshApprovalPayloadSchema,

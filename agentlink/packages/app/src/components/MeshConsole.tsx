@@ -2,6 +2,25 @@ import { useEffect, useMemo, useState } from "react";
 
 type PeerStatus = "offline" | "connecting" | "online" | "error";
 type TaskStatus = "queued" | "running" | "completed" | "denied" | "approval-required" | "failed" | "cancelled";
+type ResourceStatusState = "ready" | "degraded" | "error" | "unknown";
+
+interface GpuDeviceStatus {
+  index: number;
+  name: string;
+  temperatureC: number | null;
+  memoryUsedMiB: number | null;
+  memoryTotalMiB: number | null;
+  utilizationGpuPercent: number | null;
+  driverVersion: string | null;
+}
+
+interface ResourceStatus {
+  state: ResourceStatusState;
+  summary: string;
+  observedAt: string;
+  error?: string;
+  gpu?: { devices: GpuDeviceStatus[] };
+}
 
 interface Resource {
   id: string;
@@ -11,6 +30,8 @@ interface Resource {
   rootHint: string;
   capabilities?: string[];
   runnerIds?: string[];
+  statusRunnerId?: string;
+  status?: ResourceStatus;
   nodeId: string;
   deviceName: string;
 }
@@ -89,12 +110,12 @@ export default function MeshConsole() {
 
   useEffect(() => {
     void loadOverview();
-    const timer = window.setInterval(() => void loadOverview(), 5_000);
+    const timer = window.setInterval(() => void loadOverview(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
 
   const target = overview?.peers.find((peer) => peer.fingerprint === targetNodeId);
-  const targetResources = target?.resources ?? overview?.resources.filter((resource) => resource.nodeId === targetNodeId) ?? [];
+  const targetResources = overview?.resources.filter((resource) => resource.nodeId === targetNodeId) ?? target?.resources ?? [];
   const selectedResource = targetResources.find((resource) => resource.id === resourceId);
 
   useEffect(() => {
@@ -169,7 +190,7 @@ export default function MeshConsole() {
           <div>
             <p className="text-3xl font-semibold tracking-tight">设备状态</p>
             <p className="mt-2 text-sm text-slate-500">
-              {onlineCount} 台在线 · {overview?.resources.length ?? 0} 个资源 · {runningCount} 个任务运行中
+              {onlineCount} 台在线 · {overview?.resources.length ?? 0} 个资源 · {runningCount} 个任务运行中 · 状态约每 60 秒刷新
             </p>
           </div>
           <div className="text-right text-xs text-slate-400">
@@ -227,6 +248,12 @@ export default function MeshConsole() {
               </div>
             </div>
 
+            <GpuStatusPanel
+              resource={selectedResource}
+              refreshing={refreshing}
+              onRefresh={() => void refresh()}
+            />
+
             <TaskList tasks={overview?.tasks ?? []} peers={overview?.peers ?? []} />
           </div>
 
@@ -253,6 +280,70 @@ export default function MeshConsole() {
           />
         </section>
       </main>
+    </div>
+  );
+}
+
+function GpuStatusPanel({
+  resource,
+  refreshing,
+  onRefresh,
+}: {
+  resource?: Resource;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  if (!resource || resource.kind !== "gpu") return null;
+  const status = resource.status;
+  const devices = status?.gpu?.devices ?? [];
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
+        <div>
+          <h2 className="font-semibold">GPU 状态</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            {status ? `${status.summary} · ${formatObservedAt(status.observedAt)}` : "等待第一次状态读取"}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={refreshing}
+          className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-slate-500 disabled:cursor-wait disabled:opacity-50"
+        >
+          {refreshing ? "刷新中" : "刷新 GPU"}
+        </button>
+      </div>
+      {!status && <Empty text="尚未返回 GPU 状态" />}
+      {status && devices.length > 0 && (
+        <div className="divide-y divide-slate-100">
+          {devices.map((device) => (
+            <div key={`${device.index}-${device.name}`} className="grid gap-3 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_110px_140px_120px] sm:items-center">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${status.state === "ready" ? "bg-emerald-500" : "bg-amber-400"}`} />
+                <div className="min-w-0">
+                  <p className="truncate font-medium">GPU {device.index} · {device.name}</p>
+                  <p className="mt-1 text-xs text-slate-500">驱动 {device.driverVersion ?? "未知"}</p>
+                </div>
+              </div>
+              <Metric label="利用率" value={formatPercent(device.utilizationGpuPercent)} />
+              <Metric label="显存" value={`${formatMiB(device.memoryUsedMiB)} / ${formatMiB(device.memoryTotalMiB)} MiB`} />
+              <Metric label="温度" value={device.temperatureC === null ? "—" : `${Math.round(device.temperatureC)}°C`} />
+            </div>
+          ))}
+        </div>
+      )}
+      {status?.state === "error" && <p className="px-5 py-4 text-sm text-red-700">{status.error ?? "GPU 状态读取失败"}</p>}
+      {status && devices.length === 0 && status.state !== "error" && <Empty text="没有发现 GPU 设备" />}
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-1 text-sm font-medium text-slate-800">{value}</p>
     </div>
   );
 }
@@ -367,6 +458,24 @@ function StatusDot({ status }: { status: PeerStatus }) {
 
 function Empty({ text }: { text: string }) {
   return <div className="px-5 py-10 text-center text-sm text-slate-400">{text}</div>;
+}
+
+function formatObservedAt(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "时间未知";
+  return `更新于 ${new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(timestamp))}`;
+}
+
+function formatPercent(value: number | null): string {
+  return value === null ? "—" : `${Math.round(value)}%`;
+}
+
+function formatMiB(value: number | null): string {
+  return value === null ? "—" : `${Math.round(value)}`;
 }
 
 function shortId(value: string): string {

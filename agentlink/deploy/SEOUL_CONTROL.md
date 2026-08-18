@@ -47,6 +47,10 @@ outside versioned code:
 The first Seoul/L40 group uses a local `gpu:l40` resource and a fixed
 `gpu:status` runner backed by `/usr/bin/nvidia-smi`; the runner does not accept
 an executable, cwd, environment, or shell command from the controller.
+For a GPU resource with `statusRunnerId`, the controller requests only the
+structured GPU metrics roughly once per minute. The `/mesh` console also has a
+manual `刷新 GPU` action; raw `nvidia-smi` output is parsed on the host and is
+not sent across the encrypted channel.
 
 ## Mac mini tunnel
 

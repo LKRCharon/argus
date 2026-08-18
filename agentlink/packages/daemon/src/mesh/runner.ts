@@ -178,8 +178,25 @@ export class MeshRunnerRegistry {
     if (!runner || runner.resourceId !== task.resourceId) throw new Error("runner 与资源不匹配");
     for (const [index, arg] of parsed.data.args.entries()) assertSafeArg(arg, `run args[${index}]`);
     const timeoutMs = Math.min(parsed.data.timeoutMs ?? runner.maxRuntimeMs, runner.maxRuntimeMs);
+    return this.runRegistered(parsed.data.runnerId, runner, parsed.data.args, parsed.data.input, timeoutMs);
+  }
+
+  /** Run an owner-configured read-only status probe without a task grant. */
+  async runStatus(runnerId: string, resourceId: string): Promise<MeshRunnerResult> {
+    const runner = this.runners.get(runnerId);
+    if (!runner || runner.resourceId !== resourceId) throw new Error("status runner 与资源不匹配");
+    return this.runRegistered(runnerId, runner, [], undefined, runner.maxRuntimeMs);
+  }
+
+  private async runRegistered(
+    runnerId: string,
+    runner: RegisteredRunner,
+    args: string[],
+    input: string | undefined,
+    timeoutMs: number,
+  ): Promise<MeshRunnerResult> {
     const startedAt = Date.now();
-    const child = spawn(runner.executable, [...runner.fixedArgs, ...parsed.data.args], {
+    const child = spawn(runner.executable, [...runner.fixedArgs, ...args], {
       cwd: runner.workdir,
       env: runner.env,
       shell: false,
@@ -220,7 +237,7 @@ export class MeshRunnerRegistry {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (killHandle) clearTimeout(killHandle);
         resolveResult({
-          runnerId: parsed.data.runnerId,
+          runnerId,
           status: timedOut ? "cancelled" : exitCode === 0 ? "completed" : "failed",
           exitCode,
           signal: signal ? String(signal) : null,
@@ -247,7 +264,7 @@ export class MeshRunnerRegistry {
       child.once("error", () => finish(null, "spawn-error"));
       child.once("close", (exitCode, signal) => finish(exitCode, signal));
       child.stdin.once("error", () => undefined);
-      child.stdin.end(parsed.data.input ?? "");
+      child.stdin.end(input ?? "");
       timeoutHandle = setTimeout(() => {
         timedOut = true;
         stop("SIGTERM");
