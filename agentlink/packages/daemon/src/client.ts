@@ -175,8 +175,12 @@ function finalizePair(identity: KeyPair, result: PairingResult): Uint8Array {
   return longTermKey;
 }
 
-export async function joinChan(conn: WsConn, longTermKey: Uint8Array): Promise<SecureChannel> {
-  conn.send({ op: "join-chan", token: deriveChanToken(longTermKey), endpoint: "host" });
+export async function joinChan(
+  conn: WsConn,
+  longTermKey: Uint8Array,
+  endpoint: "host" | "controller" = "host",
+): Promise<SecureChannel> {
+  conn.send({ op: "join-chan", token: deriveChanToken(longTermKey), endpoint });
   const res = await conn.wait((m) => m.op === "chan-joined" || m.op === "error");
   if (res.op === "error") throw new Error(`进入设备通道失败: ${res.message ?? res.code}`);
   return new SecureChannel(longTermKey);
@@ -270,6 +274,31 @@ export interface RunProbeOptions {
   echoText?: string;
   /** agent 演示模式：打印事件流，自动批准第一个权限选项 */
   agentDemo?: boolean;
+}
+
+/** B 方：只加入配对并保存对端，不启动 echo 或设备通道。 */
+export async function runJoin(codeStr: string): Promise<PairingResult> {
+  const code = parsePairCode(codeStr);
+  const identity = loadOrCreateIdentity();
+  const device = deviceInfo();
+  const conn = await WsConn.connect(relayUrl());
+  try {
+    conn.send({ op: "join-pair", nameplate: code.nameplate });
+    const joined = await conn.wait((m) => m.op === "pair-joined" || m.op === "error");
+    if (joined.op === "error") throw new Error(`relay 拒绝: ${joined.message ?? joined.code}`);
+    if (joined.role !== "B") {
+      throw new Error("未找到等待中的配对发起方（请先在设备端运行 pair）");
+    }
+    const session = new PairingSession({ role: "B", secret: code.secret, identity, device });
+    const result = await doPairing(conn, session, "B");
+    finalizePair(identity, result);
+    conn.send({ op: "leave-pair" });
+    conn.close();
+    return result;
+  } catch (e) {
+    conn.close();
+    throw e;
+  }
 }
 
 /** B 方：输入配对码加入，完成后发一条 echo 验证链路（模拟手机端） */

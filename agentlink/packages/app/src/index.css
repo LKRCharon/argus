@@ -18,3 +18,53 @@ body,
   background: rgb(51 65 85);
   border-radius: 2px;
 }
+
+.input,
+.code-input {
+  width: 100%;
+  border: 1px solid rgb(203 213 225);
+  border-radius: 0.75rem;
+  background: white;
+  color: rgb(15 23 42);
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.input {
+  min-height: 2.75rem;
+  padding: 0.65rem 0.8rem;
+  font-size: 0.875rem;
+}
+
+.code-input {
+  min-height: 5.5rem;
+  padding: 0.7rem 0.8rem;
+  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.input:focus,
+.code-input:focus {
+  border-color: #007aff;
+  box-shadow: 0 0 0 3px rgb(0 122 255 / 12%);
+}
+
+.status {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  border-radius: 9999px;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.status-completed { background: rgb(220 252 231); color: rgb(21 128 61); }
+.status-running { background: rgb(219 234 254); color: rgb(29 78 216); }
+.status-queued { background: rgb(241 245 249); color: rgb(71 85 105); }
+.status-approval-required { background: rgb(254 243 199); color: rgb(161 98 7); }
+.status-denied,
+.status-failed { background: rgb(254 226 226); color: rgb(185 28 28); }
+.status-cancelled { background: rgb(241 245 249); color: rgb(100 116 139); }

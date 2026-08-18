@@ -171,3 +171,33 @@ task through a future adapter, but the daemon—not the model and not the
 relay—owns group membership, signatures, path resolution, execution, and
 rollback. A GPU wrapper should remain a named typed runner with its own input
 validation and resource limits; it should not re-enable arbitrary shell.
+
+## Seoul control console
+
+The daemon can also run a Seoul-side controller for several paired peers:
+
+```bash
+bun run control
+```
+
+The controller binds to `127.0.0.1:8790` by default and serves `/mesh`. It
+maintains one encrypted channel per stored peer, periodically discovers local
+resources, and records sanitized task lifecycle metadata in
+`control-tasks.json`. The browser never receives peer long-term keys.
+
+Only `inspect` and named-runner `run` are exposed by the console. A `run` task
+must still include a target-owner grant and separate approval; the dashboard
+does not mint either signature. Use an SSH local forward to view it remotely:
+
+```bash
+ssh -N -L 8790:127.0.0.1:8790 seoul
+```
+
+For a Mac mini behind NAT, keep an outbound SSH session from the Mac to Seoul
+and use its reverse port only for bootstrap and bounded `rsync`. The Mesh
+channel remains typed and encrypted; an SSH tunnel is transport reachability,
+not authorization.
+
+The current Seoul deployment is available at `/mesh` through an SSH local
+forward. It keeps the HTTP listener private and has been verified against an
+online L40 peer with both `inspect` and a fixed, owner-approved `run` runner.
