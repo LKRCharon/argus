@@ -34,9 +34,15 @@ async function connectMcp(fetchImpl: ControlFetch): Promise<ConnectedMcp> {
 }
 
 function textContent(result: Awaited<ReturnType<Client["callTool"]>>): string {
-  const item = result.content[0];
-  if (!item || item.type !== "text") throw new Error("expected MCP text content");
-  return item.text;
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content)) throw new Error("expected MCP content array");
+  const item = content[0];
+  if (!item || typeof item !== "object") throw new Error("expected MCP content block");
+  const block = item as { type?: unknown; text?: unknown };
+  if (block.type !== "text" || typeof block.text !== "string") {
+    throw new Error("expected MCP text content");
+  }
+  return block.text;
 }
 
 describe("Seoul Codex MCP gateway", () => {
@@ -149,10 +155,12 @@ describe("Seoul Codex MCP gateway", () => {
         targetNodeId: "node-l40",
         resourceId: "gpu:l40",
         operation: "run",
-        runnerId: "gpu:run",
-        args: ["--model", "small"],
-        input: "payload",
-        timeoutMs: 30_000,
+        scope: {
+          runnerId: "gpu:run",
+          args: ["--model", "small"],
+          input: "payload",
+          timeoutMs: 30_000,
+        },
       });
       const text = textContent(result);
       expect(text.length).toBeLessThanOrEqual(12_000);

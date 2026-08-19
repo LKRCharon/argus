@@ -74,7 +74,22 @@ export class ControlApiClient {
   }
 
   async submitJob(input: MeshSubmitJobInput): Promise<unknown> {
-    return this.request("POST", "/api/tasks", input);
+    const common = {
+      groupId: input.groupId,
+      targetNodeId: input.targetNodeId,
+      resourceId: input.resourceId,
+      operation: input.operation,
+    };
+    const body = input.operation === "run" ? {
+      ...common,
+      scope: {
+        runnerId: input.runnerId,
+        args: input.args ?? [],
+        ...(input.input !== undefined ? { input: input.input } : {}),
+        ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      },
+    } : common;
+    return this.request("POST", "/api/tasks", body);
   }
 
   async getJob(taskId: string): Promise<unknown> {
@@ -137,6 +152,8 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
   const server = new McpServer({
     name: "argus-seoul-mesh",
     version: "0.2.0",
+  }, {
+    instructions: "Argus Mesh 只调度已配对设备的 owner-configured typed runner。提交前先用 mesh_list_devices 读取资源和 runnerId；inspect 为只读，run 会在目标设备等待所有者另行批准。绝不要请求或发送 shell、cwd、env、密钥或任意命令。用 mesh_get_job 查询进度；只在用户明确要求时取消任务。",
   });
 
   server.registerTool("mesh_list_devices", {
@@ -153,7 +170,7 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
 
   server.registerTool("mesh_submit_job", {
     title: "Submit Mesh job",
-    description: "经 Seoul 控制 API 提交 inspect 或 owner-configured named runner 任务。",
+    description: "经 Seoul 控制 API 提交 inspect，或把 named runner 任务送到目标设备等待所有者本地批准。",
     inputSchema: SubmitJobInputSchema,
     annotations: {
       readOnlyHint: false,

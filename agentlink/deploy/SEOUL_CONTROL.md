@@ -22,6 +22,9 @@ ssh -N -L 8790:127.0.0.1:8790 seoul
 
 Then open `http://127.0.0.1:8790/mesh`.
 
+To let Codex call this control plane through four bounded MCP tools, follow
+[`CODEX_MCP.md`](CODEX_MCP.md).
+
 Pairing is initiated on a host and accepted on Seoul with the controller
 state directory. `join` only stores the peer; the long-running control service
 then reconnects to every stored peer:
