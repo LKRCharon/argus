@@ -10,8 +10,14 @@ import {
   MeshResourcePayloadSchema,
   MeshResourceStatusPayloadSchema,
   MeshResourceStatusRequestPayloadSchema,
+  MeshTaskCancelledPayloadSchema,
+  MeshTaskCancelRequestPayloadSchema,
+  MeshTaskExecutionStatusSchema,
+  MeshTaskProgressPayloadSchema,
   MeshTaskResultPayloadSchema,
   MeshTaskRequestPayloadSchema,
+  MeshTaskStatusPayloadSchema,
+  MeshTaskStatusRequestPayloadSchema,
   generateMeshSigningKeyPair,
   isMeshCapabilityGrantExpired,
   signMeshCapabilityGrant,
@@ -95,6 +101,54 @@ const taskResult = {
   result: { entryCount: 3, truncated: false },
 };
 
+const taskProgress = {
+  kind: "mesh-task-progress" as const,
+  taskId: task.taskId,
+  targetNodeId: task.targetNodeId,
+  status: "running" as const,
+  message: "inspection is running",
+  updatedAt: issuedAt,
+};
+
+const taskStatusRequest = {
+  kind: "mesh-task-status-request" as const,
+  requestId: "task-status-001",
+  requesterNodeId: task.requesterNodeId,
+  targetNodeId: task.targetNodeId,
+  taskId: task.taskId,
+};
+
+const taskStatus = {
+  kind: "mesh-task-status" as const,
+  requestId: taskStatusRequest.requestId,
+  targetNodeId: task.targetNodeId,
+  taskId: task.taskId,
+  known: true,
+  status: "completed" as const,
+  message: "inspection completed",
+  updatedAt: issuedAt,
+  result: taskResult,
+};
+
+const taskCancelRequest = {
+  kind: "mesh-task-cancel-request" as const,
+  requestId: "task-cancel-001",
+  requesterNodeId: task.requesterNodeId,
+  targetNodeId: task.targetNodeId,
+  taskId: task.taskId,
+};
+
+const taskCancelled = {
+  kind: "mesh-task-cancelled" as const,
+  requestId: taskCancelRequest.requestId,
+  targetNodeId: task.targetNodeId,
+  taskId: task.taskId,
+  accepted: true,
+  status: "cancelled" as const,
+  message: "cancellation accepted",
+  updatedAt: issuedAt,
+};
+
 const resourceStatus = {
   state: "ready" as const,
   summary: "2 个 GPU · 12% · 2048/92136 MiB",
@@ -144,6 +198,11 @@ describe("Mesh wire schema", () => {
       { kind: "mesh-approval" as const, approval },
       { kind: "mesh-audit-event" as const, event: auditEvent },
       taskResult,
+      taskProgress,
+      taskStatusRequest,
+      taskStatus,
+      taskCancelRequest,
+      taskCancelled,
     ];
 
     for (const payload of payloads) {
@@ -194,6 +253,29 @@ describe("Mesh wire schema", () => {
       event: auditEvent,
     });
     expect(MeshTaskResultPayloadSchema.parse(jsonRoundTrip(taskResult))).toEqual(taskResult);
+    expect(MeshTaskProgressPayloadSchema.parse(jsonRoundTrip(taskProgress))).toEqual(taskProgress);
+    expect(MeshTaskStatusRequestPayloadSchema.parse(jsonRoundTrip(taskStatusRequest))).toEqual(taskStatusRequest);
+    expect(MeshTaskStatusPayloadSchema.parse(jsonRoundTrip(taskStatus))).toEqual(taskStatus);
+    expect(MeshTaskCancelRequestPayloadSchema.parse(jsonRoundTrip(taskCancelRequest))).toEqual(taskCancelRequest);
+    expect(MeshTaskCancelledPayloadSchema.parse(jsonRoundTrip(taskCancelled))).toEqual(taskCancelled);
+  });
+
+  test("durable task payloads use the fixed status vocabulary and reject unknown fields", () => {
+    const statuses = [
+      "unknown",
+      "received",
+      "approval-required",
+      "queued",
+      "running",
+      "completed",
+      "denied",
+      "failed",
+      "cancelled",
+    ] as const;
+
+    expect(statuses.map((status) => MeshTaskExecutionStatusSchema.parse(status))).toEqual(statuses);
+    expect(MeshTaskExecutionStatusSchema.safeParse("cancelling").success).toBe(false);
+    expect(MeshTaskProgressPayloadSchema.safeParse({ ...taskProgress, extra: true }).success).toBe(false);
   });
 
   test("rejects operations outside the explicit whitelist", () => {

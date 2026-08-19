@@ -19,8 +19,13 @@ import {
   MeshResourceListPayloadSchema,
   MeshResourceStatusRequestPayloadSchema,
   MeshResourceStatusPayloadSchema,
+  MeshTaskCancelledPayloadSchema,
+  MeshTaskCancelRequestPayloadSchema,
+  MeshTaskProgressPayloadSchema,
   MeshTaskResultPayloadSchema,
   MeshTaskRequestPayloadSchema,
+  MeshTaskStatusPayloadSchema,
+  MeshTaskStatusRequestPayloadSchema,
 } from "./mesh";
 
 export const DeviceInfoSchema = z.object({
@@ -111,6 +116,11 @@ export const BusinessPayloadSchema = z.discriminatedUnion("kind", [
   MeshApprovalPayloadSchema,
   MeshAuditEventPayloadSchema,
   MeshTaskResultPayloadSchema,
+  MeshTaskProgressPayloadSchema,
+  MeshTaskStatusRequestPayloadSchema,
+  MeshTaskStatusPayloadSchema,
+  MeshTaskCancelRequestPayloadSchema,
+  MeshTaskCancelledPayloadSchema,
 ]);
 export type BusinessPayload = z.infer<typeof BusinessPayloadSchema>;
 

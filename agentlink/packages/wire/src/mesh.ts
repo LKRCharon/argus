@@ -267,6 +267,72 @@ export const MeshTaskResultPayloadSchema = z.object({
 });
 export type MeshTaskResultPayload = z.infer<typeof MeshTaskResultPayloadSchema>;
 
+export const MeshTaskExecutionStatusSchema = z.enum([
+  "unknown",
+  "received",
+  "approval-required",
+  "queued",
+  "running",
+  "completed",
+  "denied",
+  "failed",
+  "cancelled",
+]);
+export type MeshTaskExecutionStatus = z.infer<typeof MeshTaskExecutionStatusSchema>;
+
+export const MeshTaskProgressPayloadSchema = z.object({
+  kind: z.literal("mesh-task-progress"),
+  taskId: MeshIdSchema,
+  targetNodeId: MeshIdSchema,
+  status: MeshTaskExecutionStatusSchema,
+  message: z.string(),
+  updatedAt: MeshTimestampSchema,
+}).strict();
+export type MeshTaskProgressPayload = z.infer<typeof MeshTaskProgressPayloadSchema>;
+
+export const MeshTaskStatusRequestPayloadSchema = z.object({
+  kind: z.literal("mesh-task-status-request"),
+  requestId: MeshIdSchema,
+  requesterNodeId: MeshIdSchema,
+  targetNodeId: MeshIdSchema,
+  taskId: MeshIdSchema,
+}).strict();
+export type MeshTaskStatusRequestPayload = z.infer<typeof MeshTaskStatusRequestPayloadSchema>;
+
+export const MeshTaskStatusPayloadSchema = z.object({
+  kind: z.literal("mesh-task-status"),
+  requestId: MeshIdSchema,
+  targetNodeId: MeshIdSchema,
+  taskId: MeshIdSchema,
+  known: z.boolean(),
+  status: MeshTaskExecutionStatusSchema,
+  message: z.string().optional(),
+  updatedAt: MeshTimestampSchema,
+  result: MeshTaskResultPayloadSchema.optional(),
+}).strict();
+export type MeshTaskStatusPayload = z.infer<typeof MeshTaskStatusPayloadSchema>;
+
+export const MeshTaskCancelRequestPayloadSchema = z.object({
+  kind: z.literal("mesh-task-cancel-request"),
+  requestId: MeshIdSchema,
+  requesterNodeId: MeshIdSchema,
+  targetNodeId: MeshIdSchema,
+  taskId: MeshIdSchema,
+}).strict();
+export type MeshTaskCancelRequestPayload = z.infer<typeof MeshTaskCancelRequestPayloadSchema>;
+
+export const MeshTaskCancelledPayloadSchema = z.object({
+  kind: z.literal("mesh-task-cancelled"),
+  requestId: MeshIdSchema,
+  targetNodeId: MeshIdSchema,
+  taskId: MeshIdSchema,
+  accepted: z.boolean(),
+  status: MeshTaskExecutionStatusSchema,
+  message: z.string(),
+  updatedAt: MeshTimestampSchema,
+}).strict();
+export type MeshTaskCancelledPayload = z.infer<typeof MeshTaskCancelledPayloadSchema>;
+
 export const MeshPayloadSchema = z.discriminatedUnion("kind", [
   MeshResourcePayloadSchema,
   MeshResourceListRequestPayloadSchema,
@@ -278,6 +344,11 @@ export const MeshPayloadSchema = z.discriminatedUnion("kind", [
   MeshApprovalPayloadSchema,
   MeshAuditEventPayloadSchema,
   MeshTaskResultPayloadSchema,
+  MeshTaskProgressPayloadSchema,
+  MeshTaskStatusRequestPayloadSchema,
+  MeshTaskStatusPayloadSchema,
+  MeshTaskCancelRequestPayloadSchema,
+  MeshTaskCancelledPayloadSchema,
 ]);
 export type MeshPayload = z.infer<typeof MeshPayloadSchema>;
 
