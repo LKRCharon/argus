@@ -59,6 +59,10 @@ export async function startControlServer(
   const server = Bun.serve({
     hostname: host,
     port,
+    // A manual refresh performs resource discovery followed by the optional
+    // status probe. Each encrypted round trip has a 15 second deadline, so
+    // Bun's 10 second default can close a healthy refresh before it completes.
+    idleTimeout: 40,
     fetch: handler,
   });
   console.log(`[control] Seoul Mesh Console: http://${host}:${server.port}`);
