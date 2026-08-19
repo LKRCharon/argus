@@ -25,6 +25,7 @@ export interface ControlController {
   overview(): ControllerOverview;
   refreshResources(): Promise<void>;
   submitTask(task: Parameters<MeshController["submitTask"]>[0], grant?: Parameters<MeshController["submitTask"]>[1], approval?: Parameters<MeshController["submitTask"]>[2]): Promise<ControlTaskRecord>;
+  cancelTask(taskId: string): Promise<ControlTaskRecord>;
 }
 
 export function createControlRequestHandler(options: ControlRequestHandlerOptions): (request: Request) => Promise<Response> {
@@ -70,6 +71,15 @@ async function handleApi(request: Request, path: string, controller: ControlCont
     if (request.method === "GET" && path === "/api/overview") return json(controller.overview());
     if (request.method === "GET" && path === "/api/tasks") return json({ tasks: controller.journal.list(100) });
     if (request.method === "GET" && path === "/api/resources") return json({ resources: controller.overview().resources });
+    const taskId = taskPathId(path);
+    if (request.method === "GET" && taskId) {
+      const task = controller.journal.get(taskId);
+      return task ? json(task) : json({ error: "未找到任务" }, 404);
+    }
+    const cancelTaskId = cancelTaskPathId(path);
+    if (request.method === "POST" && cancelTaskId) {
+      return json(await controller.cancelTask(cancelTaskId), 202);
+    }
     if (request.method === "POST" && path === "/api/refresh") {
       await controller.refreshResources();
       return json(controller.overview());
@@ -81,6 +91,16 @@ async function handleApi(request: Request, path: string, controller: ControlCont
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : String(error) }, 400);
   }
+}
+
+function taskPathId(path: string): string | undefined {
+  const match = /^\/api\/tasks\/([^/]+)$/.exec(path);
+  return match ? decodeURIComponent(match[1]) : undefined;
+}
+
+function cancelTaskPathId(path: string): string | undefined {
+  const match = /^\/api\/tasks\/([^/]+)\/cancel$/.exec(path);
+  return match ? decodeURIComponent(match[1]) : undefined;
 }
 
 async function createTask(request: Request, controller: ControlController): Promise<Response> {

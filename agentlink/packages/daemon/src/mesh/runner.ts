@@ -98,6 +98,7 @@ function appendOutput(
 
 export class MeshRunnerRegistry {
   private readonly runners = new Map<string, RegisteredRunner>();
+  private readonly activeTasks = new Map<string, { cancel: () => void }>();
 
   constructor(private readonly executor: MeshExecutor, specs: MeshRunnerSpec[] = []) {
     for (const spec of specs) this.register(spec);
@@ -176,19 +177,28 @@ export class MeshRunnerRegistry {
     if (!parsed.success) throw new Error("run scope 必须只包含 runnerId、args、input、timeoutMs");
     const runner = this.runners.get(parsed.data.runnerId);
     if (!runner || runner.resourceId !== task.resourceId) throw new Error("runner 与资源不匹配");
+    if (this.activeTasks.has(task.taskId)) throw new Error("同一 taskId 的 runner 已在执行");
     for (const [index, arg] of parsed.data.args.entries()) assertSafeArg(arg, `run args[${index}]`);
     const timeoutMs = Math.min(parsed.data.timeoutMs ?? runner.maxRuntimeMs, runner.maxRuntimeMs);
-    return this.runRegistered(parsed.data.runnerId, runner, parsed.data.args, parsed.data.input, timeoutMs);
+    return this.runRegistered(task.taskId, parsed.data.runnerId, runner, parsed.data.args, parsed.data.input, timeoutMs);
+  }
+
+  cancel(taskId: string): boolean {
+    const active = this.activeTasks.get(taskId);
+    if (!active) return false;
+    active.cancel();
+    return true;
   }
 
   /** Run an owner-configured read-only status probe without a task grant. */
   async runStatus(runnerId: string, resourceId: string): Promise<MeshRunnerResult> {
     const runner = this.runners.get(runnerId);
     if (!runner || runner.resourceId !== resourceId) throw new Error("status runner 与资源不匹配");
-    return this.runRegistered(runnerId, runner, [], undefined, runner.maxRuntimeMs);
+    return this.runRegistered(undefined, runnerId, runner, [], undefined, runner.maxRuntimeMs);
   }
 
   private async runRegistered(
+    taskId: string | undefined,
     runnerId: string,
     runner: RegisteredRunner,
     args: string[],
@@ -212,6 +222,7 @@ export class MeshRunnerRegistry {
       let stdoutTruncated = false;
       let stderrTruncated = false;
       let timedOut = false;
+      let cancelled = false;
       let settled = false;
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
       let killHandle: ReturnType<typeof setTimeout> | undefined;
@@ -236,9 +247,10 @@ export class MeshRunnerRegistry {
         settled = true;
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (killHandle) clearTimeout(killHandle);
+        if (taskId) this.activeTasks.delete(taskId);
         resolveResult({
           runnerId,
-          status: timedOut ? "cancelled" : exitCode === 0 ? "completed" : "failed",
+          status: timedOut || cancelled ? "cancelled" : exitCode === 0 ? "completed" : "failed",
           exitCode,
           signal: signal ? String(signal) : null,
           timedOut,
@@ -250,6 +262,19 @@ export class MeshRunnerRegistry {
           outputExposed: runner.exposeOutput,
         });
       };
+
+      const requestStop = (manual: boolean): void => {
+        if (settled) return;
+        if (manual) cancelled = true;
+        stop("SIGTERM");
+        if (!killHandle) {
+          killHandle = setTimeout(() => {
+            if (!settled) stop("SIGKILL");
+          }, 2_000);
+        }
+      };
+
+      if (taskId) this.activeTasks.set(taskId, { cancel: () => requestStop(true) });
 
       child.stdout.on("data", (chunk: Buffer) => {
         const next = appendOutput(stdout, chunk, runner.maxOutputBytes);
@@ -267,10 +292,7 @@ export class MeshRunnerRegistry {
       child.stdin.end(input ?? "");
       timeoutHandle = setTimeout(() => {
         timedOut = true;
-        stop("SIGTERM");
-        killHandle = setTimeout(() => {
-          if (!settled) stop("SIGKILL");
-        }, 2_000);
+        requestStop(false);
       }, timeoutMs);
     });
   }

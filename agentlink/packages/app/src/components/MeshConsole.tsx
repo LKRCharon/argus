@@ -94,6 +94,7 @@ export default function MeshConsole() {
   const [grantJson, setGrantJson] = useState("");
   const [approvalJson, setApprovalJson] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null);
 
   async function loadOverview() {
     try {
@@ -108,11 +109,13 @@ export default function MeshConsole() {
     }
   }
 
+  const hasActiveTasks = overview?.tasks.some((task) => ["queued", "running", "approval-required"].includes(task.status)) ?? false;
+
   useEffect(() => {
     void loadOverview();
-    const timer = window.setInterval(() => void loadOverview(), 60_000);
+    const timer = window.setInterval(() => void loadOverview(), hasActiveTasks ? 2_000 : 60_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [hasActiveTasks]);
 
   const target = overview?.peers.find((peer) => peer.fingerprint === targetNodeId);
   const targetResources = overview?.resources.filter((resource) => resource.nodeId === targetNodeId) ?? target?.resources ?? [];
@@ -158,6 +161,19 @@ export default function MeshConsole() {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function cancelTask(taskId: string) {
+    setCancellingTaskId(taskId);
+    try {
+      const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
+      if (!response.ok) throw new Error(await response.text());
+      await loadOverview();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setCancellingTaskId(null);
     }
   }
 
@@ -254,7 +270,12 @@ export default function MeshConsole() {
               onRefresh={() => void refresh()}
             />
 
-            <TaskList tasks={overview?.tasks ?? []} peers={overview?.peers ?? []} />
+            <TaskList
+              tasks={overview?.tasks ?? []}
+              peers={overview?.peers ?? []}
+              cancellingTaskId={cancellingTaskId}
+              onCancel={(taskId) => void cancelTask(taskId)}
+            />
           </div>
 
           <TaskComposer
@@ -423,7 +444,17 @@ function TaskComposer(props: {
   );
 }
 
-function TaskList({ tasks, peers }: { tasks: Task[]; peers: Peer[] }) {
+function TaskList({
+  tasks,
+  peers,
+  cancellingTaskId,
+  onCancel,
+}: {
+  tasks: Task[];
+  peers: Peer[];
+  cancellingTaskId: string | null;
+  onCancel: (taskId: string) => void;
+}) {
   const names = useMemo(() => new Map(peers.map((peer) => [peer.fingerprint, peer.deviceName])), [peers]);
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -438,7 +469,19 @@ function TaskList({ tasks, peers }: { tasks: Task[]; peers: Peer[] }) {
               <p className="truncate font-medium">{task.operation} · {task.resourceId}</p>
               <p className="mt-1 truncate text-xs text-slate-500">{names.get(task.targetNodeId) ?? shortId(task.targetNodeId)} · {shortId(task.taskId)}</p>
             </div>
-            <span className={`status status-${task.status}`}>{statusText[task.status] ?? task.status}</span>
+            <div className="flex items-center gap-3">
+              <span className={`status status-${task.status}`}>{statusText[task.status] ?? task.status}</span>
+              {["queued", "running", "approval-required"].includes(task.status) && (
+                <button
+                  type="button"
+                  onClick={() => onCancel(task.taskId)}
+                  disabled={cancellingTaskId === task.taskId}
+                  className="text-sm font-medium text-slate-500 transition hover:text-red-600 disabled:cursor-wait disabled:opacity-50"
+                >
+                  {cancellingTaskId === task.taskId ? "取消中" : "取消"}
+                </button>
+              )}
+            </div>
           </div>
         ))}
         {tasks.length === 0 && <Empty text="还没有任务" />}

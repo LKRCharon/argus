@@ -18,6 +18,8 @@ export interface ControlTaskRecord {
   targetNodeId: string;
   resourceId: string;
   operation: string;
+  /** Stable digest of the complete typed request envelope for idempotency. */
+  requestDigest?: string;
   status: ControlTaskStatus;
   decision?: string;
   message?: string;

@@ -273,7 +273,7 @@ describe("Mesh wire schema", () => {
       "cancelled",
     ] as const;
 
-    expect(statuses.map((status) => MeshTaskExecutionStatusSchema.parse(status))).toEqual(statuses);
+    expect(statuses.map((status) => MeshTaskExecutionStatusSchema.parse(status))).toEqual([...statuses]);
     expect(MeshTaskExecutionStatusSchema.safeParse("cancelling").success).toBe(false);
     expect(MeshTaskProgressPayloadSchema.safeParse({ ...taskProgress, extra: true }).success).toBe(false);
   });

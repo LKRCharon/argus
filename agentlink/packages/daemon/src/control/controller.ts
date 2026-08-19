@@ -4,17 +4,27 @@ import {
   fingerprint,
   MeshResourceListPayloadSchema,
   MeshResourceStatusPayloadSchema,
+  MeshTaskCancelledPayloadSchema,
+  MeshTaskProgressPayloadSchema,
   MeshTaskResultPayloadSchema,
   MeshTaskRequestPayloadSchema,
+  MeshTaskStatusPayloadSchema,
   type MeshApproval,
   type MeshCapabilityGrant,
   type MeshResource,
   type MeshResourceStatus,
+  type MeshTaskCancelledPayload,
   type MeshTaskRequest,
+  type MeshTaskStatusPayload,
 } from "@agentlink/wire";
 import { joinChan, WsConn } from "../client";
 import { listPeers, loadOrCreateIdentity, type StoredPeer } from "../store";
 import { ControlTaskJournal, type ControlTaskRecord } from "./journal";
+import {
+  ControlTaskOutbox,
+  digestControlTaskPayload,
+  type ControlOutboxRecord,
+} from "./outbox";
 
 export type PeerConnectionState = "offline" | "connecting" | "online" | "error";
 
@@ -51,6 +61,20 @@ interface PendingResourceStatusRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingTaskStatusRequest {
+  taskId: string;
+  resolve: (status: MeshTaskStatusPayload) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface PendingTaskCancelRequest {
+  taskId: string;
+  resolve: (status: MeshTaskCancelledPayload) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 interface PeerSession {
   peer: StoredPeer;
   conn: WsConn;
@@ -58,6 +82,9 @@ interface PeerSession {
   closed: boolean;
   pendingResources: Map<string, PendingResourceRequest>;
   pendingStatuses: Map<string, PendingResourceStatusRequest>;
+  pendingTaskStatuses: Map<string, PendingTaskStatusRequest>;
+  pendingTaskCancels: Map<string, PendingTaskCancelRequest>;
+  sendChain: Promise<void>;
   receiveLoop: Promise<void>;
 }
 
@@ -68,6 +95,7 @@ export interface MeshControllerOptions {
   nodeId?: string;
   loadPeers?: () => Record<string, StoredPeer>;
   journal?: ControlTaskJournal;
+  outbox?: ControlTaskOutbox;
   reconnectDelayMs?: number;
 }
 
@@ -80,6 +108,7 @@ export class MeshController {
   readonly nodeId: string;
   readonly relayUrl: string;
   readonly journal: ControlTaskJournal;
+  readonly outbox: ControlTaskOutbox;
 
   private readonly loadPeers: () => Record<string, StoredPeer>;
   private readonly reconnectDelayMs: number;
@@ -94,6 +123,7 @@ export class MeshController {
     this.nodeId = options.nodeId ?? fingerprint(loadOrCreateIdentity().publicKey);
     this.loadPeers = options.loadPeers ?? listPeers;
     this.journal = options.journal ?? new ControlTaskJournal();
+    this.outbox = options.outbox ?? new ControlTaskOutbox();
     this.reconnectDelayMs = options.reconnectDelayMs ?? 5_000;
     this.syncPeers();
   }
@@ -149,6 +179,9 @@ export class MeshController {
         closed: false,
         pendingResources: new Map(),
         pendingStatuses: new Map(),
+        pendingTaskStatuses: new Map(),
+        pendingTaskCancels: new Map(),
+        sendChain: Promise.resolve(),
         receiveLoop: Promise.resolve(),
       };
       this.sessions.set(peerId, session);
@@ -157,6 +190,7 @@ export class MeshController {
       session.receiveLoop = this.receive(session);
       void session.receiveLoop.catch((error) => this.handleSessionLost(session, toError(error)));
       void this.requestResources(peerId).catch(() => undefined);
+      void this.reconcilePeer(peerId).catch(() => undefined);
     } catch (error) {
       this.setSnapshot(peer, { status: "error", error: toError(error).message });
       this.scheduleReconnect(peerId);
@@ -172,7 +206,10 @@ export class MeshController {
         await this.connectPeer(peerId).catch(() => undefined);
         return;
       }
-      await this.requestResources(peerId).catch(() => undefined);
+      await Promise.allSettled([
+        this.requestResources(peerId),
+        this.reconcilePeer(peerId),
+      ]);
     }));
   }
 
@@ -225,33 +262,112 @@ export class MeshController {
     grant?: MeshCapabilityGrant,
     approval?: MeshApproval,
   ): Promise<ControlTaskRecord> {
-    const session = this.requireSession(task.targetNodeId);
     const payload = MeshTaskRequestPayloadSchema.parse({
       kind: "mesh-task-request",
       task,
       ...(grant ? { grant } : {}),
       ...(approval ? { approval } : {}),
     });
+    const requestDigest = digestControlTaskPayload(payload);
+    const existing = this.journal.get(task.taskId);
+    if (existing && existing.requestDigest !== requestDigest) {
+      throw new Error("taskId 已被另一个任务使用");
+    }
+    if (existing && isTerminal(existing.status)) return existing;
+
     const now = Date.now();
-    const record = this.journal.create({
+    const record = existing ?? this.journal.create({
       taskId: task.taskId,
       groupId: task.groupId,
       targetNodeId: task.targetNodeId,
       resourceId: task.resourceId,
       operation: task.operation,
+      requestDigest,
       status: "queued",
       createdAt: now,
       updatedAt: now,
     });
     try {
-      await this.send(session, payload);
-      return this.journal.update(task.taskId, { status: "running" }) ?? record;
-    } catch (error) {
+      this.outbox.put(payload);
+    } catch {
       return this.journal.update(task.taskId, {
         status: "failed",
         decision: "deny",
-        message: toError(error).message,
+        message: "任务无法写入可靠投递队列",
       }) ?? record;
+    }
+    const session = this.sessions.get(task.targetNodeId);
+    if (!session || session.closed) {
+      return this.journal.update(task.taskId, { message: "目标离线，任务已安全排队" }) ?? record;
+    }
+    try {
+      await this.dispatchOutboxRecord(session, this.outbox.get(task.taskId)!);
+      return this.journal.update(task.taskId, { message: "任务已发送，等待目标确认" }) ?? record;
+    } catch {
+      return this.journal.update(task.taskId, { message: "发送暂时失败，将在重连后对账" }) ?? record;
+    }
+  }
+
+  async requestTaskStatus(peerId: string, taskId: string): Promise<MeshTaskStatusPayload> {
+    const session = this.requireSession(peerId);
+    const requestId = `task-status-${randomUUID()}`;
+    const response = new Promise<MeshTaskStatusPayload>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        session.pendingTaskStatuses.delete(requestId);
+        reject(new Error("等待任务状态响应超时"));
+      }, 15_000);
+      session.pendingTaskStatuses.set(requestId, { taskId, resolve, reject, timer });
+    });
+    try {
+      await this.send(session, {
+        kind: "mesh-task-status-request",
+        requestId,
+        requesterNodeId: this.nodeId,
+        targetNodeId: peerId,
+        taskId,
+      });
+      return await response;
+    } catch (error) {
+      const pending = session.pendingTaskStatuses.get(requestId);
+      if (pending) clearTimeout(pending.timer);
+      session.pendingTaskStatuses.delete(requestId);
+      throw error;
+    }
+  }
+
+  async cancelTask(taskId: string): Promise<ControlTaskRecord> {
+    const record = this.journal.get(taskId);
+    if (!record) throw new Error("未找到任务");
+    if (isTerminal(record.status)) return record;
+    const session = this.requireSession(record.targetNodeId);
+    const requestId = `task-cancel-${randomUUID()}`;
+    const response = new Promise<MeshTaskCancelledPayload>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        session.pendingTaskCancels.delete(requestId);
+        reject(new Error("等待任务取消响应超时"));
+      }, 15_000);
+      session.pendingTaskCancels.set(requestId, { taskId, resolve, reject, timer });
+    });
+    try {
+      await this.send(session, {
+        kind: "mesh-task-cancel-request",
+        requestId,
+        requesterNodeId: this.nodeId,
+        targetNodeId: record.targetNodeId,
+        taskId,
+      });
+      const cancelled = await response;
+      const updated = this.journal.update(taskId, {
+        status: toControlStatus(cancelled.status),
+        message: cancelled.message,
+      }) ?? record;
+      if (isTerminal(updated.status)) this.outbox.remove(taskId);
+      return updated;
+    } catch (error) {
+      const pending = session.pendingTaskCancels.get(requestId);
+      if (pending) clearTimeout(pending.timer);
+      session.pendingTaskCancels.delete(requestId);
+      throw error;
     }
   }
 
@@ -324,20 +440,100 @@ export class MeshController {
       return;
     }
 
+    const progress = MeshTaskProgressPayloadSchema.safeParse(payload);
+    if (progress.success) {
+      if (progress.data.targetNodeId !== session.peer.fingerprint) return;
+      const record = this.journal.get(progress.data.taskId);
+      if (!record || record.targetNodeId !== session.peer.fingerprint) return;
+      this.journal.update(progress.data.taskId, {
+        status: toControlStatus(progress.data.status),
+        message: progress.data.message,
+      });
+      return;
+    }
+
+    const taskStatus = MeshTaskStatusPayloadSchema.safeParse(payload);
+    if (taskStatus.success) {
+      if (taskStatus.data.targetNodeId !== session.peer.fingerprint) return;
+      const pending = session.pendingTaskStatuses.get(taskStatus.data.requestId);
+      if (pending && pending.taskId === taskStatus.data.taskId) {
+        if (taskStatus.data.known) this.applyTaskStatus(session.peer.fingerprint, taskStatus.data);
+        clearTimeout(pending.timer);
+        session.pendingTaskStatuses.delete(taskStatus.data.requestId);
+        pending.resolve(taskStatus.data);
+      }
+      return;
+    }
+
+    const cancelled = MeshTaskCancelledPayloadSchema.safeParse(payload);
+    if (cancelled.success) {
+      if (cancelled.data.targetNodeId !== session.peer.fingerprint) return;
+      const pending = session.pendingTaskCancels.get(cancelled.data.requestId);
+      if (pending && pending.taskId === cancelled.data.taskId) {
+        clearTimeout(pending.timer);
+        session.pendingTaskCancels.delete(cancelled.data.requestId);
+        pending.resolve(cancelled.data);
+      }
+      return;
+    }
+
     const result = MeshTaskResultPayloadSchema.safeParse(payload);
     if (result.success) {
+      if (result.data.targetNodeId !== session.peer.fingerprint) return;
+      const record = this.journal.get(result.data.taskId);
+      if (!record || record.targetNodeId !== session.peer.fingerprint) return;
       this.journal.update(result.data.taskId, {
         status: result.data.status,
         decision: result.data.decision,
         message: result.data.message,
         result: result.data.result,
       });
+      if (isTerminal(result.data.status)) this.outbox.remove(result.data.taskId);
     }
   }
 
   private async send(session: PeerSession, payload: unknown): Promise<void> {
     if (session.closed) throw new Error("设备通道已关闭");
-    session.conn.send({ op: "chan-data", data: { enc: await session.chan.seal(payload) } });
+    const next = session.sendChain.then(async () => {
+      if (session.closed) throw new Error("设备通道已关闭");
+      session.conn.send({ op: "chan-data", data: { enc: await session.chan.seal(payload) } });
+    });
+    session.sendChain = next.catch(() => undefined);
+    return next;
+  }
+
+  private async reconcilePeer(peerId: string): Promise<void> {
+    const session = this.requireSession(peerId);
+    for (const record of this.outbox.list(peerId)) {
+      try {
+        const remote = await this.requestTaskStatus(peerId, record.taskId);
+        if (remote.known) {
+          this.applyTaskStatus(peerId, remote);
+          if (isTerminal(toControlStatus(remote.status))) this.outbox.remove(record.taskId);
+          continue;
+        }
+      } catch {
+        // A lost status reply is safe: resend the same idempotent envelope.
+      }
+      await this.dispatchOutboxRecord(session, record).catch(() => undefined);
+    }
+  }
+
+  private async dispatchOutboxRecord(session: PeerSession, record: ControlOutboxRecord): Promise<void> {
+    await this.send(session, record.payload);
+    this.outbox.markAttempt(record.taskId);
+  }
+
+  private applyTaskStatus(peerId: string, status: MeshTaskStatusPayload): void {
+    const current = this.journal.get(status.taskId);
+    if (!current || current.targetNodeId !== peerId || status.targetNodeId !== peerId) return;
+    const result = status.result;
+    const updated = this.journal.update(status.taskId, {
+      status: toControlStatus(status.status),
+      message: status.message ?? result?.message,
+      ...(result ? { decision: result.decision, result: result.result } : {}),
+    });
+    if (updated && isTerminal(updated.status)) this.outbox.remove(status.taskId);
   }
 
   private requireSession(peerId: string): PeerSession {
@@ -409,6 +605,16 @@ export class MeshController {
       pending.reject(error);
     }
     session.pendingStatuses.clear();
+    for (const pending of session.pendingTaskStatuses.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    session.pendingTaskStatuses.clear();
+    for (const pending of session.pendingTaskCancels.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    session.pendingTaskCancels.clear();
   }
 
   private scheduleReconnect(peerId: string): void {
@@ -420,6 +626,19 @@ export class MeshController {
     timer.unref();
     this.reconnectTimers.set(peerId, timer);
   }
+}
+
+function toControlStatus(status: string): ControlTaskRecord["status"] {
+  if (status === "received") return "queued";
+  if (status === "unknown") return "queued";
+  if (["queued", "running", "completed", "denied", "approval-required", "failed", "cancelled"].includes(status)) {
+    return status as ControlTaskRecord["status"];
+  }
+  return "failed";
+}
+
+function isTerminal(status: ControlTaskRecord["status"]): boolean {
+  return ["completed", "denied", "failed", "cancelled"].includes(status);
 }
 
 function toError(error: unknown): Error {

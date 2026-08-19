@@ -13,6 +13,9 @@ import {
   fingerprint,
   MeshResourceListRequestPayloadSchema,
   MeshResourceStatusRequestPayloadSchema,
+  MeshTaskCancelRequestPayloadSchema,
+  MeshTaskRequestPayloadSchema,
+  MeshTaskStatusRequestPayloadSchema,
 } from "@agentlink/wire";
 import type { NormalizedEvent } from "../agent/types";
 import { spawn } from "node:child_process";
@@ -147,12 +150,16 @@ export async function serveWatch(
   // sends race and the phone receives streamed text out of order — the chain
   // used to cover only the transcript path.
   let sendChain: Promise<void> = Promise.resolve();
-  const enqueueSend = (payload: unknown): void => {
-    sendChain = sendChain
-      .then(() => sendPayload(payload))
+  const enqueueSendAsync = (payload: unknown): Promise<void> => {
+    const next = sendChain.then(() => sendPayload(payload));
+    sendChain = next
       .catch((err) => {
         console.log(`[watch] 推送失败: ${err instanceof Error ? err.message : err}`);
       });
+    return next;
+  };
+  const enqueueSend = (payload: unknown): void => {
+    void enqueueSendAsync(payload);
   };
 
   const onWatchEvent = (sessionId: string, agent: string, event: NormalizedEvent): void => {
@@ -382,7 +389,8 @@ export async function serveWatch(
         const PHONE_COMMANDS = new Set([
           "list-sessions", "new-session", "user-input", "permission-response",
           "codex-threads", "codex-resume", "codex-history-cancel", "codex-input", "codex-interrupt",
-          "cloud-session", "remote-control", "mesh-resource-list-request", "mesh-resource-status-request", "mesh-task-request",
+          "cloud-session", "remote-control", "mesh-resource-list-request", "mesh-resource-status-request",
+          "mesh-task-status-request", "mesh-task-cancel-request", "mesh-task-request",
         ]);
         if (payload?.kind && PHONE_COMMANDS.has(payload.kind)) {
           console.log(`[watch] 收到手机指令: ${payload.kind}`);
@@ -402,32 +410,71 @@ export async function serveWatch(
         } else if (payload?.kind === "mesh-resource-list-request") {
           const request = MeshResourceListRequestPayloadSchema.safeParse(payload);
           if (!opts.mesh) {
-            await sendPayload({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+            await enqueueSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
           } else if (!request.success) {
-            await sendPayload({ kind: "mesh-error", code: "invalid-resource-request", message: "Mesh 资源发现请求格式无效" });
+            await enqueueSendAsync({ kind: "mesh-error", code: "invalid-resource-request", message: "Mesh 资源发现请求格式无效" });
           } else {
-            await sendPayload(opts.mesh.resourceList(request.data.requestId));
+            await enqueueSendAsync(opts.mesh.resourceList(request.data.requestId));
           }
         } else if (payload?.kind === "mesh-resource-status-request") {
           const request = MeshResourceStatusRequestPayloadSchema.safeParse(payload);
           if (!opts.mesh) {
-            await sendPayload({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+            await enqueueSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
           } else if (!request.success) {
-            await sendPayload({ kind: "mesh-error", code: "invalid-resource-status-request", message: "GPU 状态请求格式无效" });
+            await enqueueSendAsync({ kind: "mesh-error", code: "invalid-resource-status-request", message: "GPU 状态请求格式无效" });
           } else {
             try {
-              await sendPayload(await opts.mesh.resourceStatus(request.data.requestId, request.data.resourceId));
+              await enqueueSendAsync(await opts.mesh.resourceStatus(request.data.requestId, request.data.resourceId));
             } catch {
-              await sendPayload({ kind: "mesh-error", code: "resource-status-failed", message: "目标设备无法读取资源状态" });
+              await enqueueSendAsync({ kind: "mesh-error", code: "resource-status-failed", message: "目标设备无法读取资源状态" });
+            }
+          }
+        } else if (payload?.kind === "mesh-task-status-request") {
+          const request = MeshTaskStatusRequestPayloadSchema.safeParse(payload);
+          if (!opts.mesh) {
+            await enqueueSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else if (!request.success) {
+            await enqueueSendAsync({ kind: "mesh-error", code: "invalid-task-status-request", message: "任务状态请求格式无效" });
+          } else {
+            try {
+              await enqueueSendAsync(opts.mesh.taskStatus(request.data));
+            } catch {
+              await enqueueSendAsync({ kind: "mesh-error", code: "task-status-failed", message: "目标设备无法读取任务状态" });
+            }
+          }
+        } else if (payload?.kind === "mesh-task-cancel-request") {
+          const request = MeshTaskCancelRequestPayloadSchema.safeParse(payload);
+          if (!opts.mesh) {
+            await enqueueSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else if (!request.success) {
+            await enqueueSendAsync({ kind: "mesh-error", code: "invalid-task-cancel-request", message: "任务取消请求格式无效" });
+          } else {
+            try {
+              await enqueueSendAsync(opts.mesh.cancelTask(request.data));
+            } catch {
+              await enqueueSendAsync({ kind: "mesh-error", code: "task-cancel-failed", message: "目标设备拒绝任务取消请求" });
             }
           }
         } else if (payload?.kind === "mesh-task-request") {
           if (!opts.mesh) {
-            await sendPayload({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+            await enqueueSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
           } else {
-            const result = await opts.mesh.handle(payload);
-            if (result) await sendPayload(result);
-            else await sendPayload({ kind: "mesh-error", code: "invalid-task", message: "Mesh 任务格式无效" });
+            const request = MeshTaskRequestPayloadSchema.safeParse(payload);
+            if (!request.success) {
+              await enqueueSendAsync({ kind: "mesh-error", code: "invalid-task", message: "Mesh 任务格式无效" });
+            } else {
+              // Do not block the receive loop for the lifetime of a GPU job:
+              // status and cancellation requests must remain processable while
+              // the typed runner is active. The shared send chain still keeps
+              // progress and final frames ordered on the encrypted channel.
+              void opts.mesh.handleRequest(request.data, (progress) => enqueueSendAsync(progress))
+                .then((result) => enqueueSendAsync(result))
+                .catch(() => enqueueSend({
+                  kind: "mesh-error",
+                  code: "task-execution-failed",
+                  message: "目标设备无法完成 Mesh 任务",
+                }));
+            }
           }
         } else if (payload?.kind === "codex-threads") {
           // Codex's own view of its threads — richer and more accurate than our

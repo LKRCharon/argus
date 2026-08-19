@@ -12,6 +12,8 @@ import {
   MeshTaskRequestSchema,
   MeshCapabilityGrantSchema,
   MeshRunScopeSchema,
+  MeshTaskCancelRequestPayloadSchema,
+  MeshTaskStatusRequestPayloadSchema,
   isMeshCapabilityGrantExpired,
   b64encode,
   signMeshApproval,
@@ -24,14 +26,17 @@ import {
   type MeshResourceListPayload,
   type MeshResourceStatusPayload,
   type MeshTaskRequest,
+  type MeshTaskCancelledPayload,
+  type MeshTaskProgressPayload,
   type MeshTaskRequestPayload,
   type MeshTaskResultPayload,
+  type MeshTaskStatusPayload,
   type MeshSigningKeyPair,
 } from "@agentlink/wire";
 import { randomUUID } from "node:crypto";
 import { MeshExecutor, type LocalMeshResource } from "./executor";
 import { MeshRunnerRegistry, type MeshRunnerResult, type MeshRunnerSpec } from "./runner";
-import { MeshTaskStore, type MeshTaskLifecycleStatus } from "./task-store";
+import { MeshTaskStore, type MeshTaskLifecycleStatus, type MeshTaskRecord } from "./task-store";
 import { MeshPolicyEngine, type MeshPolicyEngineOptions } from "./policy";
 import { loadOrCreateMeshSigningKey } from "./signing";
 import { appendMeshAuditEvent } from "./audit";
@@ -53,6 +58,8 @@ export interface MeshServiceOptions {
   signingKey?: MeshSigningKeyPair;
 }
 
+export type MeshTaskProgressSink = (progress: MeshTaskProgressPayload) => void | Promise<void>;
+
 export class MeshService {
   readonly nodeId: string;
   readonly executor: MeshExecutor;
@@ -60,6 +67,7 @@ export class MeshService {
   readonly tasks: MeshTaskStore;
   readonly policy: MeshPolicyEngine;
   private readonly signingKey: MeshSigningKeyPair;
+  private readonly trustedRequesters?: ReadonlySet<string>;
   private readonly resources = new Map<string, LocalMeshResource>();
   /** In-memory marker distinguishes a live task from a journal entry left by a restart. */
   private readonly activeTasks = new Set<string>();
@@ -68,6 +76,7 @@ export class MeshService {
     if (!options.nodeId.trim()) throw new Error("Mesh nodeId 不能为空");
     this.nodeId = options.nodeId;
     this.signingKey = options.signingKey ?? loadOrCreateMeshSigningKey();
+    this.trustedRequesters = options.trustedRequesters;
     this.executor = new MeshExecutor({
       allowedRoots: options.allowedRoots,
       quarantineRoot: options.quarantineRoot,
@@ -233,13 +242,63 @@ export class MeshService {
   }
 
   /** Parse and process one authenticated-channel payload. */
-  async handle(payload: unknown): Promise<MeshTaskResultPayload | undefined> {
+  async handle(payload: unknown, onProgress?: MeshTaskProgressSink): Promise<MeshTaskResultPayload | undefined> {
     const parsed = MeshTaskRequestPayloadSchema.safeParse(payload);
     if (!parsed.success) return undefined;
-    return this.handleRequest(parsed.data);
+    return this.handleRequest(parsed.data, onProgress);
   }
 
-  async handleRequest(payload: MeshTaskRequestPayload): Promise<MeshTaskResultPayload> {
+  taskStatus(request: unknown): MeshTaskStatusPayload {
+    const parsed = MeshTaskStatusRequestPayloadSchema.parse(request);
+    this.assertControlRequester(parsed.requesterNodeId, parsed.targetNodeId);
+    const record = this.tasks.get(parsed.taskId);
+    if (!record || record.requesterNodeId !== parsed.requesterNodeId) {
+      return {
+        kind: "mesh-task-status",
+        requestId: parsed.requestId,
+        targetNodeId: this.nodeId,
+        taskId: parsed.taskId,
+        known: false,
+        status: "unknown",
+        message: "目标设备没有该任务记录",
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    return {
+      kind: "mesh-task-status",
+      requestId: parsed.requestId,
+      targetNodeId: this.nodeId,
+      taskId: record.taskId,
+      known: true,
+      status: record.status,
+      ...(record.message ? { message: record.message } : {}),
+      updatedAt: record.updatedAt,
+      ...(record.result ? { result: record.result } : {}),
+    };
+  }
+
+  cancelTask(request: unknown): MeshTaskCancelledPayload {
+    const parsed = MeshTaskCancelRequestPayloadSchema.parse(request);
+    this.assertControlRequester(parsed.requesterNodeId, parsed.targetNodeId);
+    const record = this.tasks.get(parsed.taskId);
+    if (!record || record.requesterNodeId !== parsed.requesterNodeId) {
+      return this.cancelResult(parsed.requestId, parsed.taskId, false, "unknown", "目标设备没有该任务记录");
+    }
+    if (isTerminal(record.status)) {
+      return this.cancelResult(parsed.requestId, record.taskId, false, record.status, "任务已经结束");
+    }
+    if (this.runners.cancel(record.taskId)) {
+      return this.cancelResult(parsed.requestId, record.taskId, true, record.status, "取消信号已发送");
+    }
+    if (record.status !== "running") {
+      const cancelled = this.cancelledTaskResult(record, "任务在执行前被目标资源所有者取消");
+      this.rememberResult(record.taskId, "cancelled", cancelled);
+      return this.cancelResult(parsed.requestId, record.taskId, true, "cancelled", cancelled.message);
+    }
+    return this.cancelResult(parsed.requestId, record.taskId, false, record.status, "当前执行器不支持中途取消");
+  }
+
+  async handleRequest(payload: MeshTaskRequestPayload, onProgress?: MeshTaskProgressSink): Promise<MeshTaskResultPayload> {
     const task = payload.task;
     let begun;
     try {
@@ -260,6 +319,7 @@ export class MeshService {
     }
     try {
       this.tasks.update(task.taskId, { status: "queued" });
+      await this.emitProgress(task, "queued", "任务已进入目标队列", onProgress);
     } catch {
       return this.result(task, "failed", "deny", "task journal unavailable");
     }
@@ -281,17 +341,24 @@ export class MeshService {
       if (decision.decision === "approval-required") {
         const result = this.result(task, "approval-required", decision.decision, "等待目标资源所有者批准");
         this.rememberResult(task.taskId, "approval-required", result);
+        await this.emitProgress(task, "approval-required", result.message, onProgress);
         return result;
       }
       if (!decision.allowed) {
         const result = this.result(task, "denied", decision.decision, `策略拒绝: ${decision.reason}`);
         this.rememberResult(task.taskId, "denied", result);
+        await this.emitProgress(task, "denied", result.message, onProgress);
         return result;
       }
 
       this.tasks.update(task.taskId, { status: "running" });
       if (task.operation === "run") {
-        const runner = await this.runners.run(task);
+        // `run()` registers the child synchronously before returning its
+        // promise. Publish "running" only after that point so an immediate
+        // cancel request cannot race ahead of the runner registry.
+        const runnerPromise = this.runners.run(task);
+        await this.emitProgress(task, "running", "任务正在目标设备执行", onProgress);
+        const runner = await runnerPromise;
         const result = this.result(
           task,
           runner.status === "completed" ? "completed" : runner.status,
@@ -300,8 +367,10 @@ export class MeshService {
           this.runnerResult(runner, resource?.root),
         );
         this.rememberResult(task.taskId, runner.status, result);
+        await this.emitProgress(task, runner.status, result.message, onProgress);
         return result;
       }
+      await this.emitProgress(task, "running", "任务正在目标设备执行", onProgress);
       const execution = this.executor.execute(task, {
         allowed: true,
         resourceId: task.resourceId,
@@ -328,6 +397,7 @@ export class MeshService {
       };
       const completed = this.result(task, "completed", decision.decision, "任务已完成", result);
       this.rememberResult(task.taskId, "completed", completed);
+      await this.emitProgress(task, "completed", completed.message, onProgress);
       return completed;
     } catch (error) {
       // Do not send OS paths, errno strings, or child-process output to a
@@ -335,9 +405,70 @@ export class MeshService {
       void error;
       const failed = this.result(task, "failed", "deny", task.operation === "run" ? "typed runner failed" : "typed executor failed");
       this.rememberResult(task.taskId, "failed", failed);
+      await this.emitProgress(task, "failed", failed.message, onProgress);
       return failed;
     } finally {
       this.activeTasks.delete(task.taskId);
+    }
+  }
+
+  private assertControlRequester(requesterNodeId: string, targetNodeId: string): void {
+    if (targetNodeId !== this.nodeId) throw new Error("任务控制请求目标不匹配");
+    if (this.trustedRequesters && !this.trustedRequesters.has(requesterNodeId)) {
+      throw new Error("任务控制请求者不受信任");
+    }
+  }
+
+  private cancelResult(
+    requestId: string,
+    taskId: string,
+    accepted: boolean,
+    status: MeshTaskCancelledPayload["status"],
+    message: string,
+  ): MeshTaskCancelledPayload {
+    return {
+      kind: "mesh-task-cancelled",
+      requestId,
+      targetNodeId: this.nodeId,
+      taskId,
+      accepted,
+      status,
+      message,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  private cancelledTaskResult(record: MeshTaskRecord, message: string): MeshTaskResultPayload {
+    return {
+      kind: "mesh-task-result",
+      groupId: record.groupId,
+      taskId: record.taskId,
+      targetNodeId: record.targetNodeId,
+      operation: record.operation,
+      status: "cancelled",
+      decision: "deny",
+      message,
+    };
+  }
+
+  private async emitProgress(
+    task: MeshTaskRequest,
+    status: MeshTaskProgressPayload["status"],
+    message: string,
+    sink?: MeshTaskProgressSink,
+  ): Promise<void> {
+    if (!sink) return;
+    try {
+      await sink({
+        kind: "mesh-task-progress",
+        taskId: task.taskId,
+        targetNodeId: task.targetNodeId,
+        status,
+        message,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch {
+      // Delivery can recover through mesh-task-status after a reconnect.
     }
   }
 
@@ -391,4 +522,8 @@ export class MeshService {
       ...(result ? { result } : {}),
     };
   }
+}
+
+function isTerminal(status: MeshTaskLifecycleStatus): boolean {
+  return ["completed", "denied", "failed", "cancelled"].includes(status);
 }

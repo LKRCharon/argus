@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { MeshTaskRequest } from "@agentlink/wire";
 import { ControlTaskJournal, type ControlTaskRecord } from "../src/control/journal";
+import { ControlTaskOutbox } from "../src/control/outbox";
 import {
   createControlRequestHandler,
   type ControlController,
@@ -11,9 +12,11 @@ import {
 function fakeController(root = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "argus-control-"))): {
   controller: ControlController;
   submitted: MeshTaskRequest[];
+  cancelled: string[];
 } {
   const journal = new ControlTaskJournal(join(root, "tasks.json"));
   const submitted: MeshTaskRequest[] = [];
+  const cancelled: string[] = [];
   const controller: ControlController = {
     nodeId: "node-seoul",
     journal,
@@ -41,8 +44,14 @@ function fakeController(root = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "a
       };
       return journal.create(record);
     },
+    cancelTask: async (taskId) => {
+      cancelled.push(taskId);
+      const record = journal.get(taskId);
+      if (!record) throw new Error("未找到任务");
+      return journal.update(taskId, { status: "cancelled", message: "任务已取消" })!;
+    },
   };
-  return { controller, submitted };
+  return { controller, submitted, cancelled };
 }
 
 describe("Seoul control API", () => {
@@ -100,6 +109,32 @@ describe("Seoul control API", () => {
     expect(submitted).toHaveLength(0);
   });
 
+  test("returns one task and routes cancellation through the controller", async () => {
+    const { controller, cancelled } = fakeController();
+    const now = Date.now();
+    controller.journal.create({
+      taskId: "task-cancel-1",
+      groupId: "group-alpha",
+      targetNodeId: "node-l40",
+      resourceId: "repo:gpu",
+      operation: "inspect",
+      status: "running",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const handler = createControlRequestHandler({ controller });
+    const detail = await handler(new Request("http://localhost/api/tasks/task-cancel-1"));
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({ taskId: "task-cancel-1", status: "running" });
+
+    const cancelledResponse = await handler(new Request("http://localhost/api/tasks/task-cancel-1/cancel", {
+      method: "POST",
+    }));
+    expect(cancelledResponse.status).toBe(202);
+    expect(cancelled).toEqual(["task-cancel-1"]);
+    expect(await cancelledResponse.json()).toMatchObject({ status: "cancelled" });
+  });
+
   test("serves the built console and keeps traversal outside the dist root", async () => {
     const root = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "argus-control-dist-"));
     mkdirSync(join(root, "assets"));
@@ -132,5 +167,31 @@ describe("ControlTaskJournal", () => {
     journal.update("task-1", { status: "completed", message: "ok" });
     const recovered = new ControlTaskJournal(file);
     expect(recovered.get("task-1")).toMatchObject({ status: "completed", message: "ok" });
+  });
+});
+
+describe("ControlTaskOutbox", () => {
+  test("recovers an idempotent pending delivery across controller restarts", () => {
+    const root = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "argus-outbox-"));
+    const file = join(root, "outbox.json");
+    const outbox = new ControlTaskOutbox(file);
+    const payload = {
+      kind: "mesh-task-request" as const,
+      task: {
+        taskId: "task-durable-1",
+        groupId: "group-alpha",
+        requesterNodeId: "node-seoul",
+        targetNodeId: "node-l40",
+        resourceId: "repo:gpu",
+        operation: "inspect" as const,
+      },
+    };
+    outbox.put(payload);
+    outbox.markAttempt(payload.task.taskId);
+
+    const recovered = new ControlTaskOutbox(file);
+    expect(recovered.get(payload.task.taskId)).toMatchObject({ attempts: 1, payload });
+    expect(recovered.remove(payload.task.taskId)).toBe(true);
+    expect(new ControlTaskOutbox(file).list()).toEqual([]);
   });
 });
