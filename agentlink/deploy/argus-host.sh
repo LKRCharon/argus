@@ -31,6 +31,17 @@ if [[ -z "${CODEX_BIN:-}" ]] && command -v codex >/dev/null 2>&1; then
   export CODEX_BIN="$(command -v codex)"
 fi
 
+# Bun's native WebSocket client can be receive-only on some headless Linux
+# networks. Use the stdlib Python bridge when available; the Bun process still
+# owns encryption, Mesh policy, approvals, runners, and all persistent state.
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  PYTHON_BIN="$(command -v python3 || true)"
+fi
+if [[ -n "$PYTHON_BIN" ]]; then
+  export PYTHON_BIN
+  export AGENTLINK_WS_TRANSPORT="${AGENTLINK_WS_TRANSPORT:-python}"
+fi
+
 if [[ -x "$BUN" ]]; then
   exec "$BUN" run "$ROOT/packages/daemon/src/index.ts" "$@"
 fi
@@ -38,7 +49,6 @@ fi
 # zjuL40 has Python + cryptography but no system Node/Bun.  The fallback has
 # the same encrypted pairing and relay protocol, so installation stays entirely
 # user-owned rather than requiring a package manager or sudo.
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || true)}"
 if [[ -z "$PYTHON_BIN" ]]; then
   echo "Argus Host needs either $BUN or python3 on PATH" >&2
   exit 1

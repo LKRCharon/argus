@@ -416,13 +416,18 @@ export class MeshController {
         session.pendingResources.delete(resources.data.requestId);
         this.setSnapshot(session.peer, { resources: resources.data.resources, lastSeen: Date.now() });
         pending.resolve(resources.data.resources);
+      } else {
+        console.log("[control] 忽略已超时或未知的资源清单响应");
       }
       return;
     }
 
     const status = MeshResourceStatusPayloadSchema.safeParse(payload);
     if (status.success) {
-      if (status.data.nodeId !== session.peer.fingerprint) return;
+      if (status.data.nodeId !== session.peer.fingerprint) {
+        console.log("[control] 忽略来源不匹配的资源状态响应");
+        return;
+      }
       const pending = session.pendingStatuses.get(status.data.requestId);
       if (pending) {
         clearTimeout(pending.timer);
@@ -436,7 +441,14 @@ export class MeshController {
           lastSeen: Date.now(),
         });
         pending.resolve(status.data.status);
+      } else {
+        console.log("[control] 忽略已超时或未知的资源状态响应");
       }
+      return;
+    }
+    if (payload && typeof payload === "object"
+      && (payload as { kind?: unknown }).kind === "mesh-resource-status") {
+      console.log("[control] 忽略格式无效的资源状态响应");
       return;
     }
 

@@ -390,6 +390,15 @@ class ArgusViewModel : ViewModel() {
             c.onInputAck = { sid, status, note ->
                 if (seq == clientSeq) viewModelScope.launch(Dispatchers.Main) { onInputAck(sid, status, note) }
             }
+            c.onMeshError = { meshError ->
+                if (seq == clientSeq) viewModelScope.launch(Dispatchers.Main) {
+                    if (meshError.code == "legacy-control-disabled") {
+                        cancelCatalogRefresh()
+                        pendingNewSession = false
+                    }
+                    error = meshError.message
+                }
+            }
             c.onSessionList = { list ->
                 if (seq == clientSeq) viewModelScope.launch(Dispatchers.Main) {
                     // Keep whatever app-server already told us about codex: its
@@ -1052,7 +1061,13 @@ class ArgusViewModel : ViewModel() {
 @Composable
 fun ArgusApp(activity: ComponentActivity, pairLink: MutableState<Uri?> = mutableStateOf(null)) {
     val vm: ArgusViewModel = viewModel()  // survives config changes
+    val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(Unit) { vm.init(activity) }
+    LaunchedEffect(vm.error) {
+        val message = vm.error ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message, withDismissAction = true)
+        if (vm.error == message) vm.clearError()
+    }
     LaunchedEffect(activity, vm.keepScreenOn) {
         if (vm.keepScreenOn) {
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1118,6 +1133,10 @@ fun ArgusApp(activity: ComponentActivity, pairLink: MutableState<Uri?> = mutable
                     }, onClose = { vm.showScanner = false })
                 }
             }
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+            )
         }
     }
 }

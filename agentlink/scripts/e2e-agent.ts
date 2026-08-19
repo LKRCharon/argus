@@ -52,8 +52,8 @@ async function runCase(name: string, makeAdapter: () => AgentAdapter): Promise<v
 }
 
 async function main(): Promise<void> {
-  await runCase("qoder(ACP)", () => new QoderAdapter(["bun", "run", fakeQoder]));
-  await runCase("codex(app-server)", () => new CodexAdapter("codex", ["bun", "run", fakeCodex]));
+  await runCase("qoder(ACP)", () => new QoderAdapter([process.execPath, "run", fakeQoder]));
+  await runCase("codex(app-server)", () => new CodexAdapter("codex", [process.execPath, "run", fakeCodex]));
 
   console.log(`\n${failed === 0 ? "全部通过" : `${failed} 项失败`}`);
   process.exit(failed === 0 ? 0 : 1);
