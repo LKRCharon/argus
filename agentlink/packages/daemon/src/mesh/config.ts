@@ -28,12 +28,15 @@ const MeshConfigSchema = z.object({
   runners: z.array(z.object({
     id: MeshIdSchema,
     resourceId: MeshIdSchema,
+    purpose: z.enum(["task", "status"]).default("task"),
     executable: z.string().refine(isAbsolute, "runner executable must be absolute"),
     fixedArgs: z.array(z.string().max(4096)).max(32).optional(),
     workdir: z.string().optional(),
     env: z.record(z.string(), z.string().max(4096)).optional(),
     maxRuntimeMs: z.number().int().min(1_000).max(24 * 60 * 60_000).optional(),
     maxOutputBytes: z.number().int().min(1_024).max(1 * 1024 * 1024).optional(),
+    allowDynamicArgs: z.boolean().default(false),
+    allowInput: z.boolean().default(false),
     exposeOutput: z.boolean().optional(),
   })).optional(),
 });

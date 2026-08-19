@@ -90,9 +90,9 @@ export default function MeshConsole() {
   const [resourceId, setResourceId] = useState("");
   const [groupId, setGroupId] = useState("group-alpha");
   const [operation, setOperation] = useState("inspect");
-  const [scopeJson, setScopeJson] = useState('{"runnerId":"","args":[],"timeoutMs":600000}');
-  const [grantJson, setGrantJson] = useState("");
-  const [approvalJson, setApprovalJson] = useState("");
+  const [runnerId, setRunnerId] = useState("");
+  const [runnerArgs, setRunnerArgs] = useState("");
+  const [timeoutMinutes, setTimeoutMinutes] = useState("10");
   const [submitting, setSubmitting] = useState(false);
   const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null);
 
@@ -127,6 +127,12 @@ export default function MeshConsole() {
     }
   }, [resourceId, targetResources]);
 
+  useEffect(() => {
+    const runnerIds = selectedResource?.runnerIds ?? [];
+    if (runnerIds.length > 0 && !runnerIds.includes(runnerId)) setRunnerId(runnerIds[0]);
+    if (runnerIds.length === 0 && runnerId) setRunnerId("");
+  }, [runnerId, selectedResource]);
+
   const onlineCount = overview?.peers.filter((peer) => peer.status === "online").length ?? 0;
   const runningCount = overview?.tasks.filter((task) => task.status === "running").length ?? 0;
 
@@ -146,9 +152,14 @@ export default function MeshConsole() {
     try {
       const body: Record<string, unknown> = { targetNodeId, resourceId, groupId, operation };
       if (operation !== "inspect") {
-        body.scope = JSON.parse(scopeJson);
-        body.grant = JSON.parse(grantJson);
-        body.approval = JSON.parse(approvalJson);
+        const timeoutMs = Math.round(Number(timeoutMinutes) * 60_000);
+        if (!runnerId) throw new Error("请选择 runner");
+        if (!Number.isFinite(timeoutMs) || timeoutMs < 1_000) throw new Error("运行时限无效");
+        body.scope = {
+          runnerId,
+          args: runnerArgs.split("\n").map((value) => value.trim()).filter(Boolean),
+          timeoutMs,
+        };
       }
       const response = await fetch("/api/tasks", {
         method: "POST",
@@ -285,16 +296,16 @@ export default function MeshConsole() {
             resourceId={resourceId}
             groupId={groupId}
             operation={operation}
-            scopeJson={scopeJson}
-            grantJson={grantJson}
-            approvalJson={approvalJson}
+            runnerId={runnerId}
+            runnerArgs={runnerArgs}
+            timeoutMinutes={timeoutMinutes}
             setTargetNodeId={setTargetNodeId}
             setResourceId={setResourceId}
             setGroupId={setGroupId}
             setOperation={setOperation}
-            setScopeJson={setScopeJson}
-            setGrantJson={setGrantJson}
-            setApprovalJson={setApprovalJson}
+            setRunnerId={setRunnerId}
+            setRunnerArgs={setRunnerArgs}
+            setTimeoutMinutes={setTimeoutMinutes}
             onSubmit={() => void submitTask()}
             submitting={submitting}
             selectedResource={selectedResource}
@@ -376,16 +387,16 @@ function TaskComposer(props: {
   resourceId: string;
   groupId: string;
   operation: string;
-  scopeJson: string;
-  grantJson: string;
-  approvalJson: string;
+  runnerId: string;
+  runnerArgs: string;
+  timeoutMinutes: string;
   setTargetNodeId: (value: string) => void;
   setResourceId: (value: string) => void;
   setGroupId: (value: string) => void;
   setOperation: (value: string) => void;
-  setScopeJson: (value: string) => void;
-  setGrantJson: (value: string) => void;
-  setApprovalJson: (value: string) => void;
+  setRunnerId: (value: string) => void;
+  setRunnerArgs: (value: string) => void;
+  setTimeoutMinutes: (value: string) => void;
   onSubmit: () => void;
   submitting: boolean;
   selectedResource?: Resource;
@@ -425,10 +436,31 @@ function TaskComposer(props: {
         </Field>
         {props.operation === "run" && (
           <div className="space-y-3 border-t border-slate-100 pt-4">
-            <p className="text-sm font-medium text-amber-700">run 需要目标所有者的 grant 与 approval</p>
-            <textarea value={props.scopeJson} onChange={(event) => props.setScopeJson(event.target.value)} className="code-input" aria-label="runner scope" />
-            <textarea value={props.grantJson} onChange={(event) => props.setGrantJson(event.target.value)} className="code-input" placeholder="grant JSON" aria-label="grant JSON" />
-            <textarea value={props.approvalJson} onChange={(event) => props.setApprovalJson(event.target.value)} className="code-input" placeholder="approval JSON" aria-label="approval JSON" />
+            <p className="text-sm text-amber-700">提交后由目标设备所有者在本机确认一次。</p>
+            <Field label="Runner">
+              <select value={props.runnerId} onChange={(event) => props.setRunnerId(event.target.value)} className="input">
+                {(props.selectedResource?.runnerIds ?? []).map((id) => <option key={id} value={id}>{id}</option>)}
+              </select>
+            </Field>
+            <Field label="参数（每行一个）">
+              <textarea
+                value={props.runnerArgs}
+                onChange={(event) => props.setRunnerArgs(event.target.value)}
+                className="code-input"
+                placeholder="留空表示不传动态参数"
+                aria-label="runner arguments"
+              />
+            </Field>
+            <Field label="最长运行（分钟）">
+              <input
+                type="number"
+                min="1"
+                max="1440"
+                value={props.timeoutMinutes}
+                onChange={(event) => props.setTimeoutMinutes(event.target.value)}
+                className="input"
+              />
+            </Field>
           </div>
         )}
         <button

@@ -18,6 +18,9 @@ tmux attach -t argus-pair
 tmux attach -t argus-host
 ```
 
+When Mesh is enabled, the same process serves the target-owner approval page
+on `127.0.0.1:8791`. Reach it only through SSH forwarding and open `/host`.
+
 `tmux` is used because the remote user manager has no linger permission; a
 user-level systemd unit would stop after the last login session without an
 administrator enabling linger. All runtime state stays in

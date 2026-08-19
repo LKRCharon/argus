@@ -2,9 +2,8 @@ import { existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
+  MeshRunScopeSchema,
   MeshTaskRequestSchema,
-  type MeshApproval,
-  type MeshCapabilityGrant,
 } from "@agentlink/wire";
 import { MeshController, type ControllerOverview } from "./controller";
 import { type ControlTaskJournal, type ControlTaskRecord } from "./journal";
@@ -109,18 +108,10 @@ async function createTask(request: Request, controller: ControlController): Prom
   if (operation !== "inspect" && operation !== "run") {
     return json({ error: "控制台当前只开放 inspect 和 named runner run" }, 400);
   }
-  const grant = body.grant as MeshCapabilityGrant | undefined;
-  const approval = body.approval as MeshApproval | undefined;
-  if (operation !== "inspect" && !grant) {
-    return json({ error: "此操作需要目标资源所有者签发 grant" }, 400);
-  }
-  if (["run", "apply-patch", "quarantine"].includes(operation) && !approval) {
-    return json({ error: "此操作需要目标资源所有者单独签发 approval" }, 400);
-  }
-
   const targetNodeId = stringField(body, "targetNodeId");
   const resourceId = stringField(body, "resourceId");
   const groupId = stringField(body, "groupId");
+  const scope = operation === "run" ? MeshRunScopeSchema.parse(body.scope) : undefined;
   const task = MeshTaskRequestSchema.parse({
     groupId,
     taskId: typeof body.taskId === "string" && body.taskId.trim() ? body.taskId : `web-${randomUUID()}`,
@@ -128,9 +119,11 @@ async function createTask(request: Request, controller: ControlController): Prom
     targetNodeId,
     resourceId,
     operation,
-    ...(body.scope !== undefined ? { scope: body.scope } : {}),
+    ...(scope ? { scope } : {}),
   });
-  const record = await controller.submitTask(task, grant, approval);
+  // The Seoul browser never handles owner grants or signing material. A run
+  // arrives at the target as a proposal and waits for target-local approval.
+  const record = await controller.submitTask(task);
   return json(record, 202);
 }
 

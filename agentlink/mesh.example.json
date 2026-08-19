@@ -30,11 +30,14 @@
     {
       "id": "gpu-project-runner-v1",
       "resourceId": "repo:gpu-project",
+      "purpose": "task",
       "executable": "/srv/argus/runners/gpu-project-runner",
       "fixedArgs": [],
       "workdir": ".",
       "maxRuntimeMs": 900000,
       "maxOutputBytes": 262144,
+      "allowDynamicArgs": false,
+      "allowInput": false,
       "exposeOutput": false
     }
   ]

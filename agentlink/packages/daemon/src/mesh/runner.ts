@@ -22,6 +22,8 @@ const MAX_OUTPUT_BYTES = 1 * 1024 * 1024;
 export interface MeshRunnerSpec {
   id: string;
   resourceId: string;
+  /** Status probes and task runners are separate capabilities. */
+  purpose?: "task" | "status";
   /** Absolute, owner-configured executable. Never read from a task scope. */
   executable: string;
   /** Fixed arguments owned by the target machine, placed before task args. */
@@ -32,6 +34,10 @@ export interface MeshRunnerSpec {
   env?: Record<string, string>;
   maxRuntimeMs?: number;
   maxOutputBytes?: number;
+  /** Allow request-provided data arguments. Defaults to false. */
+  allowDynamicArgs?: boolean;
+  /** Allow request-provided stdin. Defaults to false. */
+  allowInput?: boolean;
   /** Opt in to returning runner stdout/stderr to the requester. */
   exposeOutput?: boolean;
 }
@@ -106,6 +112,9 @@ export class MeshRunnerRegistry {
 
   register(spec: MeshRunnerSpec): void {
     if (!spec.id.trim() || !spec.resourceId.trim()) throw new Error("runner 缺少 id 或 resourceId");
+    if (spec.purpose !== undefined && spec.purpose !== "task" && spec.purpose !== "status") {
+      throw new Error("runner purpose 无效");
+    }
     if (this.runners.has(spec.id)) throw new Error(`runner id 重复: ${spec.id}`);
     const resource = this.executor.getResource(spec.resourceId);
     if (!resource) throw new Error(`runner 绑定了未知资源: ${spec.resourceId}`);
@@ -140,12 +149,15 @@ export class MeshRunnerRegistry {
     this.runners.set(spec.id, {
       id: spec.id,
       resourceId: spec.resourceId,
+      purpose: spec.purpose ?? "task",
       executable,
       workdir: resolvedWorkdir,
       fixedArgs,
       env,
       maxRuntimeMs,
       maxOutputBytes,
+      allowDynamicArgs: spec.allowDynamicArgs === true,
+      allowInput: spec.allowInput === true,
       exposeOutput: spec.exposeOutput === true,
     });
   }
@@ -167,7 +179,7 @@ export class MeshRunnerRegistry {
 
   forResource(resourceId: string): string[] {
     return [...this.runners.values()]
-      .filter((runner) => runner.resourceId === resourceId)
+      .filter((runner) => runner.resourceId === resourceId && runner.purpose === "task")
       .map((runner) => runner.id);
   }
 
@@ -176,8 +188,16 @@ export class MeshRunnerRegistry {
     const parsed = MeshRunScopeSchema.safeParse(task.scope ?? {});
     if (!parsed.success) throw new Error("run scope 必须只包含 runnerId、args、input、timeoutMs");
     const runner = this.runners.get(parsed.data.runnerId);
-    if (!runner || runner.resourceId !== task.resourceId) throw new Error("runner 与资源不匹配");
+    if (!runner || runner.resourceId !== task.resourceId || runner.purpose !== "task") {
+      throw new Error("runner 与资源或用途不匹配");
+    }
     if (this.activeTasks.has(task.taskId)) throw new Error("同一 taskId 的 runner 已在执行");
+    if (parsed.data.args.length > 0 && !runner.allowDynamicArgs) {
+      throw new Error("该 runner 不接受动态参数");
+    }
+    if (parsed.data.input !== undefined && !runner.allowInput) {
+      throw new Error("该 runner 不接受远程 stdin");
+    }
     for (const [index, arg] of parsed.data.args.entries()) assertSafeArg(arg, `run args[${index}]`);
     const timeoutMs = Math.min(parsed.data.timeoutMs ?? runner.maxRuntimeMs, runner.maxRuntimeMs);
     return this.runRegistered(task.taskId, parsed.data.runnerId, runner, parsed.data.args, parsed.data.input, timeoutMs);
@@ -193,7 +213,9 @@ export class MeshRunnerRegistry {
   /** Run an owner-configured read-only status probe without a task grant. */
   async runStatus(runnerId: string, resourceId: string): Promise<MeshRunnerResult> {
     const runner = this.runners.get(runnerId);
-    if (!runner || runner.resourceId !== resourceId) throw new Error("status runner 与资源不匹配");
+    if (!runner || runner.resourceId !== resourceId || runner.purpose !== "status") {
+      throw new Error("status runner 与资源或用途不匹配");
+    }
     return this.runRegistered(undefined, runnerId, runner, [], undefined, runner.maxRuntimeMs);
   }
 

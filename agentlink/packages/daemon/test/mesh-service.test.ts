@@ -76,6 +76,7 @@ describe.serial("MeshService", () => {
       runners: [{
         id: "gpu:status",
         resourceId: "gpu:fixture",
+        purpose: "status",
         executable: process.execPath,
         fixedArgs: ["-e", "console.log('0, NVIDIA L40, 42, 1024, 46068, 12, 535.309.01')"],
         exposeOutput: true,
@@ -91,6 +92,7 @@ describe.serial("MeshService", () => {
         gpu: { devices: [{ name: "NVIDIA L40", utilizationGpuPercent: 12 }] },
       },
     });
+    expect(value.listResources()[0]?.runnerIds).toEqual([]);
   });
 
   test("handles read-only inspect without exposing local paths", async () => {
@@ -118,6 +120,84 @@ describe.serial("MeshService", () => {
       targetNodeId: "node-b",
       taskId: "task-missing",
     })).toMatchObject({ known: false, status: "unknown" });
+  });
+
+  test("queues an unsigned run for local approval, then accepts one owner-signed execution", async () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-mesh-approval-"));
+    const root = join(base, "gpu");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const value = new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      groupMembers: new Map([["group-alpha", new Set(["node-a", "node-b"])]]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      quarantineRoot: join(base, "quarantine"),
+      auditSink: () => {},
+      taskStore: new MeshTaskStore(join(base, "tasks.json")),
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{
+        id: "gpu:fixture",
+        ownerNodeId: "node-b",
+        kind: "gpu",
+        displayName: "GPU fixture",
+        root,
+      }],
+      runners: [{
+        id: "gpu:train",
+        resourceId: "gpu:fixture",
+        purpose: "task",
+        executable: process.execPath,
+        fixedArgs: ["-e", "console.log('approved')"],
+        maxRuntimeMs: 10_000,
+      }],
+    });
+    const request = {
+      groupId: "group-alpha",
+      taskId: "task-local-approval",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      resourceId: "gpu:fixture",
+      operation: "run" as const,
+      scope: { runnerId: "gpu:train", args: [] },
+    };
+
+    expect(value.proposeTask({ kind: "mesh-task-request", task: request })).toMatchObject({
+      kind: "mesh-task-progress",
+      status: "approval-required",
+    });
+    const grant = value.issueGrant(request);
+    const approval = value.issueApproval(grant, "allow once on target");
+    expect(await value.handleRequest({ kind: "mesh-task-request", task: request, grant, approval })).toMatchObject({
+      status: "completed",
+      decision: "allow",
+    });
+
+    const deniedRequest = { ...request, taskId: "task-local-deny" };
+    expect(value.proposeTask({ kind: "mesh-task-request", task: deniedRequest })).toMatchObject({
+      status: "approval-required",
+    });
+    expect(value.denyProposal(deniedRequest.taskId)).toMatchObject({ status: "denied", decision: "deny" });
+
+    const dynamicArgsRequest = {
+      ...request,
+      taskId: "task-dynamic-args-denied",
+      scope: { runnerId: "gpu:train", args: ["--remote-value"] },
+    };
+    expect(value.proposeTask({ kind: "mesh-task-request", task: dynamicArgsRequest })).toMatchObject({
+      status: "denied",
+      message: "策略拒绝: invalid-runner-scope",
+    });
+    expect(() => value.issueGrant(dynamicArgsRequest)).toThrow();
+
+    const stdinRequest = {
+      ...request,
+      taskId: "task-stdin-denied",
+      scope: { runnerId: "gpu:train", args: [], input: "unreviewed payload" },
+    };
+    expect(value.proposeTask({ kind: "mesh-task-request", task: stdinRequest })).toMatchObject({ status: "denied" });
+    expect(() => value.issueGrant(stdinRequest)).toThrow();
   });
 
   test("cancels an active named runner and persists the terminal result", async () => {

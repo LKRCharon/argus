@@ -91,7 +91,7 @@ describe("Seoul control API", () => {
     });
   });
 
-  test("does not let the web API bypass grant and approval requirements", async () => {
+  test("submits run as an unsigned proposal for target-local approval", async () => {
     const { controller, submitted } = fakeController();
     const handler = createControlRequestHandler({ controller });
     const response = await handler(new Request("http://localhost/api/tasks", {
@@ -105,8 +105,13 @@ describe("Seoul control API", () => {
         scope: { runnerId: "gpu-v1", args: [] },
       }),
     }));
-    expect(response.status).toBe(400);
-    expect(submitted).toHaveLength(0);
+    expect(response.status).toBe(202);
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]).toMatchObject({
+      requesterNodeId: "node-seoul",
+      operation: "run",
+      scope: { runnerId: "gpu-v1", args: [] },
+    });
   });
 
   test("returns one task and routes cancellation through the controller", async () => {

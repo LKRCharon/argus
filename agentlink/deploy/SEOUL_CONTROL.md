@@ -52,6 +52,30 @@ structured GPU metrics roughly once per minute. The `/mesh` console also has a
 manual `刷新 GPU` action; raw `nvidia-smi` output is parsed on the host and is
 not sent across the encrypted channel.
 
+Task runners and status probes are different local capabilities. Set each
+runner's `purpose` to `task` or `status`; a `status` runner is never advertised
+as runnable work. Request-provided arguments are rejected unless that exact
+task runner opts into `allowDynamicArgs`; stdin is separately gated by
+`allowInput`. Both default to false.
+
+## Target-owner approval
+
+Seoul submits `run` as an unsigned proposal. The target daemon validates the
+group, requester, resource, runner ID, arguments, and timeout, then holds the
+task in its private approval inbox. It signs a one-shot grant and approval only
+after the target owner clicks `允许一次` on the target-local page.
+
+The page binds to loopback on port 8791. Forward it over SSH:
+
+```bash
+ssh -N -L 8791:127.0.0.1:8791 zjuL40
+```
+
+Then open `http://127.0.0.1:8791/host`. The approval inbox is stored under
+`AGENTLINK_HOME` with mode 0600. It contains typed task metadata, not identity
+keys, channel keys, owner signatures, environment variables, or executable
+paths. Cross-origin decisions are rejected.
+
 ## Mac mini tunnel
 
 Use a dedicated SSH account on Seoul. The Mac mini can keep one outbound SSH

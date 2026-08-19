@@ -24,6 +24,7 @@ export AGENTLINK_HOME="${AGENTLINK_HOME:-$DEFAULT_STATE_DIR}"
 export AGENTLINK_RELAY="${AGENTLINK_RELAY:-wss://relay.limen.codes/ws}"
 export AGENTLINK_DEVICE_NAME="${ARGUS_HOST_NAME:-${AGENTLINK_DEVICE_NAME:-$(hostname)}}"
 export AGENTLINK_DEVICE_PLATFORM="${AGENTLINK_DEVICE_PLATFORM:-linux}"
+export ARGUS_HOST_APPROVAL_DIST="${ARGUS_HOST_APPROVAL_DIST:-$ROOT/packages/app/dist}"
 
 # Prefer an explicit service configuration, then a normal user PATH lookup.
 if [[ -z "${CODEX_BIN:-}" ]] && command -v codex >/dev/null 2>&1; then

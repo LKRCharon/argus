@@ -84,6 +84,13 @@ export class MeshService {
     });
     for (const resource of options.resources ?? []) this.registerResource(resource);
     this.runners = new MeshRunnerRegistry(this.executor, options.runners);
+    for (const resource of this.resources.values()) {
+      if (!resource.statusRunnerId) continue;
+      const statusRunner = this.runners.get(resource.statusRunnerId);
+      if (!statusRunner || statusRunner.resourceId !== resource.id || statusRunner.purpose !== "status") {
+        throw new Error(`资源 ${resource.id} 的 statusRunnerId 未绑定只读 status runner`);
+      }
+    }
     this.tasks = options.taskStore ?? new MeshTaskStore();
 
     const ownerPublicKey = b64encode(this.signingKey.publicKey);
@@ -187,7 +194,9 @@ export class MeshService {
     if (task.operation === "run") {
       const runScope = MeshRunScopeSchema.safeParse(task.scope ?? {});
       const runner = runScope.success ? this.runners.get(runScope.data.runnerId) : undefined;
-      if (!runScope.success || !runner || runner.resourceId !== task.resourceId) {
+      if (!runScope.success || !runner || runner.resourceId !== task.resourceId || runner.purpose !== "task"
+        || (runScope.data.args.length > 0 && !runner.allowDynamicArgs)
+        || (runScope.data.input !== undefined && !runner.allowInput)) {
         throw new Error("run grant 必须绑定一个有效的本地 runnerId 和受限 scope");
       }
     }
@@ -246,6 +255,77 @@ export class MeshService {
     const parsed = MeshTaskRequestPayloadSchema.safeParse(payload);
     if (!parsed.success) return undefined;
     return this.handleRequest(parsed.data, onProgress);
+  }
+
+  /**
+   * Validate and journal an unsigned run proposal for the target-local owner
+   * UI. This never signs a capability and never invokes a runner.
+   */
+  proposeTask(payload: MeshTaskRequestPayload): MeshTaskProgressPayload | MeshTaskResultPayload {
+    const task = payload.task;
+    let begun;
+    try {
+      begun = this.tasks.begin(task);
+    } catch {
+      return this.result(task, "failed", "deny", "task journal unavailable");
+    }
+    if (begun.conflict) return this.result(task, "failed", "deny", "task id conflict");
+    if (!begun.created) {
+      if (begun.record.result) return begun.record.result;
+      if (begun.record.status === "approval-required") {
+        return this.progress(task, "approval-required", begun.record.message ?? "等待目标资源所有者批准");
+      }
+      if (begun.record.status === "queued" || begun.record.status === "running") {
+        if (this.activeTasks.has(task.taskId)) {
+          return this.progress(task, begun.record.status, begun.record.message ?? "任务正在目标设备执行");
+        }
+        const interrupted = this.result(task, "failed", "deny", "目标 daemon 曾在任务完成前重启，任务未自动重试");
+        this.rememberResult(task.taskId, "failed", interrupted);
+        return interrupted;
+      }
+    }
+
+    const resource = this.resources.get(task.resourceId);
+    const boundary = this.policy.authorize(task, {
+      resource: resource ? {
+        id: resource.id,
+        ownerNodeId: resource.ownerNodeId,
+        kind: resource.kind,
+        displayName: resource.displayName,
+        rootHint: resource.displayName,
+      } : undefined,
+    });
+    if (task.operation !== "run" || boundary.reason !== "grant-required") {
+      const denied = this.result(task, "denied", "deny", `策略拒绝: ${boundary.reason}`);
+      this.rememberResult(task.taskId, "denied", denied);
+      return denied;
+    }
+
+    const runScope = MeshRunScopeSchema.safeParse(task.scope ?? {});
+    const runner = runScope.success ? this.runners.get(runScope.data.runnerId) : undefined;
+    if (!runScope.success || !runner || runner.resourceId !== task.resourceId || runner.purpose !== "task"
+      || (runScope.data.args.length > 0 && !runner.allowDynamicArgs)
+      || (runScope.data.input !== undefined && !runner.allowInput)) {
+      const denied = this.result(task, "denied", "deny", "策略拒绝: invalid-runner-scope");
+      this.rememberResult(task.taskId, "denied", denied);
+      return denied;
+    }
+
+    const message = "等待目标资源所有者在本机批准";
+    try {
+      this.tasks.update(task.taskId, { status: "approval-required", message });
+    } catch {
+      return this.result(task, "failed", "deny", "task journal unavailable");
+    }
+    return this.progress(task, "approval-required", message);
+  }
+
+  denyProposal(taskId: string, message = "目标资源所有者拒绝了任务"): MeshTaskResultPayload {
+    const record = this.tasks.get(taskId);
+    if (!record || record.status !== "approval-required") throw new Error("审批请求已不存在或不可处理");
+    const denied = this.resultFromRecord(record, "denied", "deny", message);
+    this.rememberResult(taskId, "denied", denied);
+    return denied;
   }
 
   taskStatus(request: unknown): MeshTaskStatusPayload {
@@ -459,17 +539,25 @@ export class MeshService {
   ): Promise<void> {
     if (!sink) return;
     try {
-      await sink({
-        kind: "mesh-task-progress",
-        taskId: task.taskId,
-        targetNodeId: task.targetNodeId,
-        status,
-        message,
-        updatedAt: new Date().toISOString(),
-      });
+      await sink(this.progress(task, status, message));
     } catch {
       // Delivery can recover through mesh-task-status after a reconnect.
     }
+  }
+
+  private progress(
+    task: MeshTaskRequest,
+    status: MeshTaskProgressPayload["status"],
+    message: string,
+  ): MeshTaskProgressPayload {
+    return {
+      kind: "mesh-task-progress",
+      taskId: task.taskId,
+      targetNodeId: task.targetNodeId,
+      status,
+      message,
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   private rememberResult(taskId: string, status: MeshTaskLifecycleStatus, result: MeshTaskResultPayload): void {
@@ -520,6 +608,24 @@ export class MeshService {
       decision,
       message,
       ...(result ? { result } : {}),
+    };
+  }
+
+  private resultFromRecord(
+    record: MeshTaskRecord,
+    status: MeshTaskResultPayload["status"],
+    decision: MeshTaskResultPayload["decision"],
+    message: string,
+  ): MeshTaskResultPayload {
+    return {
+      kind: "mesh-task-result",
+      groupId: record.groupId,
+      taskId: record.taskId,
+      targetNodeId: record.targetNodeId,
+      operation: record.operation,
+      status,
+      decision,
+      message,
     };
   }
 }

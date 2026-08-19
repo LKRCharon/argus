@@ -32,11 +32,27 @@ import { CodexAppServer } from "../codex-appserver";
 import { QoderAcp } from "../qoder-acp";
 import type { MeshService } from "../mesh/service";
 import { createMeshServiceForPeer, loadMeshConfig, meshConfigPath } from "../mesh/config";
+import { MeshApprovalInbox } from "../mesh/approval-inbox";
+import {
+  startHostApprovalServer,
+  type HostApprovalServerOptions,
+} from "../mesh/approval-server";
+
+interface ServeWatchOptions {
+  hookPort?: number;
+  mesh?: MeshService;
+  meshStrict?: boolean;
+  meshLegacyControl?: boolean;
+  approvalInbox?: MeshApprovalInbox;
+  approvalDistDir?: string;
+  approvalHost?: string;
+  approvalPort?: number;
+}
 
 export async function serveWatch(
   conn: WsConn,
   chan: SecureChannel,
-  opts: { hookPort?: number; mesh?: MeshService; meshStrict?: boolean; meshLegacyControl?: boolean } = {},
+  opts: ServeWatchOptions = {},
 ): Promise<{ hookServer: HookServer; watcher: TranscriptWatcher; codexWatcher: TranscriptWatcher; stop: () => void }> {
   const sendPayload = async (payload: unknown): Promise<void> => {
     conn.send({ op: "chan-data", data: { enc: await chan.seal(payload) } });
@@ -161,6 +177,75 @@ export async function serveWatch(
   const enqueueSend = (payload: unknown): void => {
     void enqueueSendAsync(payload);
   };
+
+  let approvalInbox: MeshApprovalInbox | undefined;
+  let approvalServer: ReturnType<typeof startHostApprovalServer> | undefined;
+  if (opts.mesh) {
+    try {
+      approvalInbox = opts.approvalInbox ?? new MeshApprovalInbox();
+      const serverOptions: HostApprovalServerOptions = {
+        nodeId: opts.mesh.nodeId,
+        inbox: approvalInbox,
+        distDir: opts.approvalDistDir,
+        host: opts.approvalHost,
+        port: opts.approvalPort,
+        onDecision: (taskId, decision) => {
+          const claimed = approvalInbox?.claim(taskId);
+          if (!claimed) throw new Error("审批请求已处理或不存在");
+          if (decision === "deny") {
+            try {
+              const result = opts.mesh!.denyProposal(taskId);
+              enqueueSend(result);
+              try { approvalInbox?.remove(taskId); } catch {}
+            } catch (error) {
+              approvalInbox?.release(taskId);
+              throw error;
+            }
+            return;
+          }
+
+          // Return HTTP 202 immediately; a GPU job can run for hours. Progress
+          // and the final result continue over the encrypted device channel.
+          void (async () => {
+            let locallyAuthorized = false;
+            try {
+              const grant = opts.mesh!.issueGrant(claimed.task);
+              const approval = opts.mesh!.issueApproval(grant, "目标资源所有者在本机允许一次");
+              locallyAuthorized = true;
+              const result = await opts.mesh!.handleRequest({
+                kind: "mesh-task-request",
+                task: claimed.task,
+                grant,
+                approval,
+              }, (progress) => enqueueSendAsync(progress));
+              await enqueueSendAsync(result);
+              try { approvalInbox?.remove(taskId); } catch {}
+            } catch {
+              if (!locallyAuthorized) {
+                try {
+                  const result = opts.mesh!.denyProposal(taskId, "目标设备无法启动已批准的任务");
+                  enqueueSend(result);
+                  try { approvalInbox?.remove(taskId); } catch {}
+                } catch {
+                  approvalInbox?.release(taskId);
+                }
+              } else {
+                // The durable target journal and controller reconciliation can
+                // recover a lost final frame. Do not offer a second execution.
+                try { approvalInbox?.remove(taskId); } catch {}
+              }
+            }
+          })();
+        },
+      };
+      approvalServer = startHostApprovalServer(serverOptions);
+    } catch (error) {
+      // Keep read-only Mesh discovery available, but leave unsigned run
+      // requests fail-closed when the local approval boundary is unavailable.
+      approvalInbox = undefined;
+      console.log(`[mesh] 本地审批服务不可用，run 已安全禁用: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  }
 
   const onWatchEvent = (sessionId: string, agent: string, event: NormalizedEvent): void => {
     sendChain = sendChain
@@ -450,7 +535,9 @@ export async function serveWatch(
             await enqueueSendAsync({ kind: "mesh-error", code: "invalid-task-cancel-request", message: "任务取消请求格式无效" });
           } else {
             try {
-              await enqueueSendAsync(opts.mesh.cancelTask(request.data));
+              const cancelled = opts.mesh.cancelTask(request.data);
+              if (cancelled.accepted) approvalInbox?.remove(cancelled.taskId);
+              await enqueueSendAsync(cancelled);
             } catch {
               await enqueueSendAsync({ kind: "mesh-error", code: "task-cancel-failed", message: "目标设备拒绝任务取消请求" });
             }
@@ -462,6 +549,22 @@ export async function serveWatch(
             const request = MeshTaskRequestPayloadSchema.safeParse(payload);
             if (!request.success) {
               await enqueueSendAsync({ kind: "mesh-error", code: "invalid-task", message: "Mesh 任务格式无效" });
+            } else if (request.data.task.operation === "run"
+              && (!request.data.grant || !request.data.approval)
+              && approvalInbox) {
+              const proposal = opts.mesh.proposeTask(request.data);
+              if (proposal.kind === "mesh-task-result") {
+                approvalInbox.remove(proposal.taskId);
+                await enqueueSendAsync(proposal);
+              } else {
+                try {
+                  approvalInbox.put(request.data.task);
+                  await enqueueSendAsync(proposal);
+                } catch {
+                  const denied = opts.mesh.denyProposal(request.data.task.taskId, "目标设备的本地审批队列不可用");
+                  await enqueueSendAsync(denied);
+                }
+              }
             } else {
               // Do not block the receive loop for the lifetime of a GPU job:
               // status and cancellation requests must remain processable while
@@ -711,6 +814,7 @@ export async function serveWatch(
     watcher.stop();
     codexWatcher.stop();
     hookServer.stop();
+    approvalServer?.stop();
     // Kill the child agents too: ACP sessions are piped children, so they would
     // otherwise be orphaned holding a model connection each.
     for (const acp of acpBySession.values()) acp.stop();

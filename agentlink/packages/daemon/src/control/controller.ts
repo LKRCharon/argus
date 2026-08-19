@@ -509,7 +509,16 @@ export class MeshController {
         const remote = await this.requestTaskStatus(peerId, record.taskId);
         if (remote.known) {
           this.applyTaskStatus(peerId, remote);
-          if (isTerminal(toControlStatus(remote.status))) this.outbox.remove(record.taskId);
+          if (isTerminal(toControlStatus(remote.status))) {
+            this.outbox.remove(record.taskId);
+            continue;
+          }
+          // Re-send a pending proposal so a target can reconstruct a missing
+          // local approval-inbox entry after a restart. The target task journal
+          // still enforces the same request digest and cannot execute it twice.
+          if (remote.status === "approval-required" || remote.status === "received") {
+            await this.dispatchOutboxRecord(session, record).catch(() => undefined);
+          }
           continue;
         }
       } catch {

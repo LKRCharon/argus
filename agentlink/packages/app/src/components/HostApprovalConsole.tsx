@@ -30,6 +30,7 @@ const terminalStatuses = new Set([
   "cancelled",
   "completed",
   "failed",
+  "processing",
 ]);
 
 export default function HostApprovalConsole() {
@@ -117,7 +118,7 @@ export default function HostApprovalConsole() {
   const initialLoading = response === null && loadError === null;
 
   return (
-    <div className="min-h-screen bg-[#f5f5f7] text-slate-950">
+    <div className="min-h-screen bg-white text-slate-950">
       <header className="border-b border-slate-200/80 bg-white/90 px-5 py-4 backdrop-blur sm:px-8">
         <div className="mx-auto flex max-w-4xl items-center justify-between gap-5">
           <div className="min-w-0">
@@ -147,7 +148,7 @@ export default function HostApprovalConsole() {
         {initialLoading && <EmptyState text="正在读取审批请求" />}
         {!initialLoading && approvals.length === 0 && <EmptyState text="暂无审批请求" />}
 
-        <div className="space-y-4">
+        <div className="divide-y divide-slate-200 border-y border-slate-200">
           {approvals.map((approval) => (
             <ApprovalItem
               key={approval.taskId}
@@ -177,7 +178,7 @@ function ApprovalItem({
   const actionable = !terminalStatuses.has(approval.status.toLowerCase());
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-900/[0.02]">
+    <article className="bg-white">
       <div className="px-5 pt-5 sm:px-6 sm:pt-6">
         <div className="flex items-start justify-between gap-4">
           <p className="min-w-0 text-lg font-semibold leading-7 tracking-tight">
@@ -265,6 +266,7 @@ function statusLabel(status: string) {
     cancelled: "已取消",
     completed: "已完成",
     failed: "处理失败",
+    processing: "处理中",
   };
   return labels[status.toLowerCase()] ?? status;
 }
@@ -273,7 +275,7 @@ function statusClass(status: string) {
   const normalized = status.toLowerCase();
   const base = "shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold";
   if (["allow-once", "allowed", "approved", "completed"].includes(normalized)) {
-    return `${base} bg-emerald-50 text-emerald-700`;
+    return `${base} bg-blue-50 text-[#007aff]`;
   }
   if (["deny", "denied", "failed"].includes(normalized)) {
     return `${base} bg-red-50 text-red-700`;
