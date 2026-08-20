@@ -6,8 +6,10 @@ import SessionDetailView from "./components/SessionDetailView";
 import DeviceListView from "./components/DeviceListView";
 import MeshConsole from "./components/MeshConsole";
 import HostApprovalConsole from "./components/HostApprovalConsole";
+import DelegationConsole from "./components/DelegationConsole";
 
 export default function App() {
+  if (window.location.pathname.startsWith("/delegate")) return <DelegationConsole />;
   if (window.location.pathname.startsWith("/host")) return <HostApprovalConsole />;
   if (window.location.pathname.startsWith("/mesh")) return <MeshConsole />;
 

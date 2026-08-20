@@ -25,6 +25,12 @@ Then open `http://127.0.0.1:8790/mesh`.
 To let Codex call this control plane through four bounded MCP tools, follow
 [`CODEX_MCP.md`](CODEX_MCP.md).
 
+To accept scoped MarkSec work from another Codex through a secret HTTPS path,
+follow [`MARKSEC_DELEGATION.md`](MARKSEC_DELEGATION.md). That gateway uses a
+separate token, disposable workspace, network-disabled Codex permission
+profile, and owner approval boundary for `publish`; it does not expose the
+Mesh console or general remote shell.
+
 Pairing is initiated on a host and accepted on Seoul with the controller
 state directory. `join` only stores the peer; the long-running control service
 then reconnects to every stored peer:

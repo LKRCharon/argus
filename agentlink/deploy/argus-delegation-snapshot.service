@@ -1,0 +1,35 @@
+[Unit]
+Description=Create a sealed MarkSec source snapshot for Argus delegation
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/argus-delegation/current
+ExecStart=/opt/argus-delegation/bin/bun run packages/daemon/src/index.ts delegation snapshot-marksec --source /home/ubuntu/proj/MarkSec --cache /var/cache/argus-delegation
+UMask=0022
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateNetwork=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=read-only
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+LockPersonality=true
+RemoveIPC=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+ReadWritePaths=/var/cache/argus-delegation
+InaccessiblePaths=-/home/ubuntu/proj/MarkSec/.env
+InaccessiblePaths=-/home/ubuntu/proj/MarkSec/.env.local
+InaccessiblePaths=-/home/ubuntu/proj/MarkSec/webpage/.env
+InaccessiblePaths=-/home/ubuntu/proj/MarkSec/webpage/.env.local
+InaccessiblePaths=-/home/ubuntu/proj/MarkSec/data
+InaccessiblePaths=-/home/ubuntu/proj/MarkSec/webpage/.data

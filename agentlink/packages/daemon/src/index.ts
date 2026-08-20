@@ -24,6 +24,7 @@ import { runWatch } from "./watcher/serve";
 import { runMeshApprove, runMeshGrant, runMeshRequest, runMeshResources, runMeshStatus } from "./mesh/cli";
 import { MeshController } from "./control/controller";
 import { startControlServer } from "./control/server";
+import { DelegationService, createMarkSecSnapshot, startDelegationServer } from "./delegation";
 
 const [cmd, ...args] = process.argv.slice(2);
 
@@ -42,6 +43,8 @@ function usage(): void {
   agentlink mesh approve ...     由本地资源所有者签发 approval
   agentlink mesh request ...     发送一个 typed Mesh 任务
   agentlink control               启动 Seoul 本地 Mesh Console
+  agentlink delegation serve      启动独立 MarkSec 委托网关与本地控制台
+  agentlink delegation snapshot-marksec --source 路径 --cache 路径
   agentlink peers               列出已配对设备
   agentlink rename <指纹> <名称>  重命名已配对设备
   agentlink forget <指纹>        移除已配对设备
@@ -117,6 +120,39 @@ async function main(): Promise<void> {
     case "control": {
       const controller = new MeshController({ relayUrl: process.env.AGENTLINK_RELAY });
       const server = await startControlServer(controller, { distDir: process.env.ARGUS_CONTROL_DIST });
+      const stop = () => server.stop();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      await new Promise(() => {});
+      break;
+    }
+    case "delegation": {
+      if (args[0] === "snapshot-marksec") {
+        const sourceRoot = flagValue(args, "--source");
+        const cacheRoot = flagValue(args, "--cache");
+        if (!sourceRoot || !cacheRoot) {
+          console.error("用法: agentlink delegation snapshot-marksec --source /path --cache /path");
+          process.exit(1);
+        }
+        const result = createMarkSecSnapshot({ sourceRoot, cacheRoot });
+        console.log(JSON.stringify({
+          type: "marksec-snapshot",
+          snapshot: result.snapshot,
+          sha256: result.sha256,
+          files: result.files,
+          bytes: result.bytes,
+          createdAt: result.createdAt,
+        }));
+        break;
+      }
+      if (args[0] !== "serve") {
+        console.error("用法: agentlink delegation <serve|snapshot-marksec>");
+        process.exit(1);
+      }
+      const service = new DelegationService();
+      const server = startDelegationServer(service, {
+        distDir: process.env.ARGUS_DELEGATION_DIST,
+      });
       const stop = () => server.stop();
       process.once("SIGINT", stop);
       process.once("SIGTERM", stop);

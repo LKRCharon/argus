@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "id": "marksec",
+      "displayName": "MarkSec",
+      "sourceRoot": "/var/cache/argus-delegation/current",
+      "workRoot": "/var/lib/argus-delegation/work/marksec",
+      "defaultRef": "current",
+      "allowedDomains": [
+        "marksec.limen.codes"
+      ],
+      "allowedModes": [
+        "inspect",
+        "change"
+      ],
+      "codexExecutable": "/opt/argus-delegation/lib/node_modules/@openai/codex/bin/codex.js",
+      "maxRuntimeMs": 1800000,
+      "maxChangedFiles": 100,
+      "maxDiffBytes": 8388608,
+      "copyExcludes": [
+        "data",
+        ".codex",
+        ".env",
+        ".env.*",
+        "*.pem",
+        "*.key",
+        ".venv",
+        "__pycache__",
+        ".pytest_cache",
+        "*.log",
+        "webpage/node_modules",
+        "webpage/.next",
+        "webpage/.data"
+      ],
+      "verificationCommands": []
+    }
+  ],
+  "principals": []
+}
