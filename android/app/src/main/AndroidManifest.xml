@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Package-visibility (API 30+): without this, SpeechRecognizer
          .isRecognitionAvailable() is always false and the mic button vanishes. -->
     <queries>
@@ -16,10 +23,23 @@
          re-pairs) instead of crash-looping on launch. -->
     <application
         android:allowBackup="false"
+        android:requestLegacyExternalStorage="true"
         android:label="Argus"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Argus"
         android:supportsRtl="true">
+        <activity
+            android:name=".PhoneAgentActivity"
+            android:exported="true"
+            android:icon="@mipmap/ic_phone_agent"
+            android:label="手机 Agent"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".MainActivity"
             android:exported="true"

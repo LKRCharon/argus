@@ -54,6 +54,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kairong.argus.BuildConfig
@@ -65,6 +67,8 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -84,7 +88,7 @@ data class SessionState(
 )
 
 /** What can cover the session list or a session detail. */
-enum class Overlay { Pair, Devices, NewSession, Settings }
+enum class Overlay { Pair, Devices, NewSession, Settings, PhoneAgent }
 
 /** Longest a pending cache write may be deferred by new events. */
 private const val PERSIST_MAX_DELAY_MS = 15_000L
@@ -138,6 +142,11 @@ class ArgusViewModel : ViewModel() {
     /** Agent switcher shows icons only by default; the chevron reveals names. */
     var showAgentLabels by mutableStateOf(false)
         private set
+    /** Independent phone-side Agent session; its tools run on Android. */
+    var phoneAgent by mutableStateOf(PhoneAgentState())
+        private set
+    var phoneAgentConfig by mutableStateOf(PhoneAgentConfigState())
+        private set
     /** Explicit connection intent: Disconnect used to be instantly undone by
      *  the auto-reconnect effect (it only checked status == disconnected). */
     var userWantsConnection by mutableStateOf(true)
@@ -153,7 +162,11 @@ class ArgusViewModel : ViewModel() {
     /** When the cache was last actually written, for the max-delay cap. */
     private var lastPersistAt = 0L
     private var relayClient: RelayClient? = null
+    /** Prevent the Compose retry effect from starting overlapping handshakes. */
+    private var channelConnectJob: Job? = null
     private var voiceHelper: VoiceInputHelper? = null
+    private var phoneAgentRuntime: PhoneAgentRuntime? = null
+    private var phoneAgentConfigStore: PhoneAgentConfigStore? = null
     /** A refresh needs both the transcript directory and Codex's app-server list. */
     private var catalogRefreshTimeoutJob: Job? = null
     private var refreshCatalogAfterConnection = false
@@ -204,6 +217,10 @@ class ArgusViewModel : ViewModel() {
             // latest pairing as the initial selection once, then persist it.
             if (selectedPeer != s.getActivePeerFingerprint()) s.setActivePeerFingerprint(selectedPeer)
             val cache = SessionStore(appCtx as android.content.Context, cacheFileName(selectedPeer))
+            val agentConfigStore = PhoneAgentConfigStore(appCtx as android.content.Context)
+            val agentConfig = agentConfigStore.state()
+            val agentApiClient = PhoneAgentApiClient(agentConfigStore)
+            val agentStorageAccess = { PhoneAgentStorage.hasAccess(appCtx as android.content.Context) }
             val restored = cache.load().associate { c ->
                 c.sessionId to SessionState(
                     c.sessionId, c.agent, c.events, emptyList(), c.status, c.lastActivity
@@ -213,6 +230,24 @@ class ArgusViewModel : ViewModel() {
                 store = s
                 sessionStore = cache
                 applicationContext = appCtx as android.content.Context
+                phoneAgentConfigStore = agentConfigStore
+                phoneAgentRuntime = PhoneAgentRuntime(
+                    scope = viewModelScope,
+                    sendRequest = { requestId, instructions, input, tools ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            val response = agentApiClient.responses(requestId, instructions, input, tools)
+                            withContext(Dispatchers.Main) { phoneAgentRuntime?.onResponse(response) }
+                        }
+                    },
+                    onState = { next -> phoneAgent = next },
+                    storageAccess = agentStorageAccess,
+                    fileTools = PhoneFileTools(accessGranted = agentStorageAccess),
+                    conversationStore = PhoneAgentConversationStore(
+                        secrets = { listOfNotNull(agentConfigStore.apiKey()) },
+                    ),
+                )
+                phoneAgentRuntime?.refreshStorageAccess()
+                phoneAgentConfig = agentConfig
                 identity = id
                 myFingerprint = fp
                 peers = ps
@@ -264,6 +299,50 @@ class ArgusViewModel : ViewModel() {
     fun updateShowAgentLabels(enabled: Boolean) {
         showAgentLabels = enabled
         store?.setShowAgentLabels(enabled)
+    }
+
+    fun refreshPhoneAgentStorageAccess() {
+        phoneAgentRuntime?.refreshStorageAccess()
+            ?: run {
+                val context = applicationContext ?: return
+                phoneAgent = phoneAgent.copy(storageAccessGranted = PhoneAgentStorage.hasAccess(context))
+            }
+    }
+
+    fun startPhoneAgent(prompt: String) {
+        if (!phoneAgentConfig.hasApiKey) {
+            phoneAgent = phoneAgent.copy(error = "请先配置 LimenAPI Key")
+            return
+        }
+        phoneAgentRuntime?.sendPrompt(prompt)
+    }
+
+    fun approvePhoneAgentTool(allow: Boolean) {
+        phoneAgentRuntime?.approvePending(allow)
+    }
+
+    fun resetPhoneAgent() {
+        phoneAgentRuntime?.reset()
+    }
+
+    fun savePhoneAgentConfig(baseUrl: String, model: String, apiKey: String): String? {
+        val configStore = phoneAgentConfigStore ?: return "手机 Agent 尚未初始化"
+        val error = configStore.validate(baseUrl, model, apiKey.ifBlank { null })
+        if (error != null) return error
+        return try {
+            phoneAgentConfig = configStore.save(baseUrl, model, apiKey.ifBlank { null })
+            phoneAgent = phoneAgent.copy(error = null)
+            null
+        } catch (e: Exception) {
+            e.message ?: "无法保存 LimenAPI 配置"
+        }
+    }
+
+    fun clearPhoneAgentApiKey() {
+        val configStore = phoneAgentConfigStore ?: return
+        phoneAgentConfig = configStore.clearApiKey()
+        phoneAgentRuntime?.reset()
+        phoneAgent = phoneAgent.copy(error = "LimenAPI Key 已移除")
     }
 
     /** Stop only an abandoned, observational history download. */
@@ -637,23 +716,41 @@ class ArgusViewModel : ViewModel() {
 
     fun connectChannel(keepDisconnectNotice: Boolean = false) {
         val peer = activePeer ?: run { error = "请先选择一台主机"; return }
+        if (channelConnectJob?.isActive == true ||
+            connectionStatus == "connecting" || connectionStatus == "pairing"
+        ) return
         error = null
         if (!keepDisconnectNotice) connectionDetail = null
         userWantsConnection = true
-        viewModelScope.launch(Dispatchers.IO) {
+        // Mark the attempt before dispatching to IO. The retry effect is keyed
+        // on this state and otherwise can start a second handshake while the
+        // first WebSocket is still waiting for chan-joined.
+        connectionStatus = "connecting"
+        val job = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            val connectJob = coroutineContext[Job]
             val client = newClient()
             try {
                 relayClient?.disconnect()
                 relayClient = client
                 client.connectChannel(peer.longTermKey)
+            } catch (_: CancellationException) {
+                client.disconnect()
             } catch (e: Exception) {
                 client.disconnect("无法建立与中继的连接")
                 withContext(Dispatchers.Main) {
                     if (relayClient === client) relayClient = null
                     error = e.message
                 }
+            } finally {
+                // This callback is separate from the cancelled connect job so
+                // a manual disconnect cannot leave the retry gate stuck.
+                viewModelScope.launch(Dispatchers.Main) {
+                    if (channelConnectJob === connectJob) channelConnectJob = null
+                }
             }
         }
+        channelConnectJob = job
+        job.start()
     }
 
     private fun onAgentEvent(ev: AgentEvent) {
@@ -1008,6 +1105,8 @@ class ArgusViewModel : ViewModel() {
         userWantsConnection = false
         cancelCatalogRefresh()
         setActiveSession(null)
+        channelConnectJob?.cancel()
+        channelConnectJob = null
         clientSeq++  // silence any in-flight callbacks from the old client
         relayClient?.disconnect(); relayClient = null
         connectionStatus = "disconnected"
@@ -1018,6 +1117,7 @@ class ArgusViewModel : ViewModel() {
         // Flush synchronously: the debounced job dies with the scope.
         persistJob?.cancel()
         catalogRefreshTimeoutJob?.cancel()
+        channelConnectJob?.cancel()
         sessionStore?.save(sessionSnapshot())
         relayClient?.disconnect()
         voiceHelper?.destroy()
@@ -1072,9 +1172,21 @@ class ArgusViewModel : ViewModel() {
 // pill) -> control what (chips) -> what is happening (session feed).
 
 @Composable
-fun ArgusApp(activity: ComponentActivity, pairLink: MutableState<Uri?> = mutableStateOf(null)) {
-    val vm: ArgusViewModel = viewModel()  // survives config changes
+fun ArgusApp(
+    activity: ComponentActivity,
+    pairLink: MutableState<Uri?> = mutableStateOf(null),
+    onGrantPhoneAgentAccess: () -> Unit = {},
+    providedViewModel: ArgusViewModel? = null,
+) {
+    val vm: ArgusViewModel = providedViewModel ?: viewModel()  // survives config changes
     LaunchedEffect(Unit) { vm.init(activity) }
+    DisposableEffect(activity.lifecycle, vm) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) vm.refreshPhoneAgentStorageAccess()
+        }
+        activity.lifecycle.addObserver(observer)
+        onDispose { activity.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(activity, vm.keepScreenOn) {
         if (vm.keepScreenOn) {
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1118,11 +1230,11 @@ fun ArgusApp(activity: ComponentActivity, pairLink: MutableState<Uri?> = mutable
                 ) {
                     Box(Modifier.navigationBarsPadding()) {
                         if (vm.activeSessionId != null) SessionDetailScreen(vm)
-                        else MainSheet(vm)
+                        else MainSheet(vm, onGrantPhoneAgentAccess)
                         // The status menu stays visible above a detail view.
                         // Render an overlay here too, so opening Settings never
                         // requires closing the conversation the user was reading.
-                        if (vm.activeSessionId != null && vm.overlay != null) OverlayPane(vm)
+                        if (vm.activeSessionId != null && vm.overlay != null) OverlayPane(vm, onGrantPhoneAgentAccess)
                     }
                 }
             }
@@ -1365,6 +1477,11 @@ private fun ConnectionMenuButton(vm: ArgusViewModel) {
                 onClick = { menu = false; vm.overlay = Overlay.Settings },
             )
             DropdownMenuItem(
+                text = { Text("手机 Agent") },
+                leadingIcon = { Icon(Icons.Default.SmartToy, null) },
+                onClick = { menu = false; vm.overlay = Overlay.PhoneAgent },
+            )
+            DropdownMenuItem(
                 text = { Text("切换主机") },
                 leadingIcon = { Icon(Icons.Default.Computer, null) },
                 onClick = { menu = false; vm.overlay = Overlay.Devices },
@@ -1470,17 +1587,23 @@ private fun AgentPill(agent: String?, selected: Boolean, showLabel: Boolean, onC
 // ===== Main sheet: tab content =====
 
 @Composable
-private fun MainSheet(vm: ArgusViewModel) {
+private fun MainSheet(
+    vm: ArgusViewModel,
+    onGrantPhoneAgentAccess: () -> Unit,
+) {
     Box(Modifier.fillMaxSize()) {
         SessionListScreen(vm)
         // Overlays rather than tabs: pairing and devices are occasional errands,
         // so they cover the list instead of permanently costing it a row.
-        if (vm.overlay != null) OverlayPane(vm)
+        if (vm.overlay != null) OverlayPane(vm, onGrantPhoneAgentAccess)
     }
 }
 
 @Composable
-private fun OverlayPane(vm: ArgusViewModel) {
+private fun OverlayPane(
+    vm: ArgusViewModel,
+    onGrantPhoneAgentAccess: () -> Unit,
+) {
     val which = vm.overlay ?: return
     val c = ArgusTheme.colors
     BackHandler { vm.overlay = null }
@@ -1491,6 +1614,7 @@ private fun OverlayPane(vm: ArgusViewModel) {
                 Overlay.Devices -> "选择主机"
                 Overlay.NewSession -> "新建会话"
                 Overlay.Settings -> "设置"
+                Overlay.PhoneAgent -> "手机 Agent"
             },
             onBack = { vm.overlay = null }
         )
@@ -1500,6 +1624,7 @@ private fun OverlayPane(vm: ArgusViewModel) {
                 Overlay.Devices -> DeviceScreen(vm)
                 Overlay.NewSession -> NewSessionScreen(vm)
                 Overlay.Settings -> SettingsScreen(vm)
+                Overlay.PhoneAgent -> PhoneAgentScreen(vm, onGrantPhoneAgentAccess)
             }
         }
     }
