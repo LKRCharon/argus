@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -604,6 +604,41 @@ describe("ControlTaskJournal", () => {
     writeFileSync(invalid, JSON.stringify([{ taskId: "task-only" }]), { mode: 0o600 });
     chmodSync(invalid, 0o600);
     expect(() => new ControlTaskJournal(invalid)).toThrow("invalid");
+  });
+
+  test("sanitizes outputs before Seoul journal persistence and preserves typed ids", () => {
+    const root = mkdtempSync(join(tmpdir(), "argus-journal-redaction-"));
+    const file = join(root, "tasks.json");
+    const taskId = "task-seoul-redaction-preserved";
+    const artifactId = `sha256:${"b".repeat(64)}`;
+    const requestId = "request-seoul-redaction-preserved";
+    const operationId = "operation-seoul-redaction-preserved";
+    const journal = new ControlTaskJournal(file);
+    const record = journal.create({
+      taskId,
+      groupId: "group-alpha",
+      targetNodeId: "node-kmac",
+      resourceId: "repo:fixture",
+      operation: "run",
+      status: "completed",
+      result: {
+        taskId,
+        artifactId,
+        requestId,
+        operationId,
+        resultSummary: "api_key=SENTINEL_SEOUL_TOKEN_123456 /home/sentinel/private/repo/file.ts",
+        debugOutput: "Bearer SENTINEL_SEOUL_SECRET_123456",
+      },
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const bytes = readFileSync(file, "utf8");
+    expect(bytes).not.toContain("SENTINEL_SEOUL");
+    expect(bytes).not.toContain("/home/sentinel/private/repo");
+    for (const id of [taskId, artifactId, requestId, operationId]) {
+      expect(bytes).toContain(id);
+      expect(JSON.stringify(record)).toContain(id);
+    }
   });
 });
 

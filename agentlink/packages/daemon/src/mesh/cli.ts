@@ -99,6 +99,7 @@ export function runMeshStatus(args: string[]): void {
     })) ?? [],
     tasks,
     legacyControl: config?.legacyControl ?? false,
+    remoteCodexControl: config?.remoteCodexControl ?? false,
   };
   output(status, args.includes("--json"));
 }

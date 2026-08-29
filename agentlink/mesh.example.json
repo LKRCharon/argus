@@ -13,6 +13,7 @@
     "PEER_NODE_FINGERPRINT"
   ],
   "legacyControl": false,
+  "remoteCodexControl": false,
   "allowedRoots": [
     "/srv/argus/workspaces"
   ],

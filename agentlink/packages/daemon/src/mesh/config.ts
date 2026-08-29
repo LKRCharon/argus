@@ -24,6 +24,7 @@ const MeshConfigSchema = z.object({
   })).min(1),
   requesters: z.array(MeshNodeIdSchema).optional(),
   legacyControl: z.boolean().default(false),
+  remoteCodexControl: z.boolean().default(false),
   allowedRoots: z.array(z.string().refine(isAbsolute, "allowedRoots must be absolute")).optional(),
   quarantineRoot: z.string().refine(isAbsolute, "quarantineRoot must be absolute").optional(),
   artifactRoot: z.string().refine(isAbsolute, "artifactRoot must be absolute").optional(),
@@ -61,6 +62,12 @@ const MeshConfigSchema = z.object({
 
 export type MeshConfig = z.infer<typeof MeshConfigSchema>;
 
+export function parseMeshConfig(value: unknown): MeshConfig {
+  const parsed = MeshConfigSchema.safeParse(value);
+  if (!parsed.success) throw new Error("Mesh 配置格式无效");
+  return parsed.data;
+}
+
 export function meshConfigPath(): string {
   return process.env.AGENTLINK_MESH_CONFIG?.trim() || join(configDir(), "mesh.json");
 }
@@ -73,9 +80,7 @@ export function loadMeshConfig(): MeshConfig | undefined {
     if ((mode & 0o077) !== 0) throw new Error("Mesh 配置文件权限过宽，请设置为 0600");
   }
   const raw = JSON.parse(readFileSync(file, "utf8")) as unknown;
-  const parsed = MeshConfigSchema.safeParse(raw);
-  if (!parsed.success) throw new Error("Mesh 配置格式无效");
-  return parsed.data;
+  return parseMeshConfig(raw);
 }
 
 export function createMeshServiceForPeer(nodeId: string, peerNodeId: string, config: MeshConfig): MeshService {

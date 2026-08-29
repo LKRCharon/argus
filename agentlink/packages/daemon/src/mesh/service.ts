@@ -40,6 +40,7 @@ import { randomUUID } from "node:crypto";
 import { MeshExecutor, type LocalMeshResource } from "./executor";
 import { MeshRunnerRegistry, type MeshRunnerResult, type MeshRunnerSpec } from "./runner";
 import { MeshTaskStore, type MeshTaskLifecycleStatus, type MeshTaskRecord } from "./task-store";
+import { sanitizeRunnerOutput } from "./output-sanitizer";
 import { MeshPolicyEngine, type MeshPolicyEngineOptions } from "./policy";
 import { loadOrCreateMeshSigningKey } from "./signing";
 import { appendMeshAuditEvent } from "./audit";
@@ -648,16 +649,11 @@ export class MeshService {
     resourceRoot?: string,
     artifact?: { artifactId: string; sha256: string; baseArtifactId: string; changed: unknown[]; deleted: unknown[] },
   ): Record<string, MeshJsonValue> {
-    const redact = (value: string): string => {
-      const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-      return value
-        .replaceAll(resourceRoot ?? "\u0000", "<resource>")
-        .replaceAll(home || "\u0000", "<home>");
-    };
-    const summary = truncateUtf8(redact(runner.resultSummary), 16 * 1024);
+    const sensitivePaths = [resourceRoot ?? "", process.env.HOME ?? process.env.USERPROFILE ?? ""];
+    const summary = truncateUtf8(sanitizeRunnerOutput(runner.resultSummary, sensitivePaths), 16 * 1024);
     const debug = runner.debugOutput === undefined
       ? undefined
-      : truncateUtf8(redact(runner.debugOutput), 8 * 1024);
+      : truncateUtf8(sanitizeRunnerOutput(runner.debugOutput, sensitivePaths), 8 * 1024);
     const meshTruncated = summary.truncated || Boolean(debug?.truncated);
     const complete = !runner.resultSummaryTruncated
       && !runner.debugOutputTruncated

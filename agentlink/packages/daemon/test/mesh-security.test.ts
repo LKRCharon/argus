@@ -73,4 +73,42 @@ describe("Mesh security invariants", () => {
     writeFileSync(file, JSON.stringify(journal), { mode: 0o600 });
     expect(() => new MeshTaskStore(file, 2)).toThrow("重复 taskId");
   });
+
+  test("sanitizes runner outputs before KMac task-store persistence and preserves typed ids", () => {
+    const file = join(tempRoot("argus-mesh-tasks-redaction-"), "tasks.json");
+    const store = new MeshTaskStore(file, 2);
+    const request = task("task-redaction-preserved");
+    store.begin(request);
+    const artifactId = `sha256:${"a".repeat(64)}`;
+    const requestId = "request-redaction-preserved";
+    const operationId = "operation-redaction-preserved";
+    const result = store.update(request.taskId, {
+      status: "completed",
+      result: {
+        kind: "mesh-task-result",
+        groupId: request.groupId,
+        taskId: request.taskId,
+        targetNodeId: request.targetNodeId,
+        operation: request.operation,
+        status: "completed",
+        decision: "allow",
+        message: "done",
+        result: {
+          taskId: request.taskId,
+          artifactId,
+          requestId,
+          operationId,
+          resultSummary: "Authorization: Bearer SENTINEL_KMAC_TOKEN_123456 /Users/sentinel/private/repo/file.ts",
+          debugOutput: "secret=SENTINEL_KMAC_SECRET_123456",
+        },
+      },
+    });
+    const bytes = readFileSync(file, "utf8");
+    expect(bytes).not.toContain("SENTINEL_KMAC");
+    expect(bytes).not.toContain("/Users/sentinel/private/repo");
+    for (const id of [request.taskId, artifactId, requestId, operationId]) {
+      expect(bytes).toContain(id);
+      expect(JSON.stringify(result)).toContain(id);
+    }
+  });
 });

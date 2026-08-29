@@ -19,6 +19,7 @@ import {
   MeshResourceIdSchema,
   MeshTaskIdSchema,
 } from "@agentlink/wire";
+import { sanitizeTaskResultOutputs } from "../mesh/output-sanitizer";
 
 const MAX_RECORDS = 500;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -132,31 +133,37 @@ export class ControlTaskJournal {
   }
 
   create(record: ControlTaskRecord): ControlTaskRecord {
-    if (!isTaskRecord(record)) throw new Error("control task journal record is invalid");
-    const existing = this.records.find((item) => item.taskId === record.taskId);
+    const safeRecord = record.result === undefined
+      ? record
+      : { ...record, result: sanitizeTaskResultOutputs(record.result) };
+    if (!isTaskRecord(safeRecord)) throw new Error("control task journal record is invalid");
+    const existing = this.records.find((item) => item.taskId === safeRecord.taskId);
     if (existing) {
-      if (existing.requestDigest !== record.requestDigest) throw new Error("control task journal task id conflict");
+      if (existing.requestDigest !== safeRecord.requestDigest) throw new Error("control task journal task id conflict");
       return structuredClone(existing);
     }
     if (this.records.length >= MAX_RECORDS) {
       throw new Error("control task journal reached its replay limit");
     }
     const previous = this.records;
-    this.records = [structuredClone(record), ...this.records];
+    this.records = [structuredClone(safeRecord), ...this.records];
     try {
       this.write();
     } catch (error) {
       this.records = previous;
       throw error;
     }
-    return structuredClone(record);
+    return structuredClone(safeRecord);
   }
 
   update(taskId: string, patch: Partial<Omit<ControlTaskRecord, "taskId" | "createdAt">>): ControlTaskRecord | undefined {
     const index = this.records.findIndex((record) => record.taskId === taskId);
     if (index < 0) return undefined;
     const previous = this.records[index];
-    const next = { ...previous, ...patch, updatedAt: Date.now() };
+    const safePatch = patch.result === undefined
+      ? patch
+      : { ...patch, result: sanitizeTaskResultOutputs(patch.result) };
+    const next = { ...previous, ...safePatch, updatedAt: Date.now() };
     if (!isTaskRecord(next)) throw new Error("control task journal update is invalid");
     this.records[index] = next;
     try {

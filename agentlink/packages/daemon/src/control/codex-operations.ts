@@ -36,6 +36,16 @@ export const CodexOperationStatusSchema = z.enum([
 ]);
 export type CodexOperationStatus = z.infer<typeof CodexOperationStatusSchema>;
 
+const ALLOWED_TRANSITIONS: Readonly<Record<CodexOperationStatus, ReadonlySet<CodexOperationStatus>>> = {
+  queued: new Set(["sent", "failed", "timed_out"]),
+  sent: new Set(["acknowledged", "failed", "timed_out"]),
+  acknowledged: new Set(["running", "failed", "timed_out"]),
+  running: new Set(["completed", "failed", "timed_out"]),
+  completed: new Set(),
+  failed: new Set(),
+  timed_out: new Set(),
+};
+
 const CodexOperationRecordSchema = z.object({
   version: z.literal(FILE_VERSION),
   operationId: MeshOperationIdSchema,
@@ -162,6 +172,33 @@ export class CodexOperationStore {
   ): CodexOperationRecord {
     const current = this.records.get(operationId);
     if (!current) throw new Error("Codex operation not found");
+    if (!ALLOWED_TRANSITIONS[current.status].has(status) || hasConflictingSession(current, patch.sessionId)) {
+      return structuredClone(current);
+    }
+    return this.replace(operationId, current, status, patch);
+  }
+
+  reconcileTimedOut(
+    operationId: string,
+    status: "completed" | "failed",
+    patch: Partial<Pick<CodexOperationRecord,
+      "retryable" | "sessionId" | "message" | "acknowledgedAt" | "completedAt">> = {},
+  ): CodexOperationRecord {
+    const current = this.records.get(operationId);
+    if (!current) throw new Error("Codex operation not found");
+    if (current.status !== "timed_out" || hasConflictingSession(current, patch.sessionId)) {
+      return structuredClone(current);
+    }
+    return this.replace(operationId, current, status, patch);
+  }
+
+  private replace(
+    operationId: string,
+    current: CodexOperationRecord,
+    status: CodexOperationStatus,
+    patch: Partial<Pick<CodexOperationRecord,
+      "timedOutStage" | "retryable" | "sessionId" | "message" | "sentAt" | "acknowledgedAt" | "completedAt">>,
+  ): CodexOperationRecord {
     const next = CodexOperationRecordSchema.parse({
       ...current,
       ...patch,
@@ -246,6 +283,10 @@ export class CodexOperationStore {
       if (existsSync(temp)) unlinkSync(temp);
     }
   }
+}
+
+function hasConflictingSession(record: CodexOperationRecord, nextSessionId: string | undefined): boolean {
+  return Boolean(record.sessionId && nextSessionId && record.sessionId !== nextSessionId);
 }
 
 function encodeCursor(value: { createdAt: number; operationId: string }): string {

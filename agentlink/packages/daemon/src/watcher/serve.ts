@@ -39,12 +39,14 @@ import {
   startHostApprovalServer,
   type HostApprovalServerOptions,
 } from "../mesh/approval-server";
+import { isBoundedRemoteCodexCommand, meshWatchCapabilities } from "../mesh/watch-capabilities";
 
 interface ServeWatchOptions {
   hookPort?: number;
   mesh?: MeshService;
   meshStrict?: boolean;
   meshLegacyControl?: boolean;
+  meshRemoteCodexControl?: boolean;
   approvalInbox?: MeshApprovalInbox;
   approvalDistDir?: string;
   approvalHost?: string;
@@ -60,7 +62,12 @@ export async function serveWatch(
     conn.send({ op: "chan-data", data: { enc: await chan.seal(payload) } });
   };
   const meshModeEnabled = Boolean(opts.mesh) || opts.meshStrict === true;
-  const legacyAgentBridgeEnabled = !meshModeEnabled || opts.meshLegacyControl === true;
+  const capabilities = meshWatchCapabilities(
+    meshModeEnabled,
+    opts.meshLegacyControl === true,
+    opts.meshRemoteCodexControl === true,
+  );
+  const legacyAgentBridgeEnabled = capabilities.legacyAgentBridge;
 
   // 结构化 stdout：供 eclam/Argus 菜单栏 App 解析
   const emit = (obj: Record<string, unknown>): void => {
@@ -519,7 +526,8 @@ export async function serveWatch(
           console.log(`[watch] 收到手机指令: ${payload.kind}`);
         }
         if (controlRequestId && typeof payload?.kind === "string"
-          && CODEX_COMMANDS.has(payload.kind) && deadlineAt <= Date.now()) {
+          && (CODEX_COMMANDS.has(payload.kind) || isBoundedRemoteCodexCommand(payload))
+          && deadlineAt <= Date.now()) {
           await sendPayload({
             kind: "codex-error",
             note: "request expired in watcher queue",
@@ -528,8 +536,9 @@ export async function serveWatch(
             retryable: true,
             ...controlReply,
           });
-        } else if (meshModeEnabled && !opts.meshLegacyControl && typeof payload?.kind === "string"
-                    && PHONE_COMMANDS.has(payload.kind) && !MESH_COMMANDS.has(payload.kind)) {
+        } else if (meshModeEnabled && !legacyAgentBridgeEnabled && typeof payload?.kind === "string"
+                    && PHONE_COMMANDS.has(payload.kind) && !MESH_COMMANDS.has(payload.kind)
+                    && !(capabilities.remoteCodexControl && isBoundedRemoteCodexCommand(payload))) {
           await enqueueControlSendAsync({
             kind: "mesh-error",
             code: "legacy-control-disabled",
@@ -991,6 +1000,7 @@ export async function runWatch(opts: { hookPort?: number } = {}): Promise<void> 
   let mesh: MeshService | undefined;
   let meshStrict = false;
   let meshLegacyControl = false;
+  let meshRemoteCodexControl = false;
   try {
     const identity = loadOrCreateIdentity();
     meshStrict = existsSync(meshConfigPath());
@@ -998,6 +1008,7 @@ export async function runWatch(opts: { hookPort?: number } = {}): Promise<void> 
     if (config) {
       mesh = createMeshServiceForPeer(fingerprint(identity.publicKey), peer.fingerprint, config);
       meshLegacyControl = config.legacyControl;
+      meshRemoteCodexControl = config.remoteCodexControl;
     }
     if (mesh) console.log(`[mesh] 已启用：${mesh.listResources().length} 个本地资源`);
   } catch (error) {
@@ -1008,7 +1019,13 @@ export async function runWatch(opts: { hookPort?: number } = {}): Promise<void> 
   console.log(`已连接对端 ${peer.deviceName}，启动 watch 模式…`);
   process.stdout.write(JSON.stringify({ type: "status", connection: "connecting" }) + "\n");
 
-  const { stop } = await serveWatch(conn, chan, { ...opts, mesh, meshStrict, meshLegacyControl });
+  const { stop } = await serveWatch(conn, chan, {
+    ...opts,
+    mesh,
+    meshStrict,
+    meshLegacyControl,
+    meshRemoteCodexControl,
+  });
 
   process.on("SIGINT", () => {
     stop();

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -441,6 +441,53 @@ describe.serial("MeshService", () => {
     expect(String(result.resultSummary).length).toBeLessThanOrEqual(16 * 1024);
     expect(result).not.toHaveProperty("debugOutput");
     expect(JSON.stringify(result)).not.toContain("debug-secret-output");
+  });
+
+  test("sanitizes runner output before transmission and KMac persistence", async () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-runner-redaction-"));
+    const root = join(base, "workspace");
+    const taskFile = join(base, "tasks.json");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const value = new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      auditSink: () => {},
+      taskStore: new MeshTaskStore(taskFile),
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{ id: "workspace:redaction", ownerNodeId: "node-b", kind: "directory", displayName: "redaction", root }],
+      runners: [{
+        id: "workspace:redaction-runner",
+        resourceId: "workspace:redaction",
+        executable: process.execPath,
+        fixedArgs: [
+          "-e",
+          "console.log(JSON.stringify({resultSummary:'Authorization: Bearer SENTINEL_TRANSMIT_TOKEN_123456 '+process.cwd()+'/private.txt'}));console.error('secret=SENTINEL_TRANSMIT_SECRET_123456')",
+        ],
+        exposeDebugOutput: true,
+      }],
+    });
+    const request = {
+      groupId: "group-alpha",
+      taskId: "task-transmission-redaction",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      resourceId: "workspace:redaction",
+      operation: "run" as const,
+      scope: { runnerId: "workspace:redaction-runner", args: [] },
+    };
+    const grant = value.issueGrant(request);
+    const approval = value.issueApproval(grant, "run redaction fixture");
+    const completed = await value.handleRequest({ kind: "mesh-task-request", task: request, grant, approval });
+    const transmitted = JSON.stringify(completed);
+    const persisted = readFileSync(taskFile, "utf8");
+    for (const output of [transmitted, persisted]) {
+      expect(output).not.toContain("SENTINEL_TRANSMIT");
+      expect(output).not.toContain(root);
+      expect(output).toContain(request.taskId);
+    }
   });
 
   test("cancels an active named runner and persists the terminal result", async () => {

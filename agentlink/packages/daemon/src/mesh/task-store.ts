@@ -24,6 +24,7 @@ import {
   type MeshTaskResultPayload,
 } from "@agentlink/wire";
 import { configDir } from "../store";
+import { sanitizeTaskResultOutputs } from "./output-sanitizer";
 
 const FILE_VERSION = 1;
 const MAX_RECORDS = 1_000;
@@ -137,9 +138,12 @@ export class MeshTaskStore {
   ): MeshTaskRecord {
     const current = this.records.get(taskId);
     if (!current) throw new Error("Mesh task 不存在");
+    const safePatch = patch.result === undefined
+      ? patch
+      : { ...patch, result: sanitizeTaskResultOutputs(patch.result) };
     const next: MeshTaskRecord = {
       ...current,
-      ...patch,
+      ...safePatch,
       updatedAt: new Date().toISOString(),
     };
     this.records.set(taskId, next);

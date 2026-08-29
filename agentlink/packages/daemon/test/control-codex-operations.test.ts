@@ -88,7 +88,7 @@ describe("durable remote Codex operations", () => {
     )).toThrow("idempotencyKey");
   });
 
-  test("records timeout stage and attaches a late session to the original operation", async () => {
+  test("reconciles a timed_out operation through the documented late-success path", async () => {
     const { controller } = controllerFixture();
     controller.codex.startThread = async () => {
       throw new CodexGatewayError(
@@ -96,7 +96,6 @@ describe("durable remote Codex operations", () => {
         "app-server",
         true,
         true,
-        "thread-created-before-timeout",
       );
     };
     const operation = controller.startCodexThreadOperation(
@@ -111,7 +110,6 @@ describe("durable remote Codex operations", () => {
       status: "timed_out",
       timedOutStage: "app-server",
       retryable: true,
-      sessionId: "thread-created-before-timeout",
     });
 
     expect(controller.codex.handlePayload("node-kmac", {
@@ -123,6 +121,76 @@ describe("durable remote Codex operations", () => {
     expect(controller.getCodexOperation(operation.operationId)).toMatchObject({
       status: "completed",
       sessionId: "thread-late-1",
+    });
+  });
+
+  test("ignores duplicate late success after completion", async () => {
+    const { controller } = controllerFixture();
+    controller.codex.startThread = async () => ({ kind: "input-ack", sessionId: "thread-completed", status: "running" });
+    const operation = controller.startCodexThreadOperation("node-kmac", "task", "codex-duplicate-success");
+    await nextTurn();
+    for (let index = 0; index < 2; index += 1) {
+      expect(controller.codex.handlePayload("node-kmac", {
+        kind: "input-ack",
+        controlRequestId: `codex-op:${operation.operationId}`,
+        sessionId: "thread-completed",
+        status: "running",
+      })).toBe(true);
+    }
+    expect(controller.getCodexOperation(operation.operationId)).toMatchObject({
+      status: "completed",
+      sessionId: "thread-completed",
+      message: "thread and initial turn accepted",
+    });
+  });
+
+  test("ignores a late failure after completion", async () => {
+    const { controller } = controllerFixture();
+    controller.codex.startThread = async () => ({ kind: "input-ack", sessionId: "thread-success", status: "running" });
+    const operation = controller.startCodexThreadOperation("node-kmac", "task", "codex-failure-after-completed");
+    await nextTurn();
+    controller.codex.handlePayload("node-kmac", {
+      kind: "codex-error",
+      controlRequestId: `codex-op:${operation.operationId}`,
+      sessionId: "thread-success",
+      note: "late failure",
+      retryable: true,
+    });
+    expect(controller.getCodexOperation(operation.operationId)).toMatchObject({ status: "completed", sessionId: "thread-success" });
+  });
+
+  test("ignores a late success after failure", async () => {
+    const { controller } = controllerFixture();
+    controller.codex.startThread = async () => {
+      throw new CodexGatewayError("failed", "peer", false, false, "thread-failed");
+    };
+    const operation = controller.startCodexThreadOperation("node-kmac", "task", "codex-success-after-failed");
+    await nextTurn();
+    controller.codex.handlePayload("node-kmac", {
+      kind: "input-ack",
+      controlRequestId: `codex-op:${operation.operationId}`,
+      sessionId: "thread-failed",
+      status: "running",
+    });
+    expect(controller.getCodexOperation(operation.operationId)).toMatchObject({ status: "failed", sessionId: "thread-failed" });
+  });
+
+  test("keeps a bound session immutable during timed_out reconciliation", async () => {
+    const { controller } = controllerFixture();
+    controller.codex.startThread = async () => {
+      throw new CodexGatewayError("timed out", "app-server", true, true, "thread-bound");
+    };
+    const operation = controller.startCodexThreadOperation("node-kmac", "task", "codex-conflicting-session");
+    await nextTurn();
+    controller.codex.handlePayload("node-kmac", {
+      kind: "input-ack",
+      controlRequestId: `codex-op:${operation.operationId}`,
+      sessionId: "thread-conflicting",
+      status: "running",
+    });
+    expect(controller.getCodexOperation(operation.operationId)).toMatchObject({
+      status: "timed_out",
+      sessionId: "thread-bound",
     });
   });
 

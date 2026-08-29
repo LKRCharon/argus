@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -114,5 +114,24 @@ describe("Mesh structured artifacts", () => {
     const workspace = store.materialize("task-artifact-link", base);
     symlinkSync("safe.txt", join(workspace.workspace, "link.txt"));
     expect(() => store.captureResult("task-artifact-link", base, workspace.workspace)).toThrow("symbolic link");
+  });
+
+  test("rejects whole-workspace replacement without reading outside files", () => {
+    const root = tempRoot();
+    const outside = join(tempRoot(), "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "outside-secret.txt"), "must-not-be-captured");
+    const store = new MeshArtifactStore(root);
+    const base = baseArtifact([artifactFile("safe.txt", "safe")]);
+    const workspace = store.materialize("task-artifact-root-link", base);
+    renameSync(workspace.workspace, `${workspace.workspace}.owned`);
+    symlinkSync(outside, workspace.workspace, "dir");
+
+    let captured: unknown;
+    expect(() => {
+      captured = store.captureResult("task-artifact-root-link", base, workspace.workspace);
+    }).toThrow("replaced");
+    expect(captured).toBeUndefined();
+    expect(readFileSync(join(outside, "outside-secret.txt"), "utf8")).toBe("must-not-be-captured");
   });
 });

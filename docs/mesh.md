@@ -77,6 +77,17 @@ old remote session/input/permission-control messages unless this flag is
 explicitly set to `true`. That flag is a compatibility escape for a trusted,
 single-owner setup—not a safe multi-user mode.
 
+`remoteCodexControl` also defaults to `false` and is independent from
+`legacyControl`. Enabling it admits only deadline-bounded Codex controller
+commands and Codex approval responses. It does not start transcript watchers,
+the Qoder hook server or ACP, and it does not enable generic session injection,
+cloud sessions, or other legacy bridge behavior.
+
+Durable Codex operations move forward through explicit states. `completed` and
+`failed` are immutable terminal states and ignore duplicate or conflicting late
+frames. Only `timed_out` can reconcile a late acknowledgement to `completed` or
+`failed`; an already bound non-empty `sessionId` must match during that path.
+
 To expose a GPU or other accelerator, add a `runners` entry. Its `executable`
 must already exist on the target and is validated as a non-symlink executable;
 the runner's `fixedArgs` and `env` are local owner configuration. The requester

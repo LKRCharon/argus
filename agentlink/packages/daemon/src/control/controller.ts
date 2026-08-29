@@ -588,7 +588,10 @@ export class MeshController {
 
   private completeCodexStart(operationId: string, response: Record<string, unknown>): void {
     const sessionId = typeof response.sessionId === "string" ? response.sessionId : undefined;
+    const current = this.codexOperations.get(operationId, this.nodeId);
+    if (!current || ["completed", "failed"].includes(current.status)) return;
     if (!sessionId) {
+      if (current.status === "timed_out") return;
       this.codexOperations.update(operationId, "failed", {
         retryable: false,
         message: "watcher acknowledgement did not include sessionId",
@@ -597,13 +600,26 @@ export class MeshController {
       return;
     }
     const now = Date.now();
+    const failed = response.lateAfterTimeout === true || response.status === "failed";
+    if (current.status === "timed_out") {
+      this.codexOperations.reconcileTimedOut(operationId, failed ? "failed" : "completed", {
+        sessionId,
+        acknowledgedAt: now,
+        retryable: failed,
+        message: failed
+          ? "thread exists but the initial turn did not complete dispatch"
+          : "late watcher acknowledgement reconciled after timeout",
+        completedAt: now,
+      });
+      return;
+    }
     this.codexOperations.update(operationId, "acknowledged", {
       sessionId,
       acknowledgedAt: now,
       retryable: false,
       message: "watcher acknowledged thread creation",
     });
-    if (response.lateAfterTimeout === true || response.status === "failed") {
+    if (failed) {
       this.codexOperations.update(operationId, "failed", {
         sessionId,
         retryable: true,
@@ -633,6 +649,7 @@ export class MeshController {
     const operationId = controlRequestId.slice("codex-op:".length);
     const record = this.codexOperations.get(operationId, this.nodeId);
     if (!record || record.targetNodeId !== targetNodeId) return;
+    if (record.status !== "timed_out") return;
     try {
       if (payload.kind === "input-ack") {
         this.completeCodexStart(operationId, payload);
@@ -640,17 +657,10 @@ export class MeshController {
       }
       if (payload.kind === "codex-error") {
         const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
-        const stage = typeof payload.timedOutStage === "string"
-          && ["controller", "relay", "peer", "watcher", "app-server"].includes(payload.timedOutStage)
-          ? payload.timedOutStage as "controller" | "relay" | "peer" | "watcher" | "app-server"
-          : "app-server";
         if (payload.timedOut === true) {
-          this.codexOperations.update(operationId, "timed_out", {
-            ...codexOperationTimeoutPatch(stage, String(payload.note ?? "remote deadline elapsed")),
-            ...(sessionId ? { sessionId } : {}),
-          });
+          return;
         } else {
-          this.codexOperations.update(operationId, "failed", {
+          this.codexOperations.reconcileTimedOut(operationId, "failed", {
             ...(sessionId ? { sessionId } : {}),
             retryable: payload.retryable === true,
             message: String(payload.note ?? "remote Codex operation failed").slice(0, 512),

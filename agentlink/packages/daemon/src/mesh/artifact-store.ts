@@ -40,6 +40,18 @@ interface ValidatedBaseArtifact {
   contents: Map<string, Buffer>;
 }
 
+interface DirectoryIdentity {
+  canonicalPath: string;
+  device: bigint;
+  inode: bigint;
+}
+
+interface OwnedWorkspaceIdentity {
+  root: DirectoryIdentity;
+  taskDir: DirectoryIdentity;
+  workspace: DirectoryIdentity;
+}
+
 export interface MaterializedArtifactWorkspace {
   taskDir: string;
   workspace: string;
@@ -97,6 +109,8 @@ export function validateResultArtifactManifest(value: unknown): MeshResultArtifa
 
 export class MeshArtifactStore {
   private readonly root: string;
+  private rootIdentity?: DirectoryIdentity;
+  private readonly workspaceIdentities = new Map<string, OwnedWorkspaceIdentity>();
 
   constructor(root = join(configDir(), "mesh-workspaces")) {
     if (!isAbsolute(root)) throw new Error("artifact workspace root must be absolute");
@@ -112,6 +126,11 @@ export class MeshArtifactStore {
     mkdirSync(taskDir, { mode: 0o700 });
     const workspace = join(taskDir, "workspace");
     mkdirSync(workspace, { mode: 0o700 });
+    this.workspaceIdentities.set(taskId, {
+      root: this.rootIdentity!,
+      taskDir: directoryIdentity(taskDir),
+      workspace: directoryIdentity(workspace),
+    });
     try {
       for (const file of manifest.files) {
         const destination = joinArtifactPath(workspace, file.path);
@@ -138,10 +157,15 @@ export class MeshArtifactStore {
     const root = this.ensureRoot();
     const taskDir = join(root, taskId);
     const expectedWorkspace = join(taskDir, "workspace");
-    const workspace = realpathSync(workspaceValue);
-    if (workspace !== realpathSync(expectedWorkspace)) throw new Error("artifact workspace does not match task");
+    const ownedIdentity = this.workspaceIdentities.get(taskId);
+    if (!ownedIdentity) throw new Error("artifact workspace identity is not bound to task");
+    assertDirectoryIdentity(root, ownedIdentity.root, "artifact workspace root");
+    assertDirectoryIdentity(taskDir, ownedIdentity.taskDir, "artifact task directory");
+    assertDirectoryIdentity(expectedWorkspace, ownedIdentity.workspace, "artifact workspace");
+    if (resolve(workspaceValue) !== expectedWorkspace) throw new Error("artifact workspace does not match task");
+    assertContained(root, expectedWorkspace);
 
-    const current = scanWorkspace(workspace);
+    const current = scanWorkspace(expectedWorkspace);
     const original = new Map(base.files.map((file) => [file.path, file]));
     const changed = [...current.values()]
       .filter((file) => {
@@ -190,7 +214,50 @@ export class MeshArtifactStore {
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     if (lstatSync(this.root).isSymbolicLink()) throw new Error("artifact workspace root cannot be a symlink");
     chmodSync(this.root, 0o700);
-    return realpathSync(this.root);
+    const canonicalRoot = realpathSync(this.root);
+    const current = directoryIdentity(canonicalRoot);
+    if (this.rootIdentity) {
+      assertSameIdentity(current, this.rootIdentity, "artifact workspace root");
+    } else {
+      this.rootIdentity = current;
+    }
+    return canonicalRoot;
+  }
+}
+
+function directoryIdentity(path: string): DirectoryIdentity {
+  const info = lstatSync(path, { bigint: true });
+  if (info.isSymbolicLink()) throw new Error("artifact owned directory cannot be a symbolic link");
+  if (!info.isDirectory()) throw new Error("artifact owned path is not a directory");
+  return {
+    canonicalPath: realpathSync(path),
+    device: info.dev,
+    inode: info.ino,
+  };
+}
+
+function assertDirectoryIdentity(path: string, expected: DirectoryIdentity, label: string): void {
+  let current: DirectoryIdentity;
+  try {
+    current = directoryIdentity(path);
+  } catch {
+    throw new Error(`${label} was replaced or is not an owned directory`);
+  }
+  assertSameIdentity(current, expected, label);
+}
+
+function assertSameIdentity(current: DirectoryIdentity, expected: DirectoryIdentity, label: string): void {
+  if (current.canonicalPath !== expected.canonicalPath
+    || current.device !== expected.device
+    || current.inode !== expected.inode) {
+    throw new Error(`${label} identity changed`);
+  }
+}
+
+function assertContained(root: string, candidate: string): void {
+  const rel = relative(root, candidate);
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error("artifact workspace escapes task-owned root");
   }
 }
 
