@@ -8,7 +8,15 @@
  */
 
 import type { SecureChannel } from "@agentlink/wire";
-import { b64decode } from "@agentlink/wire";
+import {
+  b64decode,
+  fingerprint,
+  MeshResourceListRequestPayloadSchema,
+  MeshResourceStatusRequestPayloadSchema,
+  MeshTaskCancelRequestPayloadSchema,
+  MeshTaskRequestPayloadSchema,
+  MeshTaskStatusRequestPayloadSchema,
+} from "@agentlink/wire";
 import type { NormalizedEvent } from "../agent/types";
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
@@ -18,19 +26,39 @@ import { join } from "node:path";
 import { WsConn, joinChan } from "../client";
 import { TranscriptWatcher, findQoderFiles, findCodexFiles, normalizeQoderLine, normalizeCodexLine } from "./transcript";
 import { HookServer } from "./hook-server";
-import { listPeers } from "../store";
+import { listPeers, loadOrCreateIdentity } from "../store";
 import { createCloudSession, listSessions, startRemoteControl, startSession } from "../sessions";
 import { CodexAppServer } from "../codex-appserver";
 import { QoderAcp } from "../qoder-acp";
+import type { MeshService } from "../mesh/service";
+import { createMeshServiceForPeer, loadMeshConfig, meshConfigPath } from "../mesh/config";
+import { MeshApprovalInbox } from "../mesh/approval-inbox";
+import {
+  startHostApprovalServer,
+  type HostApprovalServerOptions,
+} from "../mesh/approval-server";
+
+interface ServeWatchOptions {
+  hookPort?: number;
+  mesh?: MeshService;
+  meshStrict?: boolean;
+  meshLegacyControl?: boolean;
+  approvalInbox?: MeshApprovalInbox;
+  approvalDistDir?: string;
+  approvalHost?: string;
+  approvalPort?: number;
+}
 
 export async function serveWatch(
   conn: WsConn,
   chan: SecureChannel,
-  opts: { hookPort?: number } = {},
+  opts: ServeWatchOptions = {},
 ): Promise<{ hookServer: HookServer; watcher: TranscriptWatcher; codexWatcher: TranscriptWatcher; stop: () => void }> {
   const sendPayload = async (payload: unknown): Promise<void> => {
     conn.send({ op: "chan-data", data: { enc: await chan.seal(payload) } });
   };
+  const meshModeEnabled = Boolean(opts.mesh) || opts.meshStrict === true;
+  const legacyAgentBridgeEnabled = !meshModeEnabled || opts.meshLegacyControl === true;
 
   // 结构化 stdout：供 eclam/Argus 菜单栏 App 解析
   const emit = (obj: Record<string, unknown>): void => {
@@ -111,26 +139,28 @@ export async function serveWatch(
     });
   });
 
-  const secret = HookServer.getOrCreateSecret();
-  hookServer.start(secret);
-  emit({ type: "hook_server", port: opts.hookPort ?? 9876, secret });
+  if (legacyAgentBridgeEnabled) {
+    const secret = HookServer.getOrCreateSecret();
+    hookServer.start(secret);
+    emit({ type: "hook_server", port: opts.hookPort ?? 9876, secret });
 
-  // 打印 Qoder hook 配置提示
-  console.log("\n--- Qoder hook 配置（粘贴到 ~/.qoder/settings.json 的 hooks 字段）---");
-  console.log(JSON.stringify(
-    {
-      PermissionRequest: [{
-        hooks: [{
-          type: "http",
-          url: `http://127.0.0.1:${opts.hookPort ?? 9876}/hook`,
-          headers: { "X-Agentlink-Secret": secret },
+    // 打印 Qoder hook 配置提示
+    console.log("\n--- Qoder hook 配置（粘贴到 ~/.qoder/settings.json 的 hooks 字段）---");
+    console.log(JSON.stringify(
+      {
+        PermissionRequest: [{
+          hooks: [{
+            type: "http",
+            url: `http://127.0.0.1:${opts.hookPort ?? 9876}/hook`,
+            headers: { "X-Agentlink-Secret": secret },
+          }],
         }],
-      }],
-    },
-    null,
-    2,
-  ));
-  console.log("---\n");
+      },
+      null,
+      2,
+    ));
+    console.log("---\n");
+  }
 
   let sessionCount = 0;
   const knownSessions = new Set<string>();
@@ -140,13 +170,100 @@ export async function serveWatch(
   // sends race and the phone receives streamed text out of order — the chain
   // used to cover only the transcript path.
   let sendChain: Promise<void> = Promise.resolve();
-  const enqueueSend = (payload: unknown): void => {
-    sendChain = sendChain
-      .then(() => sendPayload(payload))
+  const enqueueSendAsync = (payload: unknown): Promise<void> => {
+    const next = sendChain.then(() => sendPayload(payload));
+    sendChain = next
       .catch((err) => {
         console.log(`[watch] 推送失败: ${err instanceof Error ? err.message : err}`);
       });
+    return next;
   };
+  const enqueueSend = (payload: unknown): void => {
+    void enqueueSendAsync(payload);
+  };
+
+  // Mesh control frames must not sit behind a transcript replay. Keep their
+  // relative order, but let them progress independently from legacy events.
+  let controlSendChain: Promise<void> = Promise.resolve();
+  const enqueueControlSendAsync = (payload: unknown): Promise<void> => {
+    const next = controlSendChain.then(() => sendPayload(payload));
+    controlSendChain = next.catch((err) => {
+      console.log(`[mesh] 控制帧推送失败: ${err instanceof Error ? err.message : err}`);
+    });
+    return next;
+  };
+  const enqueueControlSend = (payload: unknown): void => {
+    void enqueueControlSendAsync(payload);
+  };
+
+  let approvalInbox: MeshApprovalInbox | undefined;
+  let approvalServer: ReturnType<typeof startHostApprovalServer> | undefined;
+  if (opts.mesh) {
+    try {
+      approvalInbox = opts.approvalInbox ?? new MeshApprovalInbox();
+      const serverOptions: HostApprovalServerOptions = {
+        nodeId: opts.mesh.nodeId,
+        inbox: approvalInbox,
+        distDir: opts.approvalDistDir,
+        host: opts.approvalHost,
+        port: opts.approvalPort,
+        onDecision: (taskId, decision) => {
+          const claimed = approvalInbox?.claim(taskId);
+          if (!claimed) throw new Error("审批请求已处理或不存在");
+          if (decision === "deny") {
+            try {
+              const result = opts.mesh!.denyProposal(taskId);
+              enqueueControlSend(result);
+              try { approvalInbox?.remove(taskId); } catch {}
+            } catch (error) {
+              approvalInbox?.release(taskId);
+              throw error;
+            }
+            return;
+          }
+
+          // Return HTTP 202 immediately; a GPU job can run for hours. Progress
+          // and the final result continue over the encrypted device channel.
+          void (async () => {
+            let locallyAuthorized = false;
+            try {
+              const grant = opts.mesh!.issueGrant(claimed.task);
+              const approval = opts.mesh!.issueApproval(grant, "目标资源所有者在本机允许一次");
+              locallyAuthorized = true;
+              const result = await opts.mesh!.handleRequest({
+                kind: "mesh-task-request",
+                task: claimed.task,
+                grant,
+                approval,
+              }, (progress) => enqueueControlSendAsync(progress));
+              await enqueueControlSendAsync(result);
+              try { approvalInbox?.remove(taskId); } catch {}
+            } catch {
+              if (!locallyAuthorized) {
+                try {
+                  const result = opts.mesh!.denyProposal(taskId, "目标设备无法启动已批准的任务");
+                  enqueueControlSend(result);
+                  try { approvalInbox?.remove(taskId); } catch {}
+                } catch {
+                  approvalInbox?.release(taskId);
+                }
+              } else {
+                // The durable target journal and controller reconciliation can
+                // recover a lost final frame. Do not offer a second execution.
+                try { approvalInbox?.remove(taskId); } catch {}
+              }
+            }
+          })();
+        },
+      };
+      approvalServer = startHostApprovalServer(serverOptions);
+    } catch (error) {
+      // Keep read-only Mesh discovery available, but leave unsigned run
+      // requests fail-closed when the local approval boundary is unavailable.
+      approvalInbox = undefined;
+      console.log(`[mesh] 本地审批服务不可用，run 已安全禁用: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  }
 
   const onWatchEvent = (sessionId: string, agent: string, event: NormalizedEvent): void => {
     sendChain = sendChain
@@ -170,7 +287,7 @@ export async function serveWatch(
   };
 
   const watcher = new TranscriptWatcher(onWatchEvent, join(homedir(), ".qoder", "projects"), findQoderFiles, normalizeQoderLine, "qoder");
-  watcher.start();
+  if (legacyAgentBridgeEnabled) watcher.start();
 
   /** Codex control plane, started on first use (it spawns a process). */
   let codexServer: CodexAppServer | null = null as CodexAppServer | null;
@@ -337,10 +454,12 @@ export async function serveWatch(
   };
 
   const codexWatcher = new TranscriptWatcher(onWatchEvent, join(homedir(), ".codex", "sessions"), findCodexFiles, normalizeCodexLine, "codex");
-  codexWatcher.start();
+  if (legacyAgentBridgeEnabled) codexWatcher.start();
 
   emit({ type: "status", connection: "channel-ready", sessions: 0 });
-  console.log("[watch] 已启动：监听 Qoder + Codex transcript + hook server，Ctrl+C 退出");
+  console.log(legacyAgentBridgeEnabled
+    ? "[watch] 已启动：监听 Qoder + Codex transcript + hook server，Ctrl+C 退出"
+    : "[mesh] 严格模式已启动：仅处理 Mesh 控制帧，不外发本机 Agent transcript");
 
   // 接收循环：处理手机端回复
   const receiveLoop = (async () => {
@@ -364,6 +483,9 @@ export async function serveWatch(
           cwd?: string;
           /** Which agent a new session should use ("qoder" | "codex"). */
           agent?: string;
+          task?: unknown;
+          grant?: unknown;
+          approval?: unknown;
         }>(msg.data?.enc);
 
         // Only log genuine phone->daemon commands. Relay buffering can echo a
@@ -372,12 +494,112 @@ export async function serveWatch(
         const PHONE_COMMANDS = new Set([
           "list-sessions", "new-session", "user-input", "permission-response",
           "codex-threads", "codex-resume", "codex-history-cancel", "codex-input", "codex-interrupt",
-          "cloud-session", "remote-control",
+          "cloud-session", "remote-control", "mesh-resource-list-request", "mesh-resource-status-request",
+          "mesh-task-status-request", "mesh-task-cancel-request", "mesh-task-request",
         ]);
-        if (payload?.kind && PHONE_COMMANDS.has(payload.kind)) {
+        const MESH_COMMANDS = new Set([
+          "mesh-resource-list-request", "mesh-resource-status-request",
+          "mesh-task-status-request", "mesh-task-cancel-request", "mesh-task-request",
+        ]);
+        if (payload?.kind && PHONE_COMMANDS.has(payload.kind) && !MESH_COMMANDS.has(payload.kind)) {
           console.log(`[watch] 收到手机指令: ${payload.kind}`);
         }
-        if (payload?.kind === "codex-threads") {
+        if (meshModeEnabled && !opts.meshLegacyControl && typeof payload?.kind === "string"
+                    && PHONE_COMMANDS.has(payload.kind) && !MESH_COMMANDS.has(payload.kind)) {
+          await enqueueControlSendAsync({
+            kind: "mesh-error",
+            code: "legacy-control-disabled",
+            message: "Mesh 严格模式已禁用旧 Agent 桥接指令",
+          });
+        } else if (payload?.kind === "mesh-resource-list-request") {
+          const request = MeshResourceListRequestPayloadSchema.safeParse(payload);
+          if (!opts.mesh) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else if (!request.success) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "invalid-resource-request", message: "Mesh 资源发现请求格式无效" });
+          } else {
+            await enqueueControlSendAsync(opts.mesh.resourceList(request.data.requestId));
+          }
+        } else if (payload?.kind === "mesh-resource-status-request") {
+          const request = MeshResourceStatusRequestPayloadSchema.safeParse(payload);
+          if (!opts.mesh) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else if (!request.success) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "invalid-resource-status-request", message: "GPU 状态请求格式无效" });
+          } else {
+            try {
+              const response = await opts.mesh.resourceStatus(request.data.requestId, request.data.resourceId);
+              await enqueueControlSendAsync(response);
+            } catch {
+              await enqueueControlSendAsync({ kind: "mesh-error", code: "resource-status-failed", message: "目标设备无法读取资源状态" });
+            }
+          }
+        } else if (payload?.kind === "mesh-task-status-request") {
+          const request = MeshTaskStatusRequestPayloadSchema.safeParse(payload);
+          if (!opts.mesh) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else if (!request.success) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "invalid-task-status-request", message: "任务状态请求格式无效" });
+          } else {
+            try {
+              await enqueueControlSendAsync(opts.mesh.taskStatus(request.data));
+            } catch {
+              await enqueueControlSendAsync({ kind: "mesh-error", code: "task-status-failed", message: "目标设备无法读取任务状态" });
+            }
+          }
+        } else if (payload?.kind === "mesh-task-cancel-request") {
+          const request = MeshTaskCancelRequestPayloadSchema.safeParse(payload);
+          if (!opts.mesh) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else if (!request.success) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "invalid-task-cancel-request", message: "任务取消请求格式无效" });
+          } else {
+            try {
+              const cancelled = opts.mesh.cancelTask(request.data);
+              if (cancelled.accepted) approvalInbox?.remove(cancelled.taskId);
+              await enqueueControlSendAsync(cancelled);
+            } catch {
+              await enqueueControlSendAsync({ kind: "mesh-error", code: "task-cancel-failed", message: "目标设备拒绝任务取消请求" });
+            }
+          }
+        } else if (payload?.kind === "mesh-task-request") {
+          if (!opts.mesh) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else {
+            const request = MeshTaskRequestPayloadSchema.safeParse(payload);
+            if (!request.success) {
+              await enqueueControlSendAsync({ kind: "mesh-error", code: "invalid-task", message: "Mesh 任务格式无效" });
+            } else if (request.data.task.operation === "run"
+              && (!request.data.grant || !request.data.approval)
+              && approvalInbox) {
+              const proposal = opts.mesh.proposeTask(request.data);
+              if (proposal.kind === "mesh-task-result") {
+                approvalInbox.remove(proposal.taskId);
+                await enqueueControlSendAsync(proposal);
+              } else {
+                try {
+                  approvalInbox.put(request.data.task);
+                  await enqueueControlSendAsync(proposal);
+                } catch {
+                  const denied = opts.mesh.denyProposal(request.data.task.taskId, "目标设备的本地审批队列不可用");
+                  await enqueueControlSendAsync(denied);
+                }
+              }
+            } else {
+              // Do not block the receive loop for the lifetime of a GPU job:
+              // status and cancellation requests must remain processable while
+              // the typed runner is active. The control send chain still keeps
+              // progress and final frames ordered without transcript starvation.
+              void opts.mesh.handleRequest(request.data, (progress) => enqueueControlSendAsync(progress))
+                .then((result) => enqueueControlSendAsync(result))
+                .catch(() => enqueueControlSend({
+                  kind: "mesh-error",
+                  code: "task-execution-failed",
+                  message: "目标设备无法完成 Mesh 任务",
+                }));
+            }
+          }
+        } else if (payload?.kind === "codex-threads") {
           // Codex's own view of its threads — richer and more accurate than our
           // transcript scan (model-generated titles, live status, cwd).
           try {
@@ -612,6 +834,7 @@ export async function serveWatch(
     watcher.stop();
     codexWatcher.stop();
     hookServer.stop();
+    approvalServer?.stop();
     // Kill the child agents too: ACP sessions are piped children, so they would
     // otherwise be orphaned holding a model connection each.
     for (const acp of acpBySession.values()) acp.stop();
@@ -639,10 +862,27 @@ export async function runWatch(opts: { hookPort?: number } = {}): Promise<void> 
   };
   const longTermKey = b64decode(peer.longTermKey);
   const chan = await joinChan(conn, longTermKey);
+  let mesh: MeshService | undefined;
+  let meshStrict = false;
+  let meshLegacyControl = false;
+  try {
+    const identity = loadOrCreateIdentity();
+    meshStrict = existsSync(meshConfigPath());
+    const config = loadMeshConfig();
+    if (config) {
+      mesh = createMeshServiceForPeer(fingerprint(identity.publicKey), peer.fingerprint, config);
+      meshLegacyControl = config.legacyControl;
+    }
+    if (mesh) console.log(`[mesh] 已启用：${mesh.listResources().length} 个本地资源`);
+  } catch (error) {
+    // A malformed Mesh config disables Mesh only. It must never fall back to a
+    // generic remote shell or to the legacy user-input route.
+    console.log(`[mesh] 配置无效，已安全禁用: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
   console.log(`已连接对端 ${peer.deviceName}，启动 watch 模式…`);
   process.stdout.write(JSON.stringify({ type: "status", connection: "connecting" }) + "\n");
 
-  const { stop } = await serveWatch(conn, chan, opts);
+  const { stop } = await serveWatch(conn, chan, { ...opts, mesh, meshStrict, meshLegacyControl });
 
   process.on("SIGINT", () => {
     stop();

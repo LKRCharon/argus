@@ -1,0 +1,51 @@
+# Dedicated CODEX_HOME policy for Argus delegation workers.
+# Keep this file and auth.json mode 0600 in a directory mode 0700.
+
+approval_policy = "never"
+web_search = "disabled"
+model_provider = "custom"
+model = "gpt-5.4"
+default_permissions = "argus-change"
+
+[model_providers.custom]
+name = "LimenAPI"
+base_url = "https://api.limen.codes"
+wire_api = "responses"
+requires_openai_auth = true
+
+[shell_environment_policy]
+inherit = "all"
+ignore_default_excludes = false
+exclude = ["CODEX_*"]
+include_only = ["PATH", "LANG", "LC_ALL", "HOME", "NO_COLOR"]
+set = { LANG = "C.UTF-8", LC_ALL = "C.UTF-8", NO_COLOR = "1" }
+
+[permissions.argus-change]
+description = "Write only inside the isolated delegated workspace"
+
+[permissions.argus-change.filesystem]
+":root" = "deny"
+":minimal" = "read"
+":workspace_roots" = "write"
+":tmpdir" = "write"
+":slash_tmp" = "write"
+"/var/lib/argus-delegation/codex-home/tmp/arg0" = "read"
+"/opt/argus-delegation/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin" = "read"
+
+[permissions.argus-change.network]
+enabled = false
+
+[permissions.argus-inspect]
+description = "Read only inside the isolated delegated workspace"
+
+[permissions.argus-inspect.filesystem]
+":root" = "deny"
+":minimal" = "read"
+":workspace_roots" = "read"
+":tmpdir" = "write"
+":slash_tmp" = "write"
+"/var/lib/argus-delegation/codex-home/tmp/arg0" = "read"
+"/opt/argus-delegation/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin" = "read"
+
+[permissions.argus-inspect.network]
+enabled = false

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "id": "group-alpha",
+      "members": [
+        "LOCAL_NODE_FINGERPRINT",
+        "PEER_NODE_FINGERPRINT"
+      ]
+    }
+  ],
+  "requesters": [
+    "PEER_NODE_FINGERPRINT"
+  ],
+  "legacyControl": false,
+  "allowedRoots": [
+    "/srv/argus/workspaces"
+  ],
+  "quarantineRoot": "/srv/argus/quarantine",
+  "resources": [
+    {
+      "id": "repo:gpu-project",
+      "ownerNodeId": "LOCAL_NODE_FINGERPRINT",
+      "kind": "repo",
+      "displayName": "gpu-project",
+      "root": "/srv/argus/workspaces/gpu-project"
+    }
+  ],
+  "runners": [
+    {
+      "id": "gpu-project-runner-v1",
+      "resourceId": "repo:gpu-project",
+      "purpose": "task",
+      "executable": "/srv/argus/runners/gpu-project-runner",
+      "fixedArgs": [],
+      "workdir": ".",
+      "maxRuntimeMs": 900000,
+      "maxOutputBytes": 262144,
+      "allowDynamicArgs": false,
+      "allowInput": false,
+      "exposeOutput": false
+    }
+  ]
+}

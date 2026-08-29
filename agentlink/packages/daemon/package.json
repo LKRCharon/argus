@@ -4,7 +4,12 @@
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
+  "scripts": {
+    "mcp": "bun run src/control/mcp.ts"
+  },
   "dependencies": {
-    "@agentlink/wire": "workspace:*"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@agentlink/wire": "workspace:*",
+    "zod": "^3.25.76"
   }
 }

@@ -24,7 +24,7 @@ async function collectUntilDone(
 
 describe("agent adapters", () => {
   test("QoderAdapter（ACP）：事件归一化 + 权限往返", async () => {
-    const adapter = new QoderAdapter(["bun", "run", fakeQoder]);
+    const adapter = new QoderAdapter([process.execPath, "run", fakeQoder]);
     const session = await adapter.start({ cwd: process.cwd(), prompt: "hello" });
     const events = await collectUntilDone(session, (ev) => {
       if (ev.type === "permission-request") void ev.respond("allow");
@@ -44,7 +44,7 @@ describe("agent adapters", () => {
   }, 20_000);
 
   test("CodexAdapter（app-server）：事件归一化 + 审批决策", async () => {
-    const adapter = new CodexAdapter("codex", ["bun", "run", fakeCodex]);
+    const adapter = new CodexAdapter("codex", [process.execPath, "run", fakeCodex]);
     const session = await adapter.start({ cwd: process.cwd(), prompt: "hello" });
     const events = await collectUntilDone(session, (ev) => {
       if (ev.type === "permission-request") void ev.respond("accept");

@@ -11,7 +11,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 TARGET="arm64-apple-macos13.0"
-TMP="$(mktemp -d /tmp/argus_tests.XXXXXX)"
+# macOS resolves /tmp to /private/tmp. Executing freshly-built test binaries
+# from that location can be blocked by desktop security policy, so keep the
+# short-lived artifacts inside this checked-out workspace instead.
+TMP="$(mktemp -d "$ROOT/.argus_tests.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 # ── Policy tests ──────────────────────────────────────────────────────────

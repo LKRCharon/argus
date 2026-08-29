@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the sealed MarkSec delegation snapshot
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=15s
+Persistent=true
+Unit=argus-delegation-snapshot.service
+
+[Install]
+WantedBy=timers.target

@@ -1,5 +1,6 @@
 build/
 .build/
+.argus_tests.*
 .DS_Store
 *.xcodeproj
 *.swp

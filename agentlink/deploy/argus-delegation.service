@@ -1,0 +1,47 @@
+[Unit]
+Description=Argus MarkSec isolated delegation gateway
+After=network-online.target argus-delegation-snapshot.service
+Wants=network-online.target
+Requires=argus-delegation-snapshot.service
+
+[Service]
+Type=simple
+User=argus-delegate
+Group=argus-delegate
+WorkingDirectory=/opt/argus-delegation/current
+EnvironmentFile=/etc/argus-delegation.env
+Environment=AGENTLINK_HOME=/var/lib/argus-delegation/agentlink-state
+Environment=ARGUS_DELEGATION_HOST=127.0.0.1
+Environment=ARGUS_DELEGATION_PORT=8792
+Environment=ARGUS_DELEGATION_DIST=/opt/argus-delegation/current/packages/app/dist
+Environment=TMPDIR=/var/lib/argus-delegation/tmp
+ExecStart=/opt/argus-delegation/bin/bun run packages/daemon/src/index.ts delegation serve
+Restart=on-failure
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=20
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=tmpfs
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RemoveIPC=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/argus-delegation
+ReadOnlyPaths=/var/cache/argus-delegation
+
+[Install]
+WantedBy=multi-user.target

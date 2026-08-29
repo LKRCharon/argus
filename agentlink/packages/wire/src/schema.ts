@@ -10,6 +10,23 @@ import {
   PermissionResponsePayloadSchema,
   UserInputPayloadSchema,
 } from "./agent";
+import {
+  MeshApprovalPayloadSchema,
+  MeshAuditEventPayloadSchema,
+  MeshCapabilityGrantPayloadSchema,
+  MeshResourcePayloadSchema,
+  MeshResourceListRequestPayloadSchema,
+  MeshResourceListPayloadSchema,
+  MeshResourceStatusRequestPayloadSchema,
+  MeshResourceStatusPayloadSchema,
+  MeshTaskCancelledPayloadSchema,
+  MeshTaskCancelRequestPayloadSchema,
+  MeshTaskProgressPayloadSchema,
+  MeshTaskResultPayloadSchema,
+  MeshTaskRequestPayloadSchema,
+  MeshTaskStatusPayloadSchema,
+  MeshTaskStatusRequestPayloadSchema,
+} from "./mesh";
 
 export const DeviceInfoSchema = z.object({
   name: z.string(),
@@ -89,6 +106,21 @@ export const BusinessPayloadSchema = z.discriminatedUnion("kind", [
   PermissionRequestPayloadSchema,
   PermissionResponsePayloadSchema,
   UserInputPayloadSchema,
+  MeshResourcePayloadSchema,
+  MeshResourceListRequestPayloadSchema,
+  MeshResourceListPayloadSchema,
+  MeshResourceStatusRequestPayloadSchema,
+  MeshResourceStatusPayloadSchema,
+  MeshTaskRequestPayloadSchema,
+  MeshCapabilityGrantPayloadSchema,
+  MeshApprovalPayloadSchema,
+  MeshAuditEventPayloadSchema,
+  MeshTaskResultPayloadSchema,
+  MeshTaskProgressPayloadSchema,
+  MeshTaskStatusRequestPayloadSchema,
+  MeshTaskStatusPayloadSchema,
+  MeshTaskCancelRequestPayloadSchema,
+  MeshTaskCancelledPayloadSchema,
 ]);
 export type BusinessPayload = z.infer<typeof BusinessPayloadSchema>;
 

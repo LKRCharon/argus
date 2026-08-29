@@ -487,6 +487,15 @@ class ArgusViewModel : ViewModel() {
             c.onInputAck = { sid, status, note ->
                 if (seq == clientSeq) viewModelScope.launch(Dispatchers.Main) { onInputAck(sid, status, note) }
             }
+            c.onMeshError = { meshError ->
+                if (seq == clientSeq) viewModelScope.launch(Dispatchers.Main) {
+                    if (meshError.code == "legacy-control-disabled") {
+                        cancelCatalogRefresh()
+                        pendingNewSession = false
+                    }
+                    error = meshError.message
+                }
+            }
             c.onSessionList = { list ->
                 if (seq == clientSeq) viewModelScope.launch(Dispatchers.Main) {
                     // Keep whatever app-server already told us about codex: its
@@ -1179,7 +1188,13 @@ fun ArgusApp(
     providedViewModel: ArgusViewModel? = null,
 ) {
     val vm: ArgusViewModel = providedViewModel ?: viewModel()  // survives config changes
+    val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(Unit) { vm.init(activity) }
+    LaunchedEffect(vm.error) {
+        val message = vm.error ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message, withDismissAction = true)
+        if (vm.error == message) vm.clearError()
+    }
     DisposableEffect(activity.lifecycle, vm) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) vm.refreshPhoneAgentStorageAccess()
@@ -1252,6 +1267,10 @@ fun ArgusApp(
                     }, onClose = { vm.showScanner = false })
                 }
             }
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+            )
         }
     }
 }

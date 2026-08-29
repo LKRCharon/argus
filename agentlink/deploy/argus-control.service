@@ -1,0 +1,22 @@
+[Unit]
+Description=Argus Seoul Mesh control console
+After=network-online.target agentlink-relay.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/argus-control/current
+Environment=AGENTLINK_HOME=/home/ubuntu/argus-control/state
+Environment=AGENTLINK_RELAY=ws://127.0.0.1:8787/ws
+Environment=ARGUS_CONTROL_HOST=127.0.0.1
+Environment=ARGUS_CONTROL_PORT=8790
+Environment=ARGUS_CONTROL_DIST=/home/ubuntu/argus-control/current/packages/app/dist
+ExecStart=/home/ubuntu/.bun/bin/bun run packages/daemon/src/index.ts control
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

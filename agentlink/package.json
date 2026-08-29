@@ -10,6 +10,8 @@
     "test": "bun test",
     "relay": "bun run packages/relay/src/index.ts",
     "daemon": "bun run packages/daemon/src/index.ts",
+    "control": "bun run packages/daemon/src/index.ts control",
+    "mcp": "bun run --filter @agentlink/daemon mcp",
     "dev": "bun run --filter @agentlink/app dev",
     "build:app": "bun run --filter @agentlink/app build",
     "e2e": "bun run scripts/e2e.ts",

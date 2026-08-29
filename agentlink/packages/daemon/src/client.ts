@@ -3,7 +3,10 @@
  * M1.1 只打通链路，agent 适配层在 M1.2 接入。
  */
 
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
 import { hostname } from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   PairingSession,
   SecureChannel,
@@ -27,11 +30,23 @@ import { serveAgent } from "./agent/serve";
 type Msg = Record<string, any>;
 
 const relayUrl = () => process.env.AGENTLINK_RELAY ?? "ws://127.0.0.1:8787/ws";
+const MAX_BRIDGE_MESSAGE_BYTES = 300_000;
+const MAX_BRIDGE_BUFFERED_BYTES = 2 * 1024 * 1024;
+
+export interface WsConnOptions {
+  transport?: "native" | "python";
+  pythonBin?: string;
+}
 
 // ---------- WebSocket 连接封装（消息等待队列） ----------
 
 export class WsConn {
-  private ws!: WebSocket;
+  private ws?: WebSocket;
+  private bridge?: ChildProcessWithoutNullStreams;
+  private bridgeReady = false;
+  private bridgeBackpressured = false;
+  private bridgeBufferedBytes = 0;
+  private closeHandled = false;
   private queue: Msg[] = [];
   private waiters: {
     pred: (m: Msg) => boolean;
@@ -44,24 +59,122 @@ export class WsConn {
 
   private constructor() {}
 
-  static async connect(url: string): Promise<WsConn> {
+  static async connect(url: string, options: WsConnOptions = {}): Promise<WsConn> {
     const conn = new WsConn();
+    const transport = options.transport ?? configuredWsTransport();
+    if (transport === "python") await conn.connectPython(url, options.pythonBin);
+    else await conn.connectNative(url);
+    return conn;
+  }
+
+  private async connectNative(url: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(url);
-      const timer = setTimeout(() => reject(new Error(`连接 relay 超时: ${url}`)), 10_000);
+      const timer = setTimeout(() => {
+        try { ws.close(); } catch {}
+        reject(new Error(`连接 relay 超时: ${url}`));
+      }, 10_000);
       ws.onopen = () => {
         clearTimeout(timer);
-        conn.ws = ws;
+        this.ws = ws;
         resolve();
       };
       ws.onerror = () => {
         clearTimeout(timer);
         reject(new Error(`无法连接 relay: ${url}`));
       };
-      ws.onmessage = (ev) => conn.dispatch(String(ev.data));
-      ws.onclose = () => conn.handleClose();
+      ws.onmessage = (event) => this.dispatch(String(event.data));
+      ws.onclose = () => this.handleClose();
     });
-    return conn;
+  }
+
+  private async connectPython(url: string, configuredPython?: string): Promise<void> {
+    const script = fileURLToPath(new URL("../../../deploy/ws-bridge.py", import.meta.url));
+    if (!existsSync(script)) throw new Error("找不到 Python WebSocket bridge");
+    const python = configuredPython?.trim() || process.env.PYTHON_BIN?.trim() || "python3";
+    const child = spawn(python, [script, url], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: bridgeEnvironment(),
+    });
+    this.bridge = child;
+    child.stderr.on("data", () => undefined);
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let buffer = "";
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        child.kill("SIGTERM");
+        reject(new Error(`连接 relay 超时: ${url}`));
+      }, 10_000);
+      const fail = (message: string): void => {
+        if (settled) {
+          this.bridgeReady = false;
+          child.kill("SIGTERM");
+          this.handleClose();
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        child.kill("SIGTERM");
+        reject(new Error(message));
+      };
+      child.once("error", () => fail("无法启动 Python WebSocket bridge"));
+      child.stdin.on("drain", () => {
+        this.bridgeBackpressured = false;
+      });
+      child.stdin.on("error", () => {
+        this.bridgeReady = false;
+        if (!settled) fail("Python WebSocket bridge 输入通道失败");
+        else this.handleClose();
+      });
+      child.stdout.on("data", (chunk: Buffer) => {
+        buffer += chunk.toString("utf8");
+        if (buffer.length > MAX_BRIDGE_MESSAGE_BYTES * 2) {
+          fail("Python WebSocket bridge 返回数据超过安全上限");
+          return;
+        }
+        for (;;) {
+          const newline = buffer.indexOf("\n");
+          if (newline < 0) break;
+          const line = buffer.slice(0, newline).trim();
+          buffer = buffer.slice(newline + 1);
+          if (!line) continue;
+          let message: Msg;
+          try {
+            message = JSON.parse(line) as Msg;
+          } catch {
+            fail("Python WebSocket bridge 返回无效数据");
+            return;
+          }
+          if (message.bridge === "open") {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              this.bridgeReady = true;
+              resolve();
+            }
+            continue;
+          }
+          if (message.bridge === "error") {
+            if (!settled) fail("Python WebSocket bridge 连接失败");
+            else {
+              this.bridgeReady = false;
+              child.kill("SIGTERM");
+              this.handleClose();
+            }
+            return;
+          }
+          if (this.bridgeReady) this.dispatch(line);
+        }
+      });
+      child.once("exit", () => {
+        this.bridgeReady = false;
+        if (!settled) fail("Python WebSocket bridge 提前退出");
+        else this.handleClose();
+      });
+    });
   }
 
   private dispatch(raw: string) {
@@ -88,6 +201,8 @@ export class WsConn {
   }
 
   private handleClose() {
+    if (this.closeHandled) return;
+    this.closeHandled = true;
     for (const w of this.waiters.splice(0)) {
       clearTimeout(w.timer);
       w.reject(new Error("relay 连接已断开"));
@@ -96,12 +211,48 @@ export class WsConn {
   }
 
   send(obj: Msg) {
-    this.ws.send(JSON.stringify(obj));
+    const encoded = JSON.stringify(obj);
+    if (this.bridge) {
+      if (!this.bridgeReady || this.bridge.exitCode !== null || !this.bridge.stdin.writable) {
+        throw new Error("Python WebSocket bridge 未处于可发送状态");
+      }
+      const line = `${encoded}\n`;
+      const bytes = Buffer.byteLength(line);
+      if (bytes > MAX_BRIDGE_MESSAGE_BYTES) throw new Error("relay 消息超过安全上限");
+      if (this.bridgeBackpressured && this.bridgeBufferedBytes + bytes > MAX_BRIDGE_MESSAGE_BYTES) {
+        throw new Error("Python WebSocket bridge 正在处理发送积压");
+      }
+      if (this.bridgeBufferedBytes + bytes > MAX_BRIDGE_BUFFERED_BYTES) {
+        throw new Error("Python WebSocket bridge 发送队列已满");
+      }
+      this.bridgeBufferedBytes += bytes;
+      try {
+        const accepted = this.bridge.stdin.write(line, (error) => {
+          this.bridgeBufferedBytes = Math.max(0, this.bridgeBufferedBytes - bytes);
+          if (error) {
+            this.bridgeReady = false;
+            this.handleClose();
+          }
+        });
+        if (!accepted) this.bridgeBackpressured = true;
+      } catch {
+        this.bridgeBufferedBytes = Math.max(0, this.bridgeBufferedBytes - bytes);
+        this.bridgeReady = false;
+        this.handleClose();
+        throw new Error("Python WebSocket bridge 发送失败");
+      }
+      return;
+    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("relay WebSocket 未处于可发送状态");
+    }
+    this.ws.send(encoded);
   }
 
   wait(pred: (m: Msg) => boolean, timeoutMs = 15_000): Promise<Msg> {
     const qi = this.queue.findIndex(pred);
     if (qi >= 0) return Promise.resolve(this.queue.splice(qi, 1)[0]);
+    if (this.closeHandled) return Promise.reject(new Error("relay 连接已断开"));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const i = this.waiters.findIndex((w) => w.resolve === resolve);
@@ -113,12 +264,45 @@ export class WsConn {
   }
 
   close() {
+    this.bridgeReady = false;
+    if (this.bridge) {
+      const child = this.bridge;
+      try {
+        child.stdin.end();
+      } catch {
+        // 忽略
+      }
+      const killTimer = setTimeout(() => {
+        if (child.exitCode === null) child.kill("SIGTERM");
+      }, 1_000);
+      killTimer.unref();
+      child.once("exit", () => clearTimeout(killTimer));
+      return;
+    }
     try {
-      this.ws.close();
+      this.ws?.close();
     } catch {
       // 忽略
     }
   }
+}
+
+function configuredWsTransport(): "native" | "python" {
+  const configured = process.env.AGENTLINK_WS_TRANSPORT?.trim();
+  if (!configured || configured === "native") return "native";
+  if (configured === "python") return "python";
+  throw new Error("AGENTLINK_WS_TRANSPORT 只支持 native 或 python");
+}
+
+function bridgeEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH ?? "",
+    PYTHONUNBUFFERED: "1",
+  };
+  for (const name of ["SSL_CERT_FILE", "SSL_CERT_DIR"] as const) {
+    if (process.env[name]) env[name] = process.env[name];
+  }
+  return env;
 }
 
 // ---------- 配对与通道 ----------
@@ -178,7 +362,7 @@ function finalizePair(identity: KeyPair, result: PairingResult): Uint8Array {
 export async function joinChan(
   conn: WsConn,
   longTermKey: Uint8Array,
-  endpoint: "host" | "android" = "host",
+  endpoint: "host" | "android" | "controller" = "host",
 ): Promise<SecureChannel> {
   conn.send({ op: "join-chan", token: deriveChanToken(longTermKey), endpoint });
   const res = await conn.wait((m) => m.op === "chan-joined" || m.op === "error");
@@ -274,6 +458,31 @@ export interface RunProbeOptions {
   echoText?: string;
   /** agent 演示模式：打印事件流，自动批准第一个权限选项 */
   agentDemo?: boolean;
+}
+
+/** B 方：只加入配对并保存对端，不启动 echo 或设备通道。 */
+export async function runJoin(codeStr: string): Promise<PairingResult> {
+  const code = parsePairCode(codeStr);
+  const identity = loadOrCreateIdentity();
+  const device = deviceInfo();
+  const conn = await WsConn.connect(relayUrl());
+  try {
+    conn.send({ op: "join-pair", nameplate: code.nameplate });
+    const joined = await conn.wait((m) => m.op === "pair-joined" || m.op === "error");
+    if (joined.op === "error") throw new Error(`relay 拒绝: ${joined.message ?? joined.code}`);
+    if (joined.role !== "B") {
+      throw new Error("未找到等待中的配对发起方（请先在设备端运行 pair）");
+    }
+    const session = new PairingSession({ role: "B", secret: code.secret, identity, device });
+    const result = await doPairing(conn, session, "B");
+    finalizePair(identity, result);
+    conn.send({ op: "leave-pair" });
+    conn.close();
+    return result;
+  } catch (e) {
+    conn.close();
+    throw e;
+  }
 }
 
 /** B 方：输入配对码加入，完成后发一条 echo 验证链路（模拟手机端） */

@@ -5,6 +5,9 @@
  *   agentlink pair [--watch]      生成配对码，可在配对后进入 Host 监听
  *   agentlink probe <配对码>       模拟手机端加入并发送 echo 验证链路
  *   agentlink up                  常驻在线，等待已配对设备连接
+ *   agentlink mesh status         查看 Mesh 配置与本机资源（不会输出私钥）
+ *   agentlink mesh request ...    发送一个 typed Mesh 任务
+ *   agentlink control             启动 Seoul 本地 Mesh Console
  *   agentlink peers               列出已配对设备
   agentlink rename <指纹> <名称>  重命名已配对设备
   agentlink forget <指纹>        移除已配对设备
@@ -16,8 +19,12 @@
 
 import { fingerprint } from "@agentlink/wire";
 import { listPeers, loadOrCreateIdentity, renamePeer, removePeer } from "./store";
-import { runAgent, runPair, runProbe, runUp } from "./client";
+import { runAgent, runJoin, runPair, runProbe, runUp } from "./client";
 import { runWatch } from "./watcher/serve";
+import { runMeshApprove, runMeshGrant, runMeshRequest, runMeshResources, runMeshStatus } from "./mesh/cli";
+import { MeshController } from "./control/controller";
+import { startControlServer } from "./control/server";
+import { DelegationService, createMarkSecSnapshot, startDelegationServer } from "./delegation";
 
 const [cmd, ...args] = process.argv.slice(2);
 
@@ -27,8 +34,17 @@ function usage(): void {
 用法:
   agentlink init                生成/查看设备身份
   agentlink pair [--watch]      生成配对码，--watch 配对后直接进入 Host 监听
+  agentlink join <NNNN-XXXXXX>  控制端加入配对码，只保存对端并退出
   agentlink probe <NNNN-XXXXXX> 模拟手机端加入并发送 echo
   agentlink up                  常驻在线，等待已配对设备连接
+  agentlink mesh status         查看 Mesh 配置与本机资源（不会输出私钥）
+  agentlink mesh resources      查看已配对目标的资源与 runner 能力
+  agentlink mesh grant ...       由本地资源所有者签发 grant
+  agentlink mesh approve ...     由本地资源所有者签发 approval
+  agentlink mesh request ...     发送一个 typed Mesh 任务
+  agentlink control               启动 Seoul 本地 Mesh Console
+  agentlink delegation serve      启动独立 MarkSec 委托网关与本地控制台
+  agentlink delegation snapshot-marksec --source 路径 --cache 路径
   agentlink peers               列出已配对设备
   agentlink rename <指纹> <名称>  重命名已配对设备
   agentlink forget <指纹>        移除已配对设备
@@ -71,6 +87,15 @@ async function main(): Promise<void> {
       await runProbe(code);
       break;
     }
+    case "join": {
+      const code = args[0];
+      if (!code) {
+        console.error("用法: agentlink join <NNNN-XXXXXX>");
+        process.exit(1);
+      }
+      await runJoin(code);
+      break;
+    }
     case "up": {
       await runUp();
       break;
@@ -90,6 +115,67 @@ async function main(): Promise<void> {
     case "watch": {
       const hookPort = flagValue(args, "--hook-port");
       await runWatch(hookPort ? { hookPort: Number(hookPort) } : {});
+      break;
+    }
+    case "control": {
+      const controller = new MeshController({ relayUrl: process.env.AGENTLINK_RELAY });
+      const server = await startControlServer(controller, { distDir: process.env.ARGUS_CONTROL_DIST });
+      const stop = () => server.stop();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      await new Promise(() => {});
+      break;
+    }
+    case "delegation": {
+      if (args[0] === "snapshot-marksec") {
+        const sourceRoot = flagValue(args, "--source");
+        const cacheRoot = flagValue(args, "--cache");
+        if (!sourceRoot || !cacheRoot) {
+          console.error("用法: agentlink delegation snapshot-marksec --source /path --cache /path");
+          process.exit(1);
+        }
+        const result = createMarkSecSnapshot({ sourceRoot, cacheRoot });
+        console.log(JSON.stringify({
+          type: "marksec-snapshot",
+          snapshot: result.snapshot,
+          sha256: result.sha256,
+          files: result.files,
+          bytes: result.bytes,
+          createdAt: result.createdAt,
+        }));
+        break;
+      }
+      if (args[0] !== "serve") {
+        console.error("用法: agentlink delegation <serve|snapshot-marksec>");
+        process.exit(1);
+      }
+      const service = new DelegationService();
+      const server = startDelegationServer(service, {
+        distDir: process.env.ARGUS_DELEGATION_DIST,
+      });
+      const stop = () => server.stop();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      await new Promise(() => {});
+      break;
+    }
+    case "mesh": {
+      const subcommand = args[0];
+      const subargs = args.slice(1);
+      if (subcommand === "status") {
+        runMeshStatus(subargs);
+      } else if (subcommand === "resources") {
+        await runMeshResources(subargs);
+      } else if (subcommand === "grant") {
+        runMeshGrant(subargs);
+      } else if (subcommand === "approve") {
+        runMeshApprove(subargs);
+      } else if (subcommand === "request") {
+        await runMeshRequest(subargs);
+      } else {
+        console.error("用法: agentlink mesh <status|resources|grant|approve|request> ...");
+        process.exit(1);
+      }
       break;
     }
     case "rename": {

@@ -5,11 +5,12 @@
 
 import { RelayCore, type Client } from "./relay";
 
-export function createRelayServer(port = 8787) {
+export function createRelayServer(port = 8787, hostname?: string) {
   const core = new RelayCore();
   let nextId = 1;
 
   const server = Bun.serve<Client>({
+    ...(hostname ? { hostname } : {}),
     port,
     fetch(req, srv) {
       const url = new URL(req.url);

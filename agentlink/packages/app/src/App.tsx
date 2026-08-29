@@ -4,8 +4,15 @@ import PairView from "./components/PairView";
 import SessionListView from "./components/SessionListView";
 import SessionDetailView from "./components/SessionDetailView";
 import DeviceListView from "./components/DeviceListView";
+import MeshConsole from "./components/MeshConsole";
+import HostApprovalConsole from "./components/HostApprovalConsole";
+import DelegationConsole from "./components/DelegationConsole";
 
 export default function App() {
+  if (window.location.pathname.startsWith("/delegate")) return <DelegationConsole />;
+  if (window.location.pathname.startsWith("/host")) return <HostApprovalConsole />;
+  if (window.location.pathname.startsWith("/mesh")) return <MeshConsole />;
+
   const { init, view, activeSessionId, connectionStatus, peers } = useStore();
 
   useEffect(() => {
