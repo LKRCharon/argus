@@ -180,7 +180,7 @@ class RelayClient(
     }
 
     private fun dispatch(raw: String) {
-        val msg = JSONObject(raw).toMap()
+        val msg = JSONObject(raw).toDeepMap()
         synchronized(queue) {
             val wi = waiters.indexOfFirst { try { it.first(msg) } catch (e: Exception) { false } }
             if (wi >= 0) { val w = waiters.removeAt(wi); w.second.resume(msg); return }
@@ -556,16 +556,4 @@ class RelayClient(
         socket?.close(1000, "bye")
         reportStatus("disconnected", detail)
     }
-}
-
-private fun JSONObject.toMap(): Map<String, Any?> {
-    val map = mutableMapOf<String, Any?>()
-    for (key in keys()) map[key] = when (val v = get(key)) {
-        is JSONObject -> v.toMap()
-        is org.json.JSONArray -> (0 until v.length()).map { i ->
-            when (val e = v.get(i)) { is JSONObject -> e.toMap(); else -> e }
-        }
-        else -> v
-    }
-    return map
 }

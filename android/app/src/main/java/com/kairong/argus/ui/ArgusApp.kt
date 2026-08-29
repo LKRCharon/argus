@@ -7,6 +7,12 @@ import android.os.Build
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,11 +36,17 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -42,6 +54,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kairong.argus.BuildConfig
@@ -53,6 +67,8 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -72,7 +88,7 @@ data class SessionState(
 )
 
 /** What can cover the session list or a session detail. */
-enum class Overlay { Pair, Devices, NewSession, Settings }
+enum class Overlay { Pair, Devices, NewSession, Settings, PhoneAgent }
 
 /** Longest a pending cache write may be deferred by new events. */
 private const val PERSIST_MAX_DELAY_MS = 15_000L
@@ -109,7 +125,7 @@ class ArgusViewModel : ViewModel() {
     var error by mutableStateOf<String?>(null)
         private set
     /** Which overlay covers the session list, if any. Sessions are the only
-     *  root screen now — pairing and devices are reached from the status pill. */
+     *  root screen now — pairing and devices are reached from the connection menu. */
     var overlay by mutableStateOf<Overlay?>(null)
     /** Full session inventory from the Mac, idle sessions included. */
     var catalog by mutableStateOf<List<SessionSummary>>(emptyList())
@@ -126,6 +142,11 @@ class ArgusViewModel : ViewModel() {
     /** Agent switcher shows icons only by default; the chevron reveals names. */
     var showAgentLabels by mutableStateOf(false)
         private set
+    /** Independent phone-side Agent session; its tools run on Android. */
+    var phoneAgent by mutableStateOf(PhoneAgentState())
+        private set
+    var phoneAgentConfig by mutableStateOf(PhoneAgentConfigState())
+        private set
     /** Explicit connection intent: Disconnect used to be instantly undone by
      *  the auto-reconnect effect (it only checked status == disconnected). */
     var userWantsConnection by mutableStateOf(true)
@@ -141,7 +162,11 @@ class ArgusViewModel : ViewModel() {
     /** When the cache was last actually written, for the max-delay cap. */
     private var lastPersistAt = 0L
     private var relayClient: RelayClient? = null
+    /** Prevent the Compose retry effect from starting overlapping handshakes. */
+    private var channelConnectJob: Job? = null
     private var voiceHelper: VoiceInputHelper? = null
+    private var phoneAgentRuntime: PhoneAgentRuntime? = null
+    private var phoneAgentConfigStore: PhoneAgentConfigStore? = null
     /** A refresh needs both the transcript directory and Codex's app-server list. */
     private var catalogRefreshTimeoutJob: Job? = null
     private var refreshCatalogAfterConnection = false
@@ -152,6 +177,8 @@ class ArgusViewModel : ViewModel() {
     private var clientSeq = 0
     /** Monotonic per-process id; queued frames from a superseded read are ignored. */
     private var historyRequestSeq = 0L
+    /** A cold-start deep link can arrive before Keystore-backed state is ready. */
+    private var pendingPairLink: Pair<String, String?>? = null
 
     fun init(activity: ComponentActivity) {
         if (store != null) return
@@ -190,6 +217,10 @@ class ArgusViewModel : ViewModel() {
             // latest pairing as the initial selection once, then persist it.
             if (selectedPeer != s.getActivePeerFingerprint()) s.setActivePeerFingerprint(selectedPeer)
             val cache = SessionStore(appCtx as android.content.Context, cacheFileName(selectedPeer))
+            val agentConfigStore = PhoneAgentConfigStore(appCtx as android.content.Context)
+            val agentConfig = agentConfigStore.state()
+            val agentApiClient = PhoneAgentApiClient(agentConfigStore)
+            val agentStorageAccess = { PhoneAgentStorage.hasAccess(appCtx as android.content.Context) }
             val restored = cache.load().associate { c ->
                 c.sessionId to SessionState(
                     c.sessionId, c.agent, c.events, emptyList(), c.status, c.lastActivity
@@ -199,6 +230,24 @@ class ArgusViewModel : ViewModel() {
                 store = s
                 sessionStore = cache
                 applicationContext = appCtx as android.content.Context
+                phoneAgentConfigStore = agentConfigStore
+                phoneAgentRuntime = PhoneAgentRuntime(
+                    scope = viewModelScope,
+                    sendRequest = { requestId, instructions, input, tools ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            val response = agentApiClient.responses(requestId, instructions, input, tools)
+                            withContext(Dispatchers.Main) { phoneAgentRuntime?.onResponse(response) }
+                        }
+                    },
+                    onState = { next -> phoneAgent = next },
+                    storageAccess = agentStorageAccess,
+                    fileTools = PhoneFileTools(accessGranted = agentStorageAccess),
+                    conversationStore = PhoneAgentConversationStore(
+                        secrets = { listOfNotNull(agentConfigStore.apiKey()) },
+                    ),
+                )
+                phoneAgentRuntime?.refreshStorageAccess()
+                phoneAgentConfig = agentConfig
                 identity = id
                 myFingerprint = fp
                 peers = ps
@@ -210,6 +259,10 @@ class ArgusViewModel : ViewModel() {
                 // Cached first: a cold start shows the last known state while
                 // the channel reconnects, instead of an empty list.
                 if (sessions.isEmpty()) sessions = restored
+                pendingPairLink?.also {
+                    pendingPairLink = null
+                    applyPairLink(it.first, it.second)
+                }
             }
         }
     }
@@ -246,6 +299,50 @@ class ArgusViewModel : ViewModel() {
     fun updateShowAgentLabels(enabled: Boolean) {
         showAgentLabels = enabled
         store?.setShowAgentLabels(enabled)
+    }
+
+    fun refreshPhoneAgentStorageAccess() {
+        phoneAgentRuntime?.refreshStorageAccess()
+            ?: run {
+                val context = applicationContext ?: return
+                phoneAgent = phoneAgent.copy(storageAccessGranted = PhoneAgentStorage.hasAccess(context))
+            }
+    }
+
+    fun startPhoneAgent(prompt: String) {
+        if (!phoneAgentConfig.hasApiKey) {
+            phoneAgent = phoneAgent.copy(error = "请先配置 LimenAPI Key")
+            return
+        }
+        phoneAgentRuntime?.sendPrompt(prompt)
+    }
+
+    fun approvePhoneAgentTool(allow: Boolean) {
+        phoneAgentRuntime?.approvePending(allow)
+    }
+
+    fun resetPhoneAgent() {
+        phoneAgentRuntime?.reset()
+    }
+
+    fun savePhoneAgentConfig(baseUrl: String, model: String, apiKey: String): String? {
+        val configStore = phoneAgentConfigStore ?: return "手机 Agent 尚未初始化"
+        val error = configStore.validate(baseUrl, model, apiKey.ifBlank { null })
+        if (error != null) return error
+        return try {
+            phoneAgentConfig = configStore.save(baseUrl, model, apiKey.ifBlank { null })
+            phoneAgent = phoneAgent.copy(error = null)
+            null
+        } catch (e: Exception) {
+            e.message ?: "无法保存 LimenAPI 配置"
+        }
+    }
+
+    fun clearPhoneAgentApiKey() {
+        val configStore = phoneAgentConfigStore ?: return
+        phoneAgentConfig = configStore.clearApiKey()
+        phoneAgentRuntime?.reset()
+        phoneAgent = phoneAgent.copy(error = "LimenAPI Key 已移除")
     }
 
     /** Stop only an abandoned, observational history download. */
@@ -619,23 +716,41 @@ class ArgusViewModel : ViewModel() {
 
     fun connectChannel(keepDisconnectNotice: Boolean = false) {
         val peer = activePeer ?: run { error = "请先选择一台主机"; return }
+        if (channelConnectJob?.isActive == true ||
+            connectionStatus == "connecting" || connectionStatus == "pairing"
+        ) return
         error = null
         if (!keepDisconnectNotice) connectionDetail = null
         userWantsConnection = true
-        viewModelScope.launch(Dispatchers.IO) {
+        // Mark the attempt before dispatching to IO. The retry effect is keyed
+        // on this state and otherwise can start a second handshake while the
+        // first WebSocket is still waiting for chan-joined.
+        connectionStatus = "connecting"
+        val job = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            val connectJob = coroutineContext[Job]
             val client = newClient()
             try {
                 relayClient?.disconnect()
                 relayClient = client
                 client.connectChannel(peer.longTermKey)
+            } catch (_: CancellationException) {
+                client.disconnect()
             } catch (e: Exception) {
                 client.disconnect("无法建立与中继的连接")
                 withContext(Dispatchers.Main) {
                     if (relayClient === client) relayClient = null
                     error = e.message
                 }
+            } finally {
+                // This callback is separate from the cancelled connect job so
+                // a manual disconnect cannot leave the retry gate stuck.
+                viewModelScope.launch(Dispatchers.Main) {
+                    if (channelConnectJob === connectJob) channelConnectJob = null
+                }
             }
         }
+        channelConnectJob = job
+        job.start()
     }
 
     private fun onAgentEvent(ev: AgentEvent) {
@@ -990,6 +1105,8 @@ class ArgusViewModel : ViewModel() {
         userWantsConnection = false
         cancelCatalogRefresh()
         setActiveSession(null)
+        channelConnectJob?.cancel()
+        channelConnectJob = null
         clientSeq++  // silence any in-flight callbacks from the old client
         relayClient?.disconnect(); relayClient = null
         connectionStatus = "disconnected"
@@ -1000,6 +1117,7 @@ class ArgusViewModel : ViewModel() {
         // Flush synchronously: the debounced job dies with the scope.
         persistJob?.cancel()
         catalogRefreshTimeoutJob?.cancel()
+        channelConnectJob?.cancel()
         sessionStore?.save(sessionSnapshot())
         relayClient?.disconnect()
         voiceHelper?.destroy()
@@ -1029,8 +1147,12 @@ class ArgusViewModel : ViewModel() {
 
     /** Deep-link / scan entry: optionally switch relay, then pair right away. */
     fun applyPairLink(code: String, relay: String?) {
-        relay?.takeIf { it.isNotBlank() }?.let { updateRelayUrl(it) }
         overlay = Overlay.Pair
+        if (store == null || identity == null) {
+            pendingPairLink = Pair(code, relay)
+            return
+        }
+        relay?.takeIf { it.isNotBlank() }?.let { updateRelayUrl(it) }
         pair(code)
     }
 
@@ -1050,9 +1172,21 @@ class ArgusViewModel : ViewModel() {
 // pill) -> control what (chips) -> what is happening (session feed).
 
 @Composable
-fun ArgusApp(activity: ComponentActivity, pairLink: MutableState<Uri?> = mutableStateOf(null)) {
-    val vm: ArgusViewModel = viewModel()  // survives config changes
+fun ArgusApp(
+    activity: ComponentActivity,
+    pairLink: MutableState<Uri?> = mutableStateOf(null),
+    onGrantPhoneAgentAccess: () -> Unit = {},
+    providedViewModel: ArgusViewModel? = null,
+) {
+    val vm: ArgusViewModel = providedViewModel ?: viewModel()  // survives config changes
     LaunchedEffect(Unit) { vm.init(activity) }
+    DisposableEffect(activity.lifecycle, vm) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) vm.refreshPhoneAgentStorageAccess()
+        }
+        activity.lifecycle.addObserver(observer)
+        onDispose { activity.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(activity, vm.keepScreenOn) {
         if (vm.keepScreenOn) {
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1096,11 +1230,11 @@ fun ArgusApp(activity: ComponentActivity, pairLink: MutableState<Uri?> = mutable
                 ) {
                     Box(Modifier.navigationBarsPadding()) {
                         if (vm.activeSessionId != null) SessionDetailScreen(vm)
-                        else MainSheet(vm)
+                        else MainSheet(vm, onGrantPhoneAgentAccess)
                         // The status menu stays visible above a detail view.
                         // Render an overlay here too, so opening Settings never
                         // requires closing the conversation the user was reading.
-                        if (vm.activeSessionId != null && vm.overlay != null) OverlayPane(vm)
+                        if (vm.activeSessionId != null && vm.overlay != null) OverlayPane(vm, onGrantPhoneAgentAccess)
                     }
                 }
             }
@@ -1143,7 +1277,37 @@ private fun DotGrid(modifier: Modifier = Modifier) {
 
 private val BASE_AGENTS = listOf("qoder", "codex")
 
-// ===== Top bar: status capsule + agent filter + new session =====
+private enum class ConnectionUiState { Connected, Connecting, Disconnected, Error }
+
+private fun connectionUiState(vm: ArgusViewModel): ConnectionUiState = when {
+    vm.connectionStatus == "channel-ready" -> ConnectionUiState.Connected
+    vm.connectionStatus == "connecting" || vm.connectionStatus == "pairing" -> ConnectionUiState.Connecting
+    vm.connectionStatus == "disconnected" && !vm.connectionDetail.isNullOrBlank() -> ConnectionUiState.Error
+    vm.connectionStatus == "disconnected" && vm.userWantsConnection && vm.autoReconnect && vm.activePeer != null -> {
+        ConnectionUiState.Connecting
+    }
+    else -> ConnectionUiState.Disconnected
+}
+
+private fun connectionStateLabel(vm: ArgusViewModel, state: ConnectionUiState): String = when (state) {
+    ConnectionUiState.Connected -> "已连接"
+    ConnectionUiState.Connecting -> if (vm.connectionStatus == "pairing") "正在配对" else "正在连接"
+    ConnectionUiState.Error -> if (vm.userWantsConnection && vm.autoReconnect) {
+        "连接出错，正在重试"
+    } else {
+        "连接出错"
+    }
+    ConnectionUiState.Disconnected -> "未连接"
+}
+
+private fun platformLabel(platform: String): String = when (platform.lowercase()) {
+    "windows", "win32" -> "Windows"
+    "macos", "darwin" -> "macOS"
+    "linux" -> "Linux"
+    else -> platform
+}
+
+// ===== Top bar: connection menu + agent filter + new session =====
 
 @Composable
 private fun TopBar(vm: ArgusViewModel) {
@@ -1152,7 +1316,7 @@ private fun TopBar(vm: ArgusViewModel) {
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        StatusCapsule(vm)
+        ConnectionMenuButton(vm)
         Spacer(Modifier.weight(1f))
         AgentSwitcher(vm)
         Spacer(Modifier.width(8.dp))
@@ -1163,58 +1327,170 @@ private fun TopBar(vm: ArgusViewModel) {
 }
 
 @Composable
-private fun StatusCapsule(vm: ArgusViewModel) {
+private fun ConnectionStateIcon(
+    vm: ArgusViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val c = ArgusTheme.colors
+    val state = connectionUiState(vm)
+    val rotation = if (state == ConnectionUiState.Connecting) {
+        val transition = rememberInfiniteTransition(label = "connection-spin")
+        val value by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1_000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "connection-spin-angle",
+        )
+        value
+    } else {
+        0f
+    }
+    val iconAlpha = if (state == ConnectionUiState.Error) {
+        val transition = rememberInfiniteTransition(label = "connection-error-pulse")
+        val value by transition.animateFloat(
+            initialValue = 0.45f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 800),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "connection-error-alpha",
+        )
+        value
+    } else {
+        1f
+    }
+    val icon = when (state) {
+        ConnectionUiState.Connected -> Icons.Default.Language
+        ConnectionUiState.Connecting -> Icons.Default.Sync
+        ConnectionUiState.Disconnected -> Icons.Default.LinkOff
+        ConnectionUiState.Error -> Icons.Default.ErrorOutline
+    }
+    val tint = when (state) {
+        ConnectionUiState.Connected -> c.textPrimary
+        ConnectionUiState.Connecting -> c.statusAmberText
+        ConnectionUiState.Disconnected -> c.textSecondary
+        ConnectionUiState.Error -> c.danger
+    }
+    Icon(
+        icon,
+        null,
+        tint = tint,
+        modifier = modifier.rotate(rotation).alpha(iconAlpha),
+    )
+}
+
+@Composable
+private fun ConnectionMenuButton(vm: ArgusViewModel) {
     val c = ArgusTheme.colors
     var menu by remember { mutableStateOf(false) }
-    val (state, dotColor) = when (vm.connectionStatus) {
-        "channel-ready" -> "已连接" to c.statusGreen
-        "disconnected" -> if (vm.userWantsConnection && vm.autoReconnect) {
-            "重连中…" to c.statusAmberText
-        } else {
-            "已断开" to c.textSecondary
-        }
-        "pairing" -> "配对中…" to c.statusAmberText
-        else -> "连接中…" to c.statusAmberText
-    }
-    val label = "${vm.activePeer?.deviceName ?: "未选主机"} · $state"
+    val state = connectionUiState(vm)
+    val stateLabel = connectionStateLabel(vm, state)
+    val peer = vm.activePeer
     Box {
-        Row(
+        Box(
             Modifier
+                .size(40.dp)
                 .clip(CircleShape)
                 .background(c.sheet)
                 .border(1.dp, c.textSecondary.copy(alpha = 0.25f), CircleShape)
                 .clickable { menu = true }
-                .padding(horizontal = 14.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .semantics {
+                    contentDescription = stateLabel
+                    role = Role.Button
+                }
+                .padding(9.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.size(8.dp).background(dotColor, CircleShape))
-            Spacer(Modifier.width(8.dp))
-            Text(label, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = c.textPrimary)
-            Spacer(Modifier.width(4.dp))
-            Icon(Icons.Default.ExpandMore, null, tint = c.textSecondary, modifier = Modifier.size(16.dp))
+            ConnectionStateIcon(vm, Modifier.size(22.dp))
         }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+        DropdownMenu(
+            expanded = menu,
+            onDismissRequest = { menu = false },
+            modifier = Modifier.width(288.dp),
+            containerColor = c.sheet,
+            tonalElevation = 0.dp,
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ConnectionStateIcon(vm, Modifier.size(22.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            peer?.deviceName ?: "未选择主机",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = c.textPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(stateLabel, fontSize = 12.sp, color = c.textSecondary)
+                    }
+                }
+                peer?.let {
+                    Text(
+                        "${platformLabel(it.platform)} · ${it.fingerprint}",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = c.textTertiary,
+                        modifier = Modifier.padding(top = 8.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             vm.connectionDetail?.let { detail ->
                 Text(
-                    "最近断开：$detail",
+                    if (state == ConnectionUiState.Error) "连接事件：$detail" else "上次连接事件：$detail",
                     fontSize = 12.sp,
                     color = c.textSecondary,
-                    modifier = Modifier.widthIn(max = 260.dp).padding(horizontal = 16.dp, vertical = 10.dp)
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
                 )
-                HorizontalDivider(color = c.textSecondary.copy(alpha = 0.18f))
             }
-            if (vm.connectionStatus == "channel-ready") {
-                DropdownMenuItem(text = { Text("断开连接") }, onClick = { menu = false; vm.disconnect() })
-            } else {
-                DropdownMenuItem(text = { Text("连接") }, onClick = { menu = false; vm.connectChannel() })
-            }
-            // Pairing and devices used to be duplicated as tabs; this menu is
-            // their only entry point now, which is what freed the whole sheet
-            // for the session list.
             HorizontalDivider(color = c.textSecondary.copy(alpha = 0.18f))
-            DropdownMenuItem(text = { Text("设置") }, onClick = { menu = false; vm.overlay = Overlay.Settings })
-            DropdownMenuItem(text = { Text("切换主机") }, onClick = { menu = false; vm.overlay = Overlay.Devices })
-            DropdownMenuItem(text = { Text("配对新主机") }, onClick = { menu = false; vm.overlay = Overlay.Pair })
+            if (peer != null) {
+                when (state) {
+                    ConnectionUiState.Connected -> DropdownMenuItem(
+                        text = { Text("断开连接") },
+                        leadingIcon = { Icon(Icons.Default.LinkOff, null) },
+                        onClick = { menu = false; vm.disconnect() },
+                    )
+                    ConnectionUiState.Connecting -> DropdownMenuItem(
+                        text = { Text("取消连接") },
+                        leadingIcon = { Icon(Icons.Default.Close, null) },
+                        onClick = { menu = false; vm.disconnect() },
+                    )
+                    ConnectionUiState.Disconnected, ConnectionUiState.Error -> DropdownMenuItem(
+                        text = { Text(if (state == ConnectionUiState.Error) "立即重试" else "连接") },
+                        leadingIcon = { Icon(Icons.Default.Refresh, null) },
+                        onClick = { menu = false; vm.connectChannel() },
+                    )
+                }
+            }
+            HorizontalDivider(color = c.textSecondary.copy(alpha = 0.18f))
+            DropdownMenuItem(
+                text = { Text("设置") },
+                leadingIcon = { Icon(Icons.Default.Settings, null) },
+                onClick = { menu = false; vm.overlay = Overlay.Settings },
+            )
+            DropdownMenuItem(
+                text = { Text("手机 Agent") },
+                leadingIcon = { Icon(Icons.Default.SmartToy, null) },
+                onClick = { menu = false; vm.overlay = Overlay.PhoneAgent },
+            )
+            DropdownMenuItem(
+                text = { Text("切换主机") },
+                leadingIcon = { Icon(Icons.Default.Computer, null) },
+                onClick = { menu = false; vm.overlay = Overlay.Devices },
+            )
+            DropdownMenuItem(
+                text = { Text("配对新主机") },
+                leadingIcon = { Icon(Icons.Default.AddLink, null) },
+                onClick = { menu = false; vm.overlay = Overlay.Pair },
+            )
         }
     }
 }
@@ -1311,17 +1587,23 @@ private fun AgentPill(agent: String?, selected: Boolean, showLabel: Boolean, onC
 // ===== Main sheet: tab content =====
 
 @Composable
-private fun MainSheet(vm: ArgusViewModel) {
+private fun MainSheet(
+    vm: ArgusViewModel,
+    onGrantPhoneAgentAccess: () -> Unit,
+) {
     Box(Modifier.fillMaxSize()) {
         SessionListScreen(vm)
         // Overlays rather than tabs: pairing and devices are occasional errands,
         // so they cover the list instead of permanently costing it a row.
-        if (vm.overlay != null) OverlayPane(vm)
+        if (vm.overlay != null) OverlayPane(vm, onGrantPhoneAgentAccess)
     }
 }
 
 @Composable
-private fun OverlayPane(vm: ArgusViewModel) {
+private fun OverlayPane(
+    vm: ArgusViewModel,
+    onGrantPhoneAgentAccess: () -> Unit,
+) {
     val which = vm.overlay ?: return
     val c = ArgusTheme.colors
     BackHandler { vm.overlay = null }
@@ -1332,6 +1614,7 @@ private fun OverlayPane(vm: ArgusViewModel) {
                 Overlay.Devices -> "选择主机"
                 Overlay.NewSession -> "新建会话"
                 Overlay.Settings -> "设置"
+                Overlay.PhoneAgent -> "手机 Agent"
             },
             onBack = { vm.overlay = null }
         )
@@ -1341,6 +1624,7 @@ private fun OverlayPane(vm: ArgusViewModel) {
                 Overlay.Devices -> DeviceScreen(vm)
                 Overlay.NewSession -> NewSessionScreen(vm)
                 Overlay.Settings -> SettingsScreen(vm)
+                Overlay.PhoneAgent -> PhoneAgentScreen(vm, onGrantPhoneAgentAccess)
             }
         }
     }
@@ -1362,49 +1646,6 @@ private fun OverlayHeader(title: String, onBack: () -> Unit) {
 }
 
 // ===== Sessions =====
-
-/** One visible explanation while reconnecting, instead of a stale green dot. */
-@Composable
-private fun ConnectionNotice(vm: ArgusViewModel) {
-    val c = ArgusTheme.colors
-    val host = vm.activePeer?.deviceName ?: "主机"
-    val reconnecting = vm.connectionStatus == "disconnected"
-    val retrying = reconnecting && vm.autoReconnect
-    val title = when {
-        retrying -> "与 $host 的连接已断开，正在重试"
-        reconnecting -> "与 $host 的连接已断开"
-        else -> "正在连接 $host"
-    }
-    val detail = vm.connectionDetail ?: "正在通过中继建立安全通道"
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(ArgusRadius.ROW.dp))
-            .background(c.statusAmberFill)
-            .border(1.dp, c.statusAmberText.copy(alpha = 0.25f), RoundedCornerShape(ArgusRadius.ROW.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(Icons.Default.WifiOff, null, tint = c.statusAmberText, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = c.textPrimary)
-            Text(detail, fontSize = 12.sp, color = c.statusAmberText, modifier = Modifier.padding(top = 2.dp))
-        }
-        if (reconnecting && !vm.autoReconnect) {
-            Text(
-                "连接",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = c.statusAmberText,
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable { vm.connectChannel() }
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-            )
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1460,9 +1701,6 @@ private fun SessionListScreen(vm: ArgusViewModel) {
                 Modifier.fillMaxSize().padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (vm.userWantsConnection && vm.connectionStatus != "channel-ready") {
-                    item { ConnectionNotice(vm) }
-                }
                 vm.cloudUrl?.let { url ->
                     item { CloudSessionCard(url) { vm.cloudUrl = null } }
                 }
@@ -2404,12 +2642,7 @@ private fun SettingsScreen(vm: ArgusViewModel) {
     var relayError by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(vm.relayUrl) { relayDraft = vm.relayUrl }
 
-    val connectionState = when (vm.connectionStatus) {
-        "channel-ready" -> "已连接"
-        "disconnected" -> if (vm.userWantsConnection && vm.autoReconnect) "正在重连" else "已断开"
-        "pairing" -> "配对中"
-        else -> "连接中"
-    }
+    val connectionState = connectionStateLabel(vm, connectionUiState(vm))
 
     Column(
         Modifier

@@ -21,12 +21,27 @@ import { delimiter, join } from "node:path";
 /** Where the Codex desktop app keeps its bundled binary. */
 const APP_BUNDLED = "/Applications/ChatGPT.app/Contents/Resources/codex";
 
-/** Resolve a command from PATH without asking a shell to interpret it. */
+function isMicrosoftStorePath(candidate: string): boolean {
+  return process.platform === "win32" && candidate.toLowerCase().includes("\\windowsapps\\");
+}
+
+function usableBinary(candidate: string): boolean {
+  if (!existsSync(candidate) || isMicrosoftStorePath(candidate)) return false;
+  // Node cannot spawn .cmd/.bat shims without a shell. The host deliberately
+  // accepts only a native binary here so its fixed app-server arguments never
+  // cross a command interpreter.
+  return process.platform !== "win32" || !/\.(cmd|bat)$/i.test(candidate);
+}
+
+/** Find a native Codex binary on PATH without relying on a shell. */
 function commandOnPath(command: string): string | null {
+  const names = process.platform === "win32" ? [`${command}.exe`, command] : [command];
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
-    const candidate = join(dir, command);
-    if (existsSync(candidate)) return candidate;
+    for (const name of names) {
+      const candidate = join(dir, name);
+      if (usableBinary(candidate)) return candidate;
+    }
   }
   return null;
 }
@@ -171,16 +186,23 @@ export class CodexAppServer {
   /**
    * Codex binary to drive.
    *
-   * Desktop installs keep a bundled binary, but a headless Linux host normally
-   * has only a CLI on PATH. `CODEX_BIN` is deliberately first so a user-level
-   * service can pin its own binary without relying on a login shell's PATH.
+   * macOS has a usable app-bundled binary. Headless Linux hosts usually use a
+   * CLI on PATH. On Windows, prefer a native executable because Store package
+   * resources and command shims cannot be spawned directly by Node.
    */
   static binaryPath(): string | null {
     const configured = process.env.CODEX_BIN?.trim();
-    if (configured) return configured;
-    if (existsSync(APP_BUNDLED)) return APP_BUNDLED;
-    const standalone = join(homedir(), ".codex/packages/standalone/current/codex");
-    if (existsSync(standalone)) return standalone;
+    if (configured && usableBinary(configured)) return configured;
+
+    if (process.platform === "darwin" && usableBinary(APP_BUNDLED)) return APP_BUNDLED;
+
+    const standaloneDir = join(homedir(), ".codex", "packages", "standalone", "current");
+    const standaloneNames = process.platform === "win32" ? ["codex.exe"] : ["codex"];
+    for (const name of standaloneNames) {
+      const candidate = join(standaloneDir, name);
+      if (usableBinary(candidate)) return candidate;
+    }
+
     return commandOnPath("codex");
   }
 
@@ -189,7 +211,11 @@ export class CodexAppServer {
     if (this.ready) return this.ready;
     this.ready = (async () => {
       const bin = CodexAppServer.binaryPath();
-      if (!bin) throw new Error("未找到 codex 可执行文件（设置 CODEX_BIN 或将 codex 加入 PATH）");
+      if (!bin) {
+        throw new Error(
+          "未找到可执行的 codex（设置 CODEX_BIN 指向原生可执行文件或将 codex 加入 PATH）",
+        );
+      }
 
       // Reuse an already-listening server rather than fighting it for the port:
       // the desktop app may have one up, and two servers on one port is a

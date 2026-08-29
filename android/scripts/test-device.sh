@@ -30,7 +30,7 @@ echo "==> installing (keeping existing data)"
 echo "==> running tests"
 # `-w` waits for completion and prints the summary; a non-zero exit needs the
 # output scanned, because am instrument reports failures in its text.
-OUTPUT=$("$ADB" shell "am instrument -w com.kairong.argus.test/androidx.test.runner.AndroidJUnitRunner" 2>&1 | tr -d '\r')
+OUTPUT=$("$ADB" shell "am instrument -w com.kairong.argus.debug.test/androidx.test.runner.AndroidJUnitRunner" 2>&1 | tr -d '\r')
 echo "$OUTPUT"
 
 if echo "$OUTPUT" | grep -q "^OK ("; then
