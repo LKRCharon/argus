@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MeshTaskRequest } from "@agentlink/wire";
+import { meshArtifactSha256, type MeshTaskRequest } from "@agentlink/wire";
 import { MeshApprovalInbox } from "../src/mesh/approval-inbox";
 import { createHostApprovalRequestHandler } from "../src/mesh/approval-server";
 
@@ -44,6 +44,24 @@ describe("target-local owner approval", () => {
     expect(recovered.listPending()).toEqual([]);
   });
 
+  test("preserves a validated base artifact across the local approval handoff", () => {
+    const root = mkdtempSync(join(tmpdir(), "argus-approval-artifact-"));
+    roots.push(root);
+    const identity = { version: 1 as const, kind: "base" as const, files: [] };
+    const sha256 = meshArtifactSha256(identity);
+    const baseArtifact = { ...identity, artifactId: `sha256:${sha256}`, sha256 };
+    const task = {
+      ...request("task-owner-artifact"),
+      scope: { runnerId: "gpu:train", args: [], baseArtifactId: baseArtifact.artifactId },
+    };
+    const file = join(root, "approvals.json");
+    new MeshApprovalInbox(file).put({ kind: "mesh-task-request", task, baseArtifact });
+    expect(new MeshApprovalInbox(file).claim(task.taskId)).toMatchObject({
+      task: { taskId: task.taskId },
+      baseArtifact: { artifactId: baseArtifact.artifactId },
+    });
+  });
+
   test("serves the local UI and rejects cross-origin approval decisions", async () => {
     const root = mkdtempSync(join(tmpdir(), "argus-approval-server-"));
     roots.push(root);
@@ -66,6 +84,9 @@ describe("target-local owner approval", () => {
     const list = await handler(new Request("http://127.0.0.1:8791/api/approvals"));
     expect(await list.json()).toMatchObject({ nodeId: "node-l40", approvals: [{ taskId: "task-owner-approval" }] });
 
+    const rebound = await handler(new Request("http://approval.evil.example/api/approvals"));
+    expect(rebound.status).toBe(403);
+
     const rejected = await handler(new Request("http://127.0.0.1:8791/api/approvals/task-owner-approval/decision", {
       method: "POST",
       headers: { "content-type": "application/json", origin: "https://evil.example" },
@@ -81,5 +102,12 @@ describe("target-local owner approval", () => {
     }));
     expect(accepted.status).toBe(202);
     expect(decisions).toEqual(["task-owner-approval:allow-once"]);
+
+    const oversized = await handler(new Request("http://127.0.0.1:8791/api/approvals/another/decision", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://127.0.0.1:8791" },
+      body: JSON.stringify({ decision: "deny", padding: "x".repeat(16 * 1024) }),
+    }));
+    expect(oversized.status).toBe(413);
   });
 });

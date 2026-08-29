@@ -27,6 +27,10 @@ hook server, does not forward local Codex/Qoder events, and rejects all legacy
 Agent bridge commands. Mesh discovery, status, durable jobs, cancellation, and
 target-local approval continue on their own ordered control queue.
 
+Set `remoteCodexControl: true` to admit only deadline-bounded remote Codex
+commands and Codex approvals while keeping that legacy bridge disabled. This
+does not start transcript watchers, Qoder ACP, or the hook server.
+
 On headless Linux, `argus-host.sh` uses the stdlib Python WebSocket bridge when
 `python3` is available. Bun still owns channel encryption and every Mesh policy
 decision; the child only moves already-serialized relay JSON over TLS. Set

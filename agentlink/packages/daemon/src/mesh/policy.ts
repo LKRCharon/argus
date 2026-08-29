@@ -173,6 +173,10 @@ export class MeshPolicyEngine {
       || context.resource.ownerNodeId !== request.targetNodeId) {
       return this.finish({ ...base, decision: "deny", reason: "resource-target-mismatch" }, nowMs);
     }
+    if (context.resource.allowedGroupIds
+      && !context.resource.allowedGroupIds.includes(request.groupId)) {
+      return this.finish({ ...base, decision: "deny", reason: "resource-group-not-allowed" }, nowMs);
+    }
     if (!isKnownOperation(request.operation)) {
       return this.finish({ ...base, decision: "deny", reason: "unknown-operation" }, nowMs);
     }

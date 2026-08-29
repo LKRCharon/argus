@@ -100,6 +100,11 @@ describe("MeshPolicyEngine", () => {
     expect(policy.authorize(request("inspect"), { resource, nowMs: NOW }).decision).toBe("allow");
     const untrusted = policy.authorize({ ...request("inspect"), requesterNodeId: "node-evil" }, { resource, nowMs: NOW });
     expect(untrusted).toMatchObject({ decision: "deny", reason: "requester-not-trusted" });
+    const wrongResourceGroup = policy.authorize(request("inspect"), {
+      resource: { ...resource, allowedGroupIds: ["group-other"] },
+      nowMs: NOW,
+    });
+    expect(wrongResourceGroup).toMatchObject({ decision: "deny", reason: "resource-group-not-allowed" });
   });
 
   test("group membership is explicit when a group member map is configured", () => {

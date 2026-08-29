@@ -11,6 +11,8 @@ import {
   UserInputPayloadSchema,
 } from "./agent";
 import {
+  MeshArtifactPayloadSchema,
+  MeshArtifactRequestPayloadSchema,
   MeshApprovalPayloadSchema,
   MeshAuditEventPayloadSchema,
   MeshCapabilityGrantPayloadSchema,
@@ -121,6 +123,8 @@ export const BusinessPayloadSchema = z.discriminatedUnion("kind", [
   MeshTaskStatusPayloadSchema,
   MeshTaskCancelRequestPayloadSchema,
   MeshTaskCancelledPayloadSchema,
+  MeshArtifactRequestPayloadSchema,
+  MeshArtifactPayloadSchema,
 ]);
 export type BusinessPayload = z.infer<typeof BusinessPayloadSchema>;
 

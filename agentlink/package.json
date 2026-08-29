@@ -14,6 +14,7 @@
     "mcp": "bun run --filter @agentlink/daemon mcp",
     "dev": "bun run --filter @agentlink/app dev",
     "build:app": "bun run --filter @agentlink/app build",
+    "release:manifest": "bun run scripts/release-manifest.ts",
     "e2e": "bun run scripts/e2e.ts",
     "e2e:agent": "bun run scripts/e2e-agent.ts",
     "typecheck": "tsc --noEmit"

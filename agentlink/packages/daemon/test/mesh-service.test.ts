@@ -1,8 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateMeshSigningKeyPair, type MeshTaskProgressPayload } from "@agentlink/wire";
+import {
+  generateMeshSigningKeyPair,
+  meshArtifactSha256,
+  type MeshArtifactFile,
+  type MeshBaseArtifactManifest,
+  type MeshTaskProgressPayload,
+} from "@agentlink/wire";
 import { MeshService } from "../src/mesh/service";
 import { MeshTaskStore } from "../src/mesh/task-store";
 
@@ -51,6 +58,21 @@ function task(operation: "inspect" | "quarantine" | "delete") {
   } as const;
 }
 
+function baseArtifact(path: string, content: string): MeshBaseArtifactManifest {
+  const bytes = Buffer.from(content, "utf8");
+  const file: MeshArtifactFile = {
+    type: "file",
+    path,
+    mode: 0o644,
+    size: bytes.byteLength,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    contentBase64: bytes.toString("base64"),
+  };
+  const identity = { version: 1 as const, kind: "base" as const, files: [file] };
+  const sha256 = meshArtifactSha256(identity);
+  return { ...identity, artifactId: `sha256:${sha256}`, sha256 };
+}
+
 describe.serial("MeshService", () => {
   test("runs only the owner-configured GPU status probe", async () => {
     const base = mkdtempSync(join(tmpdir(), "argus-gpu-status-"));
@@ -93,6 +115,71 @@ describe.serial("MeshService", () => {
       },
     });
     expect(value.listResources()[0]?.runnerIds).toEqual([]);
+  });
+
+  test("publishes safe runner metadata and a fixed read-only workspace status contract", async () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-workspace-status-"));
+    const root = join(base, "workspace");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const checkedAt = new Date().toISOString();
+    const status = {
+      connectionStatus: "online",
+      watcherAvailable: true,
+      codexAppServerAvailable: true,
+      activeJobs: 0,
+      workspaceRevision: "revision-123",
+      lastSuccess: checkedAt,
+      lastErrorStage: null,
+      checkedAt,
+    };
+    const value = new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      auditSink: () => {},
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{
+        id: "workspace:fixture",
+        ownerNodeId: "node-b",
+        kind: "directory",
+        displayName: "workspace fixture",
+        root,
+        statusRunnerId: "workspace:status",
+      }],
+      runners: [{
+        id: "workspace:status",
+        resourceId: "workspace:fixture",
+        purpose: "status",
+        executable: process.execPath,
+        fixedArgs: ["-e", `console.log(${JSON.stringify(JSON.stringify(status))})`],
+        title: "Workspace status",
+        inputSchema: { type: "object", additionalProperties: false },
+        resultSchema: { type: "object", required: ["connectionStatus", "checkedAt"] },
+      }],
+    });
+
+    expect(await value.resourceStatus("workspace-status-1", "workspace:fixture")).toMatchObject({
+      status: { state: "ready", workspace: status },
+    });
+    const published = value.listResources()[0];
+    expect(published).toMatchObject({
+      allowedGroupIds: ["group-alpha"],
+      defaultGroupId: "group-alpha",
+      allowedOperations: ["inspect", "quarantine"],
+      runners: [{
+        runnerId: "workspace:status",
+        title: "Workspace status",
+        purpose: "status",
+        approvalRequired: false,
+        workspaceCapabilities: ["read-only-status"],
+      }],
+    });
+    const text = JSON.stringify(published);
+    expect(text).not.toContain(process.execPath);
+    expect(text).not.toContain("fixedArgs");
+    expect(text).not.toContain("env");
   });
 
   test("handles read-only inspect without exposing local paths", async () => {
@@ -200,6 +287,314 @@ describe.serial("MeshService", () => {
     expect(() => value.issueGrant(stdinRequest)).toThrow();
   });
 
+  test("matches unattended runs only across every exact trusted local allowlist", async () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-mesh-unattended-"));
+    const root = join(base, "workspace");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const common = {
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      groupMembers: new Map([["group-alpha", new Set(["node-a", "node-b"])]]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      quarantineRoot: join(base, "quarantine"),
+      auditSink: () => {},
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{
+        id: "workspace:fixture",
+        ownerNodeId: "node-b",
+        kind: "directory" as const,
+        displayName: "fixture",
+        root,
+      }],
+      runners: [{
+        id: "fixture:unattended",
+        resourceId: "workspace:fixture",
+        purpose: "task" as const,
+        executable: process.execPath,
+        fixedArgs: ["-e", "console.log(JSON.stringify({ resultSummary: 'unattended-ok' }))"],
+      }, {
+        id: "fixture:manual",
+        resourceId: "workspace:fixture",
+        purpose: "task" as const,
+        executable: process.execPath,
+        fixedArgs: ["-e", "console.log(JSON.stringify({ resultSummary: 'manual-only' }))"],
+      }],
+    };
+    const policy = {
+      groupIds: new Set(["group-alpha"]),
+      requesterNodeIds: new Set(["node-a"]),
+      resourceIds: new Set(["workspace:fixture"]),
+      runnerIds: new Set(["fixture:unattended"]),
+    };
+    const value = new MeshService({
+      ...common,
+      taskStore: new MeshTaskStore(join(base, "tasks.json")),
+      unattendedRuns: policy,
+    });
+    const request = {
+      groupId: "group-alpha",
+      taskId: "task-unattended",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      resourceId: "workspace:fixture",
+      operation: "run" as const,
+      scope: { runnerId: "fixture:unattended", args: [] },
+    };
+
+    expect(value.allowsUnattendedRun(request)).toBe(true);
+    expect(value.allowsUnattendedRun({ ...request, groupId: "group-other" })).toBe(false);
+    expect(value.allowsUnattendedRun({ ...request, requesterNodeId: "node-other" })).toBe(false);
+    expect(value.allowsUnattendedRun({ ...request, targetNodeId: "node-other" })).toBe(false);
+    expect(value.allowsUnattendedRun({ ...request, resourceId: "workspace:other" })).toBe(false);
+    expect(value.allowsUnattendedRun({
+      ...request,
+      scope: { runnerId: "fixture:manual", args: [] },
+    })).toBe(false);
+    expect(value.allowsUnattendedRun({
+      ...request,
+      scope: { runnerId: "fixture:unattended", args: ["remote-arg"] },
+    })).toBe(false);
+    expect(value.allowsUnattendedRun({
+      ...request,
+      scope: { runnerId: "fixture:unattended", args: [], input: "remote-input" },
+    })).toBe(false);
+    expect(value.allowsUnattendedRun({
+      ...request,
+      scope: { runnerId: "fixture:unattended", args: [], baseArtifactId: `sha256:${"a".repeat(64)}` },
+    })).toBe(false);
+
+    expect(value.proposeTask({ kind: "mesh-task-request", task: request })).toMatchObject({
+      status: "approval-required",
+    });
+    const grant = value.issueGrant(request);
+    const approval = value.issueApproval(grant, "exact unattended policy");
+    expect(await value.handleRequest({ kind: "mesh-task-request", task: request, grant, approval }))
+      .toMatchObject({ status: "completed", result: { resultSummary: "unattended-ok" } });
+    expect(value.taskStatus({
+      kind: "mesh-task-status-request",
+      requestId: "status-task-unattended",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      taskId: request.taskId,
+    })).toMatchObject({ status: "completed", message: "任务已完成" });
+
+    expect(() => new MeshService({
+      ...common,
+      taskStore: new MeshTaskStore(join(base, "untrusted-tasks.json")),
+      unattendedRuns: { ...policy, requesterNodeIds: new Set(["node-other"]) },
+    })).toThrow("无人值守 requester 不受信任");
+    expect(() => new MeshService({
+      ...common,
+      taskStore: new MeshTaskStore(join(base, "missing-runner-tasks.json")),
+      unattendedRuns: { ...policy, runnerIds: new Set(["fixture:missing"]) },
+    })).toThrow("无人值守 runner 未绑定 allowlist resource");
+  });
+
+  test("runs an artifact job only in a task-scoped workspace and returns a content-addressed patch", async () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-artifact-service-"));
+    const root = join(base, "existing-checkout");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "sentinel.txt"), "untouched\n");
+    tempRoots.push(base);
+    const artifact = baseArtifact("src/input.txt", "before\n");
+    const value = new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      groupMembers: new Map([["group-alpha", new Set(["node-a", "node-b"])]]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      artifactRoot: join(base, "task-workspaces"),
+      auditSink: () => {},
+      taskStore: new MeshTaskStore(join(base, "tasks.json")),
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{
+        id: "workspace:fixture",
+        ownerNodeId: "node-b",
+        kind: "directory",
+        displayName: "workspace fixture",
+        root,
+      }],
+      runners: [{
+        id: "workspace:codex",
+        resourceId: "workspace:fixture",
+        executable: process.execPath,
+        fixedArgs: [
+          "-e",
+          "const fs=require('node:fs');fs.writeFileSync('src/input.txt','after\\n');fs.writeFileSync('solution.txt','done\\n');console.log(JSON.stringify({resultSummary:'changed two files'}));",
+        ],
+        maxRuntimeMs: 10_000,
+        workspaceCapabilities: [
+          "structured-artifact-input",
+          "task-scoped-workspace",
+          "changed-file-manifest",
+        ],
+      }],
+    });
+    const request = {
+      groupId: "group-alpha",
+      taskId: "task-artifact-service",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      resourceId: "workspace:fixture",
+      operation: "run" as const,
+      scope: { runnerId: "workspace:codex", args: [], baseArtifactId: artifact.artifactId },
+    };
+    expect(value.proposeTask({
+      kind: "mesh-task-request",
+      task: {
+        ...request,
+        taskId: "task-artifact-required",
+        scope: { runnerId: "workspace:codex", args: [] },
+      },
+    })).toMatchObject({
+      status: "denied",
+      message: "策略拒绝: artifact-required-for-runner",
+    });
+    expect(() => value.issueGrant({
+      ...request,
+      taskId: "task-artifact-grant-required",
+      scope: { runnerId: "workspace:codex", args: [] },
+    })).toThrow("有效的本地 runnerId");
+    expect(value.proposeTask({ kind: "mesh-task-request", task: request, baseArtifact: artifact }))
+      .toMatchObject({ status: "approval-required" });
+    const grant = value.issueGrant(request);
+    const approval = value.issueApproval(grant, "approve isolated artifact task");
+    const completed = await value.handleRequest({
+      kind: "mesh-task-request",
+      task: request,
+      baseArtifact: artifact,
+      grant,
+      approval,
+    });
+    expect(completed.status).toBe("completed");
+    const completedResult = completed.result as Record<string, unknown>;
+    expect(completedResult.baseArtifactId).toBe(artifact.artifactId);
+    expect(completedResult.resultArtifactId).toBeString();
+    expect(completedResult.resultArtifactId).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(completedResult.resultArtifactSha256).toBeString();
+    expect(completedResult.resultArtifactSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(completedResult.changedFiles).toBe(2);
+    expect(completedResult.deletedFiles).toBe(0);
+    expect(await Bun.file(join(root, "sentinel.txt")).text()).toBe("untouched\n");
+    const resultArtifactId = String(completedResult.resultArtifactId);
+    const delivered = value.resultArtifact({
+      kind: "mesh-artifact-request",
+      requestId: "artifact-read-1",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      taskId: request.taskId,
+      artifactId: resultArtifactId,
+    });
+    expect(delivered.manifest.changed.map((file) => file.path)).toEqual(["solution.txt", "src/input.txt"]);
+    expect(() => value.resultArtifact({
+      kind: "mesh-artifact-request",
+      requestId: "artifact-read-cross-requester",
+      requesterNodeId: "node-other",
+      targetNodeId: "node-b",
+      taskId: request.taskId,
+      artifactId: resultArtifactId,
+    })).toThrow("不受信任");
+  });
+
+  test("separates resultSummary from debug output and composes runner and service truncation", async () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-runner-result-"));
+    const root = join(base, "workspace");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const value = new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      auditSink: () => {},
+      taskStore: new MeshTaskStore(join(base, "tasks.json")),
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{ id: "workspace:fixture", ownerNodeId: "node-b", kind: "directory", displayName: "fixture", root }],
+      runners: [{
+        id: "workspace:summary",
+        resourceId: "workspace:fixture",
+        executable: process.execPath,
+        fixedArgs: ["-e", "console.log('x'.repeat(40000));console.error('debug-secret-output')"],
+        maxOutputBytes: 64 * 1024,
+      }],
+    });
+    const request = {
+      groupId: "group-alpha",
+      taskId: "task-summary-truncation",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      resourceId: "workspace:fixture",
+      operation: "run" as const,
+      scope: { runnerId: "workspace:summary", args: [] },
+    };
+    const grant = value.issueGrant(request);
+    const approval = value.issueApproval(grant, "approve bounded summary");
+    const completed = await value.handleRequest({ kind: "mesh-task-request", task: request, grant, approval });
+    expect(completed).toMatchObject({
+      status: "completed",
+      result: {
+        integrity: {
+          complete: false,
+          runner: { resultSummaryTruncated: true, debugOutputSuppressed: true },
+          mesh: { resultSummaryTruncated: true },
+        },
+      },
+    });
+    const result = completed.result as Record<string, unknown>;
+    expect(String(result.resultSummary).length).toBeLessThanOrEqual(16 * 1024);
+    expect(result).not.toHaveProperty("debugOutput");
+    expect(JSON.stringify(result)).not.toContain("debug-secret-output");
+  });
+
+  test("sanitizes runner output before transmission and KMac persistence", async () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-runner-redaction-"));
+    const root = join(base, "workspace");
+    const taskFile = join(base, "tasks.json");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const value = new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      auditSink: () => {},
+      taskStore: new MeshTaskStore(taskFile),
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{ id: "workspace:redaction", ownerNodeId: "node-b", kind: "directory", displayName: "redaction", root }],
+      runners: [{
+        id: "workspace:redaction-runner",
+        resourceId: "workspace:redaction",
+        executable: process.execPath,
+        fixedArgs: [
+          "-e",
+          "console.log(JSON.stringify({resultSummary:'Authorization: Bearer SENTINEL_TRANSMIT_TOKEN_123456 '+process.cwd()+'/private.txt'}));console.error('secret=SENTINEL_TRANSMIT_SECRET_123456')",
+        ],
+        exposeDebugOutput: true,
+      }],
+    });
+    const request = {
+      groupId: "group-alpha",
+      taskId: "task-transmission-redaction",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      resourceId: "workspace:redaction",
+      operation: "run" as const,
+      scope: { runnerId: "workspace:redaction-runner", args: [] },
+    };
+    const grant = value.issueGrant(request);
+    const approval = value.issueApproval(grant, "run redaction fixture");
+    const completed = await value.handleRequest({ kind: "mesh-task-request", task: request, grant, approval });
+    const transmitted = JSON.stringify(completed);
+    const persisted = readFileSync(taskFile, "utf8");
+    for (const output of [transmitted, persisted]) {
+      expect(output).not.toContain("SENTINEL_TRANSMIT");
+      expect(output).not.toContain(root);
+      expect(output).toContain(request.taskId);
+    }
+  });
+
   test("cancels an active named runner and persists the terminal result", async () => {
     const base = mkdtempSync(join(tmpdir(), "argus-mesh-cancel-"));
     const root = join(base, "gpu");
@@ -263,6 +658,54 @@ describe.serial("MeshService", () => {
       targetNodeId: "node-b",
       taskId: request.taskId,
     })).toMatchObject({ known: true, status: "cancelled", result: { status: "cancelled" } });
+  });
+
+  test("reaps POSIX runner descendants before artifact capture can begin", async () => {
+    if (process.platform === "win32") return;
+    const base = mkdtempSync(join(tmpdir(), "argus-runner-descendant-"));
+    const root = join(base, "workspace");
+    const marker = join(base, "background-marker");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const descendant = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "late"), 250)`;
+    const wrapper = [
+      'const { spawn } = require("node:child_process")',
+      `const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: "ignore" })`,
+      "child.unref()",
+      'console.log(JSON.stringify({ resultSummary: "done" }))',
+    ].join(";");
+    const value = new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      auditSink: () => {},
+      taskStore: new MeshTaskStore(join(base, "tasks.json")),
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{ id: "workspace:descendant", ownerNodeId: "node-b", kind: "directory", displayName: "descendant", root }],
+      runners: [{
+        id: "workspace:descendant-runner",
+        resourceId: "workspace:descendant",
+        executable: process.execPath,
+        fixedArgs: ["-e", wrapper],
+      }],
+    });
+    const request = {
+      groupId: "group-alpha",
+      taskId: "task-runner-descendant",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      resourceId: "workspace:descendant",
+      operation: "run" as const,
+      scope: { runnerId: "workspace:descendant-runner", args: [] },
+    };
+    const grant = value.issueGrant(request);
+    const approval = value.issueApproval(grant, "reap descendant fixture");
+
+    expect(await value.handleRequest({ kind: "mesh-task-request", task: request, grant, approval }))
+      .toMatchObject({ status: "completed" });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(existsSync(marker)).toBe(false);
   });
 
   test("requires a grant and owner approval before quarantine, then moves safely", async () => {

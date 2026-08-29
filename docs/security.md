@@ -1,14 +1,23 @@
 # Security & privacy
 
-Argus runs right next to an AI developer's most sensitive files. It is built so there is **no telemetry and no involuntary exfiltration**: the only outbound traffic is the opt-in Telegram bot you set up yourself (off by default). This document expands on the summary in the README.
+Argus runs right next to an AI developer's most sensitive files. It sends no
+analytics or developer-operated telemetry. Network features are opt-in and use
+only endpoints the owner configures: Telegram for notifications and Agentlink
+for encrypted traffic between paired devices.
 
-## Reads file clocks, not file contents
+## Local detection and optional transcript forwarding
 
-Agent detection only calls `stat()` on other tools' transcript files to read their modification time. It **never reads the conversations or code** inside them.
+Local agent detection calls `stat()` on transcript files to read modification
+times. When the optional Agentlink bridge is running, its transcript watcher
+also reads new transcript records and sends normalized events over the paired,
+encrypted device channel. It does not upload them to an Argus analytics service.
 
 ## No telemetry, no tracking, no analytics
 
-The *only* outbound network traffic is the Telegram bot **you** set up yourself (opt-in, off by default). When you enable it, messages go to Telegram's servers (`api.telegram.org`) so your own bot can deliver them — that is the sole third party, and it carries only what you chose to be notified about. No traffic ever goes to the developer or to any *other* third-party server.
+Telegram is opt-in and sends selected notification content to
+`api.telegram.org`. Agentlink connects to the relay URL configured by the owner;
+device-channel payloads are end-to-end encrypted and the relay does not receive
+their plaintext. Neither path sends analytics to the Argus developer.
 
 ## XPC caller verification is enforced
 

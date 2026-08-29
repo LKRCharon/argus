@@ -8,7 +8,8 @@ const relayUrl = `ws://127.0.0.1:${server.port}/ws`;
 afterAll(() => server.stop(true));
 
 describe("daemon relay transport", () => {
-  test("sends encrypted frames in both directions after joining", async () => {
+  const pythonTransportTest = process.platform === "win32" ? test.skip : test;
+  pythonTransportTest("sends encrypted frames in both directions after joining", async () => {
     const key = new Uint8Array(Array.from({ length: 32 }, (_, index) => index + 1));
     const host = await WsConn.connect(relayUrl, {
       transport: "python",

@@ -11,12 +11,31 @@
 import { z } from "zod";
 import { b64decode, b64encode, stableStringify, utf8 } from "./crypto";
 import { ed25519 } from "@noble/curves/ed25519";
+import { sha256 } from "@noble/hashes/sha2";
 
 /** IDs are opaque protocol values, but an empty/whitespace-only ID is never valid. */
-export const MeshIdSchema = z.string().refine((value) => value.trim().length > 0, {
+export const MeshIdSchema = z.string().max(256).refine((value) => value.trim().length > 0, {
   message: "must not be empty",
 });
 export type MeshId = z.infer<typeof MeshIdSchema>;
+
+const TYPED_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]*$/;
+
+function typedId(max: number, name: string): z.ZodString {
+  return z.string().min(1).max(max).regex(TYPED_ID_PATTERN, `${name} has invalid characters`);
+}
+
+/** Resource identifiers are data, not credentials, and remain visible end-to-end. */
+export const MeshTaskIdSchema = typedId(256, "taskId");
+export const MeshNodeIdSchema = typedId(128, "nodeId");
+export const MeshResourceIdSchema = typedId(256, "resourceId");
+export const MeshGroupIdSchema = typedId(128, "groupId");
+export const MeshRunnerIdSchema = typedId(128, "runnerId");
+export const MeshThreadIdSchema = typedId(256, "threadId");
+export const MeshRequestIdSchema = typedId(160, "requestId");
+export const MeshOperationIdSchema = typedId(160, "operationId");
+export const MeshIdempotencyKeySchema = typedId(160, "idempotencyKey");
+export const MeshArtifactIdSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/, "artifactId must be sha256:<hex>");
 
 /** ISO-8601 timestamps with an explicit timezone, represented as strings on the wire. */
 export const MeshTimestampSchema = z.string().datetime({ offset: true });
@@ -64,47 +83,73 @@ export type MeshScope = z.infer<typeof MeshScopeSchema>;
 
 /** Scope for the typed process runner. No cwd, executable, env, or shell field is accepted. */
 export const MeshRunScopeSchema = z.object({
-  runnerId: MeshIdSchema,
+  runnerId: MeshRunnerIdSchema,
   args: z.array(z.string().max(4096)).max(64).default([]),
   input: z.string().max(1_048_576).optional(),
   timeoutMs: z.number().int().min(1_000).max(24 * 60 * 60_000).optional(),
+  /** Selects an immutable structured input manifest carried by the task envelope. */
+  baseArtifactId: MeshArtifactIdSchema.optional(),
 }).strict();
 export type MeshRunScope = z.infer<typeof MeshRunScopeSchema>;
 
+export const MeshWorkspaceCapabilitySchema = z.enum([
+  "structured-artifact-input",
+  "task-scoped-workspace",
+  "changed-file-manifest",
+  "read-only-status",
+]);
+export type MeshWorkspaceCapability = z.infer<typeof MeshWorkspaceCapabilitySchema>;
+
+export const MeshRunnerMetadataSchema = z.object({
+  runnerId: MeshRunnerIdSchema,
+  title: z.string().min(1).max(128),
+  purpose: z.enum(["task", "status"]),
+  inputSchema: MeshJsonValueSchema,
+  resultSchema: MeshJsonValueSchema,
+  approvalRequired: z.boolean(),
+  maxRuntimeMs: z.number().int().min(1_000).max(24 * 60 * 60_000),
+  workspaceCapabilities: z.array(MeshWorkspaceCapabilitySchema).max(8),
+}).strict();
+export type MeshRunnerMetadata = z.infer<typeof MeshRunnerMetadataSchema>;
+
 /** A resource is identified by an opaque ID; rootHint is display metadata, not a secret. */
 export const MeshResourceSchema = z.object({
-  id: MeshIdSchema,
-  ownerNodeId: MeshIdSchema,
+  id: MeshResourceIdSchema,
+  ownerNodeId: MeshNodeIdSchema,
   kind: MeshResourceKindSchema,
   displayName: MeshIdSchema,
   rootHint: z.string(),
   capabilities: z.array(MeshOperationSchema).optional(),
+  allowedOperations: z.array(MeshOperationSchema).max(16).optional(),
+  allowedGroupIds: z.array(MeshGroupIdSchema).max(32).optional(),
+  defaultGroupId: MeshGroupIdSchema.optional(),
   /** Stable names only; executable paths never cross the channel. */
-  runnerIds: z.array(MeshIdSchema).max(64).optional(),
+  runnerIds: z.array(MeshRunnerIdSchema).max(64).optional(),
+  runners: z.array(MeshRunnerMetadataSchema).max(64).optional(),
   /** Optional owner-configured, read-only status probe. */
-  statusRunnerId: MeshIdSchema.optional(),
-});
+  statusRunnerId: MeshRunnerIdSchema.optional(),
+}).strict();
 export type MeshResource = z.infer<typeof MeshResourceSchema>;
 
 export const MeshTaskRequestSchema = z.object({
-  groupId: MeshIdSchema,
-  taskId: MeshIdSchema,
-  requesterNodeId: MeshIdSchema,
-  targetNodeId: MeshIdSchema,
-  resourceId: MeshIdSchema,
+  groupId: MeshGroupIdSchema,
+  taskId: MeshTaskIdSchema,
+  requesterNodeId: MeshNodeIdSchema,
+  targetNodeId: MeshNodeIdSchema,
+  resourceId: MeshResourceIdSchema,
   operation: MeshOperationSchema,
   scope: MeshScopeSchema.optional(),
-});
+}).strict();
 export type MeshTaskRequest = z.infer<typeof MeshTaskRequestSchema>;
 
 export const MeshCapabilityGrantSchema = z
   .object({
-    groupId: MeshIdSchema,
-    taskId: MeshIdSchema,
+    groupId: MeshGroupIdSchema,
+    taskId: MeshTaskIdSchema,
     grantId: MeshIdSchema,
-    subjectNodeId: MeshIdSchema,
-    targetNodeId: MeshIdSchema,
-    resourceId: MeshIdSchema,
+    subjectNodeId: MeshNodeIdSchema,
+    targetNodeId: MeshNodeIdSchema,
+    resourceId: MeshResourceIdSchema,
     operation: MeshOperationSchema,
     scope: MeshScopeSchema,
     issuedAt: MeshTimestampSchema,
@@ -138,7 +183,7 @@ export type MeshApprovalDecision = z.infer<typeof MeshApprovalDecisionSchema>;
 export const MeshApprovalSchema = z.object({
   approvalId: MeshIdSchema,
   grantId: MeshIdSchema,
-  approverNodeId: MeshIdSchema,
+  approverNodeId: MeshNodeIdSchema,
   approverPublicKey: MeshIdSchema,
   decision: MeshApprovalDecisionSchema,
   summary: z.string(),
@@ -151,11 +196,11 @@ export const MeshAuditDecisionSchema = z.enum(["allow", "deny", "approval-requir
 export type MeshAuditDecision = z.infer<typeof MeshAuditDecisionSchema>;
 
 export const MeshAuditEventSchema = z.object({
-  groupId: MeshIdSchema,
+  groupId: MeshGroupIdSchema,
   eventId: MeshIdSchema,
-  taskId: MeshIdSchema,
-  actorNodeId: MeshIdSchema,
-  targetNodeId: MeshIdSchema,
+  taskId: MeshTaskIdSchema,
+  actorNodeId: MeshNodeIdSchema,
+  targetNodeId: MeshNodeIdSchema,
   operation: MeshOperationSchema,
   decision: MeshAuditDecisionSchema,
   reason: z.string(),
@@ -173,16 +218,16 @@ export type MeshResourcePayload = z.infer<typeof MeshResourcePayloadSchema>;
 
 export const MeshResourceListRequestPayloadSchema = z.object({
   kind: z.literal("mesh-resource-list-request"),
-  requestId: MeshIdSchema,
-});
+  requestId: MeshRequestIdSchema,
+}).strict();
 export type MeshResourceListRequestPayload = z.infer<typeof MeshResourceListRequestPayloadSchema>;
 
 export const MeshResourceListPayloadSchema = z.object({
   kind: z.literal("mesh-resource-list"),
-  requestId: MeshIdSchema,
-  nodeId: MeshIdSchema,
+  requestId: MeshRequestIdSchema,
+  nodeId: MeshNodeIdSchema,
   resources: z.array(MeshResourceSchema).max(256),
-});
+}).strict();
 export type MeshResourceListPayload = z.infer<typeof MeshResourceListPayloadSchema>;
 
 export const MeshGpuDeviceStatusSchema = z.object({
@@ -196,6 +241,27 @@ export const MeshGpuDeviceStatusSchema = z.object({
 }).strict();
 export type MeshGpuDeviceStatus = z.infer<typeof MeshGpuDeviceStatusSchema>;
 
+export const MeshDeadlineStageSchema = z.enum([
+  "controller",
+  "relay",
+  "peer",
+  "watcher",
+  "app-server",
+]);
+export type MeshDeadlineStage = z.infer<typeof MeshDeadlineStageSchema>;
+
+export const MeshWorkspaceStatusSchema = z.object({
+  connectionStatus: z.enum(["online", "offline", "degraded"]),
+  watcherAvailable: z.boolean(),
+  codexAppServerAvailable: z.boolean(),
+  activeJobs: z.number().int().nonnegative().max(10_000),
+  workspaceRevision: z.string().max(256).nullable(),
+  lastSuccess: MeshTimestampSchema.nullable(),
+  lastErrorStage: MeshDeadlineStageSchema.nullable(),
+  checkedAt: MeshTimestampSchema,
+}).strict();
+export type MeshWorkspaceStatus = z.infer<typeof MeshWorkspaceStatusSchema>;
+
 export const MeshResourceStatusSchema = z.object({
   state: z.enum(["ready", "degraded", "error", "unknown"]),
   summary: z.string().max(512),
@@ -204,31 +270,101 @@ export const MeshResourceStatusSchema = z.object({
   gpu: z.object({
     devices: z.array(MeshGpuDeviceStatusSchema).max(64),
   }).strict().optional(),
+  workspace: MeshWorkspaceStatusSchema.optional(),
 }).strict();
 export type MeshResourceStatus = z.infer<typeof MeshResourceStatusSchema>;
 
 export const MeshResourceStatusRequestPayloadSchema = z.object({
   kind: z.literal("mesh-resource-status-request"),
-  requestId: MeshIdSchema,
-  resourceId: MeshIdSchema,
-});
+  requestId: MeshRequestIdSchema,
+  resourceId: MeshResourceIdSchema,
+}).strict();
 export type MeshResourceStatusRequestPayload = z.infer<typeof MeshResourceStatusRequestPayloadSchema>;
 
 export const MeshResourceStatusPayloadSchema = z.object({
   kind: z.literal("mesh-resource-status"),
-  requestId: MeshIdSchema,
-  nodeId: MeshIdSchema,
-  resourceId: MeshIdSchema,
+  requestId: MeshRequestIdSchema,
+  nodeId: MeshNodeIdSchema,
+  resourceId: MeshResourceIdSchema,
   status: MeshResourceStatusSchema,
-});
+}).strict();
 export type MeshResourceStatusPayload = z.infer<typeof MeshResourceStatusPayloadSchema>;
+
+const MAX_ARTIFACT_FILES = 256;
+const MAX_ARTIFACT_FILE_BASE64_CHARS = 1_398_104;
+
+function isRelativePosixArtifactPath(value: string): boolean {
+  if (!value || value.length > 512 || value.includes("\0") || value.includes("\\")) return false;
+  if (value.startsWith("/") || /^[A-Za-z]:/.test(value)) return false;
+  const segments = value.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+export const MeshArtifactPathSchema = z.string().refine(
+  isRelativePosixArtifactPath,
+  "artifact path must be a relative canonical POSIX path",
+);
+
+export const MeshArtifactFileSchema = z.object({
+  type: z.literal("file"),
+  path: MeshArtifactPathSchema,
+  mode: z.number().int().min(0).max(0o777),
+  size: z.number().int().nonnegative().max(1_048_576),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  contentBase64: z.string().max(MAX_ARTIFACT_FILE_BASE64_CHARS),
+}).strict();
+export type MeshArtifactFile = z.infer<typeof MeshArtifactFileSchema>;
+
+export const MeshBaseArtifactManifestSchema = z.object({
+  version: z.literal(1),
+  kind: z.literal("base"),
+  artifactId: MeshArtifactIdSchema,
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  files: z.array(MeshArtifactFileSchema).max(MAX_ARTIFACT_FILES),
+}).strict();
+export type MeshBaseArtifactManifest = z.infer<typeof MeshBaseArtifactManifestSchema>;
+
+export const MeshResultArtifactManifestSchema = z.object({
+  version: z.literal(1),
+  kind: z.literal("result"),
+  artifactId: MeshArtifactIdSchema,
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  baseArtifactId: MeshArtifactIdSchema,
+  taskId: MeshTaskIdSchema,
+  changed: z.array(MeshArtifactFileSchema).max(MAX_ARTIFACT_FILES),
+  deleted: z.array(MeshArtifactPathSchema).max(MAX_ARTIFACT_FILES),
+}).strict();
+export type MeshResultArtifactManifest = z.infer<typeof MeshResultArtifactManifestSchema>;
+
+export function meshArtifactSha256(
+  manifest: Pick<MeshBaseArtifactManifest, "version" | "kind" | "files">
+    | Pick<MeshResultArtifactManifest, "version" | "kind" | "baseArtifactId" | "taskId" | "changed" | "deleted">,
+): string {
+  const identity = manifest.kind === "base"
+    ? { version: manifest.version, kind: manifest.kind, files: manifest.files }
+    : {
+        version: manifest.version,
+        kind: manifest.kind,
+        baseArtifactId: manifest.baseArtifactId,
+        taskId: manifest.taskId,
+        changed: manifest.changed,
+        deleted: manifest.deleted,
+      };
+  const bytes = sha256(utf8(stableStringify(identity)));
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export function meshArtifactId(manifest: Parameters<typeof meshArtifactSha256>[0]): string {
+  return `sha256:${meshArtifactSha256(manifest)}`;
+}
 
 export const MeshTaskRequestPayloadSchema = z.object({
   kind: z.literal("mesh-task-request"),
   task: MeshTaskRequestSchema,
+  baseArtifact: MeshBaseArtifactManifestSchema.optional(),
   grant: MeshCapabilityGrantSchema.optional(),
   approval: MeshApprovalSchema.optional(),
-});
+}).strict();
 export type MeshTaskRequestPayload = z.infer<typeof MeshTaskRequestPayloadSchema>;
 
 export const MeshCapabilityGrantPayloadSchema = z.object({
@@ -256,9 +392,9 @@ export type MeshTaskResultStatus = z.infer<typeof MeshTaskResultStatusSchema>;
 
 export const MeshTaskResultPayloadSchema = z.object({
   kind: z.literal("mesh-task-result"),
-  groupId: MeshIdSchema,
-  taskId: MeshIdSchema,
-  targetNodeId: MeshIdSchema,
+  groupId: MeshGroupIdSchema,
+  taskId: MeshTaskIdSchema,
+  targetNodeId: MeshNodeIdSchema,
   operation: MeshOperationSchema,
   status: MeshTaskResultStatusSchema,
   decision: MeshAuditDecisionSchema,
@@ -282,8 +418,8 @@ export type MeshTaskExecutionStatus = z.infer<typeof MeshTaskExecutionStatusSche
 
 export const MeshTaskProgressPayloadSchema = z.object({
   kind: z.literal("mesh-task-progress"),
-  taskId: MeshIdSchema,
-  targetNodeId: MeshIdSchema,
+  taskId: MeshTaskIdSchema,
+  targetNodeId: MeshNodeIdSchema,
   status: MeshTaskExecutionStatusSchema,
   message: z.string(),
   updatedAt: MeshTimestampSchema,
@@ -292,18 +428,18 @@ export type MeshTaskProgressPayload = z.infer<typeof MeshTaskProgressPayloadSche
 
 export const MeshTaskStatusRequestPayloadSchema = z.object({
   kind: z.literal("mesh-task-status-request"),
-  requestId: MeshIdSchema,
-  requesterNodeId: MeshIdSchema,
-  targetNodeId: MeshIdSchema,
-  taskId: MeshIdSchema,
+  requestId: MeshRequestIdSchema,
+  requesterNodeId: MeshNodeIdSchema,
+  targetNodeId: MeshNodeIdSchema,
+  taskId: MeshTaskIdSchema,
 }).strict();
 export type MeshTaskStatusRequestPayload = z.infer<typeof MeshTaskStatusRequestPayloadSchema>;
 
 export const MeshTaskStatusPayloadSchema = z.object({
   kind: z.literal("mesh-task-status"),
-  requestId: MeshIdSchema,
-  targetNodeId: MeshIdSchema,
-  taskId: MeshIdSchema,
+  requestId: MeshRequestIdSchema,
+  targetNodeId: MeshNodeIdSchema,
+  taskId: MeshTaskIdSchema,
   known: z.boolean(),
   status: MeshTaskExecutionStatusSchema,
   message: z.string().optional(),
@@ -314,24 +450,43 @@ export type MeshTaskStatusPayload = z.infer<typeof MeshTaskStatusPayloadSchema>;
 
 export const MeshTaskCancelRequestPayloadSchema = z.object({
   kind: z.literal("mesh-task-cancel-request"),
-  requestId: MeshIdSchema,
-  requesterNodeId: MeshIdSchema,
-  targetNodeId: MeshIdSchema,
-  taskId: MeshIdSchema,
+  requestId: MeshRequestIdSchema,
+  requesterNodeId: MeshNodeIdSchema,
+  targetNodeId: MeshNodeIdSchema,
+  taskId: MeshTaskIdSchema,
 }).strict();
 export type MeshTaskCancelRequestPayload = z.infer<typeof MeshTaskCancelRequestPayloadSchema>;
 
 export const MeshTaskCancelledPayloadSchema = z.object({
   kind: z.literal("mesh-task-cancelled"),
-  requestId: MeshIdSchema,
-  targetNodeId: MeshIdSchema,
-  taskId: MeshIdSchema,
+  requestId: MeshRequestIdSchema,
+  targetNodeId: MeshNodeIdSchema,
+  taskId: MeshTaskIdSchema,
   accepted: z.boolean(),
   status: MeshTaskExecutionStatusSchema,
   message: z.string(),
   updatedAt: MeshTimestampSchema,
 }).strict();
 export type MeshTaskCancelledPayload = z.infer<typeof MeshTaskCancelledPayloadSchema>;
+
+export const MeshArtifactRequestPayloadSchema = z.object({
+  kind: z.literal("mesh-artifact-request"),
+  requestId: MeshRequestIdSchema,
+  requesterNodeId: MeshNodeIdSchema,
+  targetNodeId: MeshNodeIdSchema,
+  taskId: MeshTaskIdSchema,
+  artifactId: MeshArtifactIdSchema,
+}).strict();
+export type MeshArtifactRequestPayload = z.infer<typeof MeshArtifactRequestPayloadSchema>;
+
+export const MeshArtifactPayloadSchema = z.object({
+  kind: z.literal("mesh-artifact"),
+  requestId: MeshRequestIdSchema,
+  targetNodeId: MeshNodeIdSchema,
+  taskId: MeshTaskIdSchema,
+  manifest: MeshResultArtifactManifestSchema,
+}).strict();
+export type MeshArtifactPayload = z.infer<typeof MeshArtifactPayloadSchema>;
 
 export const MeshPayloadSchema = z.discriminatedUnion("kind", [
   MeshResourcePayloadSchema,
@@ -349,6 +504,8 @@ export const MeshPayloadSchema = z.discriminatedUnion("kind", [
   MeshTaskStatusPayloadSchema,
   MeshTaskCancelRequestPayloadSchema,
   MeshTaskCancelledPayloadSchema,
+  MeshArtifactRequestPayloadSchema,
+  MeshArtifactPayloadSchema,
 ]);
 export type MeshPayload = z.infer<typeof MeshPayloadSchema>;
 

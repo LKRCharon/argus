@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   BusinessPayloadSchema,
   MeshApprovalPayloadSchema,
+  MeshArtifactPayloadSchema,
+  MeshArtifactRequestPayloadSchema,
   MeshAuditEventPayloadSchema,
   MeshCapabilityGrantSchema,
   MeshPayloadSchema,
@@ -20,6 +23,7 @@ import {
   MeshTaskStatusRequestPayloadSchema,
   generateMeshSigningKeyPair,
   isMeshCapabilityGrantExpired,
+  meshArtifactSha256,
   signMeshCapabilityGrant,
   verifyMeshCapabilityGrant,
 } from "../src";
@@ -149,6 +153,44 @@ const taskCancelled = {
   updatedAt: issuedAt,
 };
 
+const artifactContent = Buffer.from("changed source\n", "utf8");
+const artifactIdentity = {
+  version: 1 as const,
+  kind: "result" as const,
+  baseArtifactId: `sha256:${"b".repeat(64)}`,
+  taskId: task.taskId,
+  changed: [{
+    type: "file" as const,
+    path: "src/solution.ts",
+    mode: 0o644,
+    size: artifactContent.byteLength,
+    sha256: createHash("sha256").update(artifactContent).digest("hex"),
+    contentBase64: artifactContent.toString("base64"),
+  }],
+  deleted: ["src/old.ts"],
+};
+const artifactSha256 = meshArtifactSha256(artifactIdentity);
+const resultArtifact = {
+  ...artifactIdentity,
+  artifactId: `sha256:${artifactSha256}`,
+  sha256: artifactSha256,
+};
+const artifactRequest = {
+  kind: "mesh-artifact-request" as const,
+  requestId: "artifact-request-001",
+  requesterNodeId: task.requesterNodeId,
+  targetNodeId: task.targetNodeId,
+  taskId: task.taskId,
+  artifactId: resultArtifact.artifactId,
+};
+const artifactPayload = {
+  kind: "mesh-artifact" as const,
+  requestId: artifactRequest.requestId,
+  targetNodeId: task.targetNodeId,
+  taskId: task.taskId,
+  manifest: resultArtifact,
+};
+
 const resourceStatus = {
   state: "ready" as const,
   summary: "2 个 GPU · 12% · 2048/92136 MiB",
@@ -203,6 +245,8 @@ describe("Mesh wire schema", () => {
       taskStatus,
       taskCancelRequest,
       taskCancelled,
+      artifactRequest,
+      artifactPayload,
     ];
 
     for (const payload of payloads) {
@@ -258,6 +302,8 @@ describe("Mesh wire schema", () => {
     expect(MeshTaskStatusPayloadSchema.parse(jsonRoundTrip(taskStatus))).toEqual(taskStatus);
     expect(MeshTaskCancelRequestPayloadSchema.parse(jsonRoundTrip(taskCancelRequest))).toEqual(taskCancelRequest);
     expect(MeshTaskCancelledPayloadSchema.parse(jsonRoundTrip(taskCancelled))).toEqual(taskCancelled);
+    expect(MeshArtifactRequestPayloadSchema.parse(jsonRoundTrip(artifactRequest))).toEqual(artifactRequest);
+    expect(MeshArtifactPayloadSchema.parse(jsonRoundTrip(artifactPayload))).toEqual(artifactPayload);
   });
 
   test("durable task payloads use the fixed status vocabulary and reject unknown fields", () => {
@@ -286,9 +332,13 @@ describe("Mesh wire schema", () => {
     expect(MeshCapabilityGrantSchema.safeParse(invalidGrant).success).toBe(false);
   });
 
-  test("rejects an empty identifier", () => {
+  test("rejects an empty or oversized identifier", () => {
     expect(MeshResourcePayloadSchema.safeParse({ kind: "mesh-resource", resource: { ...resource, id: "" } }).success).toBe(false);
     expect(MeshTaskRequestPayloadSchema.safeParse({ kind: "mesh-task-request", task: { ...task, taskId: "   " } }).success).toBe(false);
+    expect(MeshTaskRequestPayloadSchema.safeParse({
+      kind: "mesh-task-request",
+      task: { ...task, taskId: "x".repeat(257) },
+    }).success).toBe(false);
   });
 
   test("rejects an expiry that is not later than issuedAt and detects an expired grant", () => {

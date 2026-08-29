@@ -99,6 +99,13 @@ export function runMeshStatus(args: string[]): void {
     })) ?? [],
     tasks,
     legacyControl: config?.legacyControl ?? false,
+    remoteCodexControl: config?.remoteCodexControl ?? false,
+    unattendedRuns: config?.unattendedRuns ? {
+      groupIds: config.unattendedRuns.groupIds,
+      requesterNodeIds: config.unattendedRuns.requesterNodeIds,
+      resourceIds: config.unattendedRuns.resourceIds,
+      runnerIds: config.unattendedRuns.runnerIds,
+    } : undefined,
   };
   output(status, args.includes("--json"));
 }

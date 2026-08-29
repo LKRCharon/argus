@@ -9,17 +9,22 @@
  * `canAcceptDirectInput: true`.
  *
  * Codex's own `remote-control` needs a server-side eligibility flag that most
- * accounts do not have yet. `app-server --listen ws://` needs nothing, which is
- * why Argus drives it directly.
+ * accounts do not have yet. Argus owns one private JSONL-over-stdio child, so
+ * it never connects to or terminates an app-server owned by the desktop app.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 /** Where the Codex desktop app keeps its bundled binary. */
 const APP_BUNDLED = "/Applications/ChatGPT.app/Contents/Resources/codex";
+const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
+const DEFAULT_LATE_RESULT_GRACE_MS = 30_000;
+const DEFAULT_SHUTDOWN_GRACE_MS = 500;
+const MAX_STDOUT_FRAME_BYTES = 16 * 1024 * 1024;
 
 function isMicrosoftStorePath(candidate: string): boolean {
   return process.platform === "win32" && candidate.toLowerCase().includes("\\windowsapps\\");
@@ -82,7 +87,17 @@ type Pending = {
   resolve: (v: any) => void;
   reject: (e: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  timedOut: boolean;
+  onLateResult?: (value: any) => void;
 };
+
+export interface CodexAppServerOptions {
+  /** Test injection. Production always spawns the resolved Codex binary. */
+  spawnProcess?: () => ChildProcessWithoutNullStreams;
+  startupTimeoutMs?: number;
+  lateResultGraceMs?: number;
+  shutdownGraceMs?: number;
+}
 
 /**
  * Pull the spawn details out of a thread's `source`.
@@ -170,18 +185,25 @@ function flattenTurns(turns: any[]): Record<string, unknown>[] {
 }
 
 export class CodexAppServer {
-  private proc: ChildProcess | null = null;
-  private ws: WebSocket | null = null;
+  private proc: ChildProcessWithoutNullStreams | null = null;
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private ready: Promise<void> | null = null;
+  private stopping: Promise<void> | null = null;
+  private readonly startupTimeoutMs: number;
+  private readonly lateResultGraceMs: number;
+  private readonly shutdownGraceMs: number;
 
   /** Notifications from the server (thread/*, item/*, turn/*, …). */
   onNotification: ((method: string, params: any) => void) | null = null;
   /** Server-initiated requests — approvals arrive here and must be answered. */
   onServerRequest: ((id: number | string, method: string, params: any) => void) | null = null;
 
-  constructor(private port = 9099) {}
+  constructor(private readonly options: CodexAppServerOptions = {}) {
+    this.startupTimeoutMs = boundedMs(options.startupTimeoutMs, DEFAULT_STARTUP_TIMEOUT_MS);
+    this.lateResultGraceMs = boundedMs(options.lateResultGraceMs, DEFAULT_LATE_RESULT_GRACE_MS);
+    this.shutdownGraceMs = boundedMs(options.shutdownGraceMs, DEFAULT_SHUTDOWN_GRACE_MS);
+  }
 
   /**
    * Codex binary to drive.
@@ -209,83 +231,120 @@ export class CodexAppServer {
   /** Spawn app-server (if needed) and complete the JSON-RPC handshake. */
   async start(): Promise<void> {
     if (this.ready) return this.ready;
-    this.ready = (async () => {
-      const bin = CodexAppServer.binaryPath();
-      if (!bin) {
-        throw new Error(
-          "未找到可执行的 codex（设置 CODEX_BIN 指向原生可执行文件或将 codex 加入 PATH）",
-        );
-      }
-
-      // Reuse an already-listening server rather than fighting it for the port:
-      // the desktop app may have one up, and two servers on one port is a
-      // startup failure, not a fallback.
-      if (!(await this.probe())) {
-        this.proc = spawn(bin, ["app-server", "--listen", `ws://127.0.0.1:${this.port}`], {
-          stdio: "ignore",
-          detached: true,
-        });
-        this.proc.unref();
-        for (let i = 0; i < 40 && !(await this.probe()); i++) {
-          await new Promise((r) => setTimeout(r, 250));
-        }
-        if (!(await this.probe())) throw new Error("app-server 启动超时");
-      }
-
-      await this.connect();
-      await this.call("initialize", {
-        clientInfo: { name: "argus", title: "Argus", version: "0.1.0" },
-      });
-      // The app-server handshake is two-step. Older builds accepted calls
-      // without this acknowledgement, but current builds document it as
-      // required and it keeps this WebSocket client in parity with codex.ts.
-      this.notify("initialized");
-    })();
-    return this.ready;
-  }
-
-  /** `/healthz` answers before the socket accepts JSON-RPC, so poll it. */
-  private async probe(): Promise<boolean> {
+    const attempt = this.startAttempt();
+    this.ready = attempt;
     try {
-      const r = await fetch(`http://127.0.0.1:${this.port}/healthz`, {
-        signal: AbortSignal.timeout(1000),
-      });
-      return r.ok;
-    } catch {
-      return false;
+      await attempt;
+    } catch (error) {
+      if (this.ready === attempt) this.ready = null;
+      throw error;
     }
   }
 
-  private connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${this.port}`);
-      this.ws = ws;
-      ws.onopen = () => resolve();
-      ws.onerror = () => reject(new Error("app-server WebSocket 连接失败"));
-      ws.onclose = () => {
-        this.ws = null;
-        this.ready = null;
-        // Fail everything in flight: a reconnect gets fresh request ids, so a
-        // pending entry here would never be answered.
-        for (const [, p] of this.pending) {
-          clearTimeout(p.timer);
-          p.reject(new Error("app-server 连接已断开"));
-        }
-        this.pending.clear();
-      };
-      ws.onmessage = (ev) => this.dispatch(String(ev.data));
+  private async startAttempt(): Promise<void> {
+    if (this.stopping) await this.stopping;
+    const proc = this.spawnOwnedProcess();
+    this.proc = proc;
+    this.attachProcess(proc);
+    const deadline = Date.now() + this.startupTimeoutMs;
+    try {
+      await this.waitForSpawn(proc, Math.max(1, deadline - Date.now()));
+      if (this.proc !== proc) throw new Error("app-server 在初始化前退出");
+      await this.call("initialize", {
+        clientInfo: { name: "argus", title: "Argus", version: "0.1.0" },
+      }, Math.max(1, deadline - Date.now()));
+      this.notify("initialized");
+    } catch (error) {
+      if (this.proc === proc) this.proc = null;
+      this.rejectPending(new Error("app-server 初始化失败"));
+      await this.terminateProcess(proc);
+      throw error instanceof Error ? error : new Error("app-server 初始化失败");
+    }
+  }
+
+  private spawnOwnedProcess(): ChildProcessWithoutNullStreams {
+    if (this.options.spawnProcess) return this.options.spawnProcess();
+    const bin = CodexAppServer.binaryPath();
+    if (!bin) throw new Error("未找到 codex 可执行文件（设置 CODEX_BIN 或将 codex 加入 PATH）");
+    return spawn(bin, ["app-server", "--listen", "stdio://"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: false,
     });
   }
 
-  private dispatch(raw: string): void {
+  private attachProcess(proc: ChildProcessWithoutNullStreams): void {
+    const decoder = new StringDecoder("utf8");
+    let buffer = "";
+    proc.stdout.on("data", (chunk: Buffer) => {
+      if (this.proc !== proc) return;
+      buffer += decoder.write(chunk);
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (Buffer.byteLength(line, "utf8") > MAX_STDOUT_FRAME_BYTES) {
+          this.failOwnedProcess(proc, new Error("app-server JSON-RPC frame 超过上限"));
+          return;
+        }
+        if (line) this.dispatch(proc, line);
+      }
+      if (Buffer.byteLength(buffer, "utf8") > MAX_STDOUT_FRAME_BYTES) {
+        this.failOwnedProcess(proc, new Error("app-server JSON-RPC frame 超过上限"));
+      }
+    });
+    // An unread stderr pipe can fill and deadlock the child. Diagnostics stay
+    // target-local and are deliberately not forwarded to the controller.
+    proc.stderr.on("data", () => {});
+    proc.once("error", () => {
+      this.failOwnedProcess(proc, new Error("app-server 子进程启动失败"));
+    });
+    proc.once("exit", (code, signal) => {
+      const detail = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
+      this.handleProcessEnd(proc, new Error(`app-server 子进程已退出（${detail}）`));
+    });
+  }
+
+  private waitForSpawn(proc: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const cleanup = () => {
+        clearTimeout(timer);
+        proc.off("spawn", onSpawn);
+        proc.off("error", onError);
+      };
+      const onSpawn = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error("app-server 子进程启动失败"));
+      };
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("app-server 启动超时"));
+      }, timeoutMs);
+      proc.once("spawn", onSpawn);
+      proc.once("error", onError);
+    });
+  }
+
+  private dispatch(proc: ChildProcessWithoutNullStreams, raw: string): void {
+    if (this.proc !== proc) return;
     let msg: any;
     try { msg = JSON.parse(raw); } catch { return; }
 
-    if (typeof msg.id !== "undefined" && (msg.result !== undefined || msg.error !== undefined)) {
+    if (typeof msg.id !== "undefined" && !msg.method) {
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
       clearTimeout(p.timer);
+      if (p.timedOut) {
+        if (!msg.error) {
+          try { p.onLateResult?.(msg.result); } catch {}
+        }
+        return;
+      }
       if (msg.error) p.reject(new Error(msg.error.message ?? "app-server 错误"));
       else p.resolve(msg.result);
       return;
@@ -298,34 +357,117 @@ export class CodexAppServer {
     if (msg.method) this.onNotification?.(msg.method, msg.params);
   }
 
-  call<T = any>(method: string, params: unknown = {}, timeoutMs = 30_000): Promise<T> {
-    const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+  call<T = any>(
+    method: string,
+    params: unknown = {},
+    timeoutMs = 30_000,
+    onLateResult?: (value: T) => void,
+  ): Promise<T> {
+    const proc = this.proc;
+    if (!proc || proc.stdin.destroyed || !proc.stdin.writable) {
       return Promise.reject(new Error("app-server 未连接"));
     }
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
+      const pending: Pending = {
+        resolve,
+        reject,
+        timer: undefined as unknown as ReturnType<typeof setTimeout>,
+        timedOut: false,
+        onLateResult,
+      };
       const timer = setTimeout(() => {
-        this.pending.delete(id);
+        if (onLateResult) {
+          pending.timedOut = true;
+          pending.timer = setTimeout(() => {
+            if (this.pending.get(id) === pending) this.pending.delete(id);
+          }, this.lateResultGraceMs);
+        } else {
+          this.pending.delete(id);
+        }
         reject(new Error(`${method} 超时`));
-      }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-      ws.send(JSON.stringify({ id, method, params }));
+      }, boundedMs(timeoutMs, 30_000));
+      pending.timer = timer;
+      this.pending.set(id, pending);
+      try {
+        this.writeFrame(proc, { jsonrpc: "2.0", id, method, params });
+      } catch (error) {
+        clearTimeout(pending.timer);
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error("app-server 写入失败"));
+      }
     });
   }
 
   /** Send a JSON-RPC notification; notifications deliberately have no id. */
   private notify(method: string, params?: unknown): void {
-    const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      throw new Error("app-server 未连接");
-    }
-    ws.send(JSON.stringify(params === undefined ? { method } : { method, params }));
+    const proc = this.proc;
+    if (!proc) throw new Error("app-server 未连接");
+    this.writeFrame(proc, params === undefined
+      ? { jsonrpc: "2.0", method }
+      : { jsonrpc: "2.0", method, params });
   }
 
   /** Answer a server-initiated request (this is how approvals get resolved). */
   respond(id: number | string, result: unknown): void {
-    this.ws?.send(JSON.stringify({ id, result }));
+    const proc = this.proc;
+    if (!proc) throw new Error("app-server 未连接");
+    this.writeFrame(proc, { jsonrpc: "2.0", id, result });
+  }
+
+  private writeFrame(proc: ChildProcessWithoutNullStreams, value: unknown): void {
+    if (this.proc !== proc || proc.stdin.destroyed || !proc.stdin.writable) {
+      throw new Error("app-server 未连接");
+    }
+    const frame = `${JSON.stringify(value)}\n`;
+    try {
+      proc.stdin.write(frame, "utf8", (error) => {
+        if (error) this.failOwnedProcess(proc, new Error("app-server stdin 写入失败"));
+      });
+    } catch {
+      this.failOwnedProcess(proc, new Error("app-server stdin 写入失败"));
+      throw new Error("app-server 写入失败");
+    }
+  }
+
+  private failOwnedProcess(proc: ChildProcessWithoutNullStreams, error: Error): void {
+    if (this.proc !== proc) return;
+    this.handleProcessEnd(proc, error);
+    this.beginTermination(proc);
+  }
+
+  private handleProcessEnd(proc: ChildProcessWithoutNullStreams, error: Error): void {
+    if (this.proc !== proc) return;
+    this.proc = null;
+    this.ready = null;
+    this.rejectPending(error);
+  }
+
+  private rejectPending(error: Error): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      if (!pending.timedOut) pending.reject(error);
+    }
+    this.pending.clear();
+  }
+
+  private beginTermination(proc: ChildProcessWithoutNullStreams): void {
+    if (this.stopping) return;
+    const stopping = this.terminateProcess(proc);
+    this.stopping = stopping;
+    void stopping.then(() => {
+      if (this.stopping === stopping) this.stopping = null;
+    });
+  }
+
+  private async terminateProcess(proc: ChildProcessWithoutNullStreams): Promise<void> {
+    if (hasExited(proc)) return;
+    try { proc.stdin.end(); } catch {}
+    if (await waitForExit(proc, this.shutdownGraceMs)) return;
+    try { proc.kill("SIGTERM"); } catch {}
+    if (await waitForExit(proc, this.shutdownGraceMs)) return;
+    try { proc.kill("SIGKILL"); } catch {}
+    await waitForExit(proc, this.shutdownGraceMs);
   }
 
   // ---- thread operations ----------------------------------------------------
@@ -334,7 +476,7 @@ export class CodexAppServer {
    * Every thread Codex knows about. `sourceKinds` matters: omitting it returns
    * only interactive sources, which silently hides app and exec threads.
    */
-  async listThreads(limit = 40): Promise<CodexThread[]> {
+  async listThreads(limit = 40, timeoutMs = 30_000): Promise<CodexThread[]> {
     const res = await this.call<any>("thread/list", {
       // Omitting sourceKinds returns only "interactive sources" and answers
       // with zero rows on a machine full of sessions. `vscode` is what the
@@ -347,7 +489,7 @@ export class CodexAppServer {
         "subAgentThreadSpawn", "subAgentOther",
       ],
       limit,
-    });
+    }, timeoutMs);
     const rows: any[] = res?.data ?? [];
     return rows.map((t) => {
       const spawn = describeSpawn(t.source);
@@ -377,13 +519,13 @@ export class CodexAppServer {
    * is app-server's, and teaching a second client about it would mean two places
    * to update when it changes.
    */
-  async resume(threadId: string): Promise<{
+  async resume(threadId: string, timeoutMs = 30_000): Promise<{
     canAcceptDirectInput: boolean;
     turns: any[];
     events: Record<string, unknown>[];
     cwd?: string;
   }> {
-    const res = await this.call<any>("thread/resume", { threadId });
+    const res = await this.call<any>("thread/resume", { threadId }, timeoutMs);
     const turns: any[] = res?.initialTurnsPage?.data ?? res?.thread?.turns ?? [];
     return {
       canAcceptDirectInput: res?.thread?.canAcceptDirectInput === true,
@@ -394,11 +536,11 @@ export class CodexAppServer {
   }
 
   /** Send a message, starting a new turn. */
-  async startTurn(threadId: string, text: string): Promise<string | null> {
+  async startTurn(threadId: string, text: string, timeoutMs = 30_000): Promise<string | null> {
     const res = await this.call<any>("turn/start", {
       threadId,
       input: [{ type: "text", text }],
-    });
+    }, timeoutMs);
     return res?.turnId ?? res?.turn?.id ?? null;
   }
 
@@ -406,32 +548,66 @@ export class CodexAppServer {
    * Redirect a turn that is already running. Needs the active turn id as a
    * precondition, so a stale steer cannot land on the wrong turn.
    */
-  async steerTurn(threadId: string, turnId: string, text: string): Promise<void> {
+  async steerTurn(threadId: string, turnId: string, text: string, timeoutMs = 30_000): Promise<void> {
     await this.call("turn/steer", {
       threadId,
       expectedTurnId: turnId,
       input: [{ type: "text", text }],
-    });
+    }, timeoutMs);
   }
 
-  async interruptTurn(threadId: string, turnId: string): Promise<void> {
-    await this.call("turn/interrupt", { threadId, turnId });
+  async interruptTurn(threadId: string, turnId: string, timeoutMs = 30_000): Promise<void> {
+    await this.call("turn/interrupt", { threadId, turnId }, timeoutMs);
   }
 
   /** Start a brand-new thread in `cwd`. */
-  async startThread(cwd?: string): Promise<string | null> {
-    const res = await this.call<any>("thread/start", cwd ? { cwd } : {});
+  async startThread(
+    cwd?: string,
+    timeoutMs = 30_000,
+    onLateThread?: (threadId: string) => void,
+  ): Promise<string | null> {
+    const res = await this.call<any>("thread/start", cwd ? { cwd } : {}, timeoutMs, (late) => {
+      const threadId = late?.thread?.id ?? late?.threadId;
+      if (threadId) onLateThread?.(String(threadId));
+    });
     return res?.thread?.id ?? res?.threadId ?? null;
   }
 
-  stop(): void {
-    this.ws?.close();
-    this.ws = null;
-    this.ready = null;
-    // Leave a server we did not spawn alone — the desktop app may be using it.
-    if (this.proc && !this.proc.killed) {
-      try { this.proc.kill(); } catch {}
-    }
+  async stop(): Promise<void> {
+    if (this.stopping) await this.stopping;
+    const proc = this.proc;
     this.proc = null;
+    this.ready = null;
+    this.rejectPending(new Error("app-server 已停止"));
+    if (!proc) return;
+    const stopping = this.terminateProcess(proc);
+    this.stopping = stopping;
+    await stopping;
+    if (this.stopping === stopping) this.stopping = null;
   }
+}
+
+function boundedMs(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.trunc(value));
+}
+
+function hasExited(proc: ChildProcessWithoutNullStreams): boolean {
+  return proc.exitCode !== null || proc.signalCode !== null;
+}
+
+function waitForExit(proc: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
+  if (hasExited(proc)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (exited: boolean) => {
+      clearTimeout(timer);
+      proc.off("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    timer = setTimeout(() => finish(hasExited(proc)), timeoutMs);
+    proc.once("exit", onExit);
+    if (hasExited(proc)) finish(true);
+  });
 }

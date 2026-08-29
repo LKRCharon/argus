@@ -13,20 +13,24 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
   MeshRunScopeSchema,
+  MeshBaseArtifactManifestSchema,
   MeshTaskRequestSchema,
+  MeshTaskRequestPayloadSchema,
   MeshTimestampSchema,
   stableStringify,
   type MeshTaskRequest,
+  type MeshTaskRequestPayload,
 } from "@agentlink/wire";
 import { configDir } from "../store";
 
 const FILE_VERSION = 1;
 const MAX_RECORDS = 200;
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_FILE_BYTES = 12 * 1024 * 1024;
 
 const ApprovalRecordSchema = z.object({
   version: z.literal(FILE_VERSION),
   task: MeshTaskRequestSchema,
+  baseArtifact: MeshBaseArtifactManifestSchema.optional(),
   requestDigest: z.string().length(64),
   status: z.enum(["pending", "processing"]),
   createdAt: MeshTimestampSchema,
@@ -80,10 +84,13 @@ export class MeshApprovalInbox {
       .map(toSummary);
   }
 
-  put(task: MeshTaskRequest): MeshApprovalInboxRecord {
-    const parsed = MeshTaskRequestSchema.parse(task);
-    const requestDigest = digestTask(parsed);
-    const existing = this.records.get(parsed.taskId);
+  put(input: MeshTaskRequest | MeshTaskRequestPayload): MeshApprovalInboxRecord {
+    const payload = MeshTaskRequestPayloadSchema.parse(
+      "kind" in input ? input : { kind: "mesh-task-request", task: input },
+    );
+    const task = payload.task;
+    const requestDigest = digestTask(task, payload.baseArtifact);
+    const existing = this.records.get(task.taskId);
     if (existing) {
       if (existing.requestDigest !== requestDigest) throw new Error("approval task id conflict");
       return clone(existing);
@@ -92,14 +99,15 @@ export class MeshApprovalInbox {
     const now = new Date().toISOString();
     const record: MeshApprovalInboxRecord = {
       version: FILE_VERSION,
-      task: parsed,
+      task,
+      ...(payload.baseArtifact ? { baseArtifact: payload.baseArtifact } : {}),
       requestDigest,
       status: "pending",
       createdAt: now,
       updatedAt: now,
     };
-    this.records.set(parsed.taskId, record);
-    this.persistOrRollback(parsed.taskId, undefined);
+    this.records.set(task.taskId, record);
+    this.persistOrRollback(task.taskId, undefined);
     return clone(record);
   }
 
@@ -152,7 +160,12 @@ export class MeshApprovalInbox {
     }
     const parsed = ApprovalInboxFileSchema.safeParse(value);
     if (!parsed.success) throw new Error("approval inbox is invalid; owner approval stopped safely");
-    for (const record of parsed.data.approvals) this.records.set(record.task.taskId, record);
+    for (const record of parsed.data.approvals) {
+      if (this.records.has(record.task.taskId)) {
+        throw new Error("approval inbox has duplicate task ids; owner approval stopped safely");
+      }
+      this.records.set(record.task.taskId, record);
+    }
   }
 
   private persistOrRollback(taskId: string, previous: MeshApprovalInboxRecord | undefined): void {
@@ -187,8 +200,8 @@ export class MeshApprovalInbox {
   }
 }
 
-function digestTask(task: MeshTaskRequest): string {
-  return createHash("sha256").update(stableStringify(task), "utf8").digest("hex");
+function digestTask(task: MeshTaskRequest, baseArtifact?: unknown): string {
+  return createHash("sha256").update(stableStringify({ task, baseArtifact }), "utf8").digest("hex");
 }
 
 function toSummary(record: MeshApprovalInboxRecord): HostApprovalSummary {

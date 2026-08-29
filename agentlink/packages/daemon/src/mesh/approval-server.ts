@@ -1,6 +1,16 @@
 import { existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import type { MeshApprovalInbox } from "./approval-inbox";
+import {
+  HttpRequestError,
+  assertLoopbackHostname,
+  hasJsonContentType,
+  isLoopbackRequest,
+  isSameOriginRequest,
+  readBoundedJson,
+} from "../control/http-security";
+
+const MAX_APPROVAL_REQUEST_BYTES = 16 * 1024;
 
 export type HostApprovalDecision = "allow-once" | "deny";
 
@@ -22,6 +32,7 @@ export function createHostApprovalRequestHandler(
   const distDir = resolve(options.distDir ?? process.env.ARGUS_HOST_APPROVAL_DIST ?? "packages/app/dist");
 
   return async (request) => {
+    if (!isLoopbackRequest(request)) return json({ error: "loopback host required" }, 403);
     const url = new URL(request.url);
     if (url.pathname === "/health") {
       return json({ ok: true, service: "argus-host-approval", nodeId: options.nodeId });
@@ -32,11 +43,21 @@ export function createHostApprovalRequestHandler(
 
     const taskId = decisionPathId(url.pathname);
     if (request.method === "POST" && taskId) {
-      if (!isSameOrigin(request)) return json({ error: "cross-origin decision rejected" }, 403);
-      if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+      if (!isSameOriginRequest(request)) return json({ error: "cross-origin decision rejected" }, 403);
+      if (!hasJsonContentType(request)) {
         return json({ error: "content-type must be application/json" }, 415);
       }
-      const body = await request.json() as { decision?: unknown };
+      let body: { decision?: unknown };
+      try {
+        const value = await readBoundedJson(request, MAX_APPROVAL_REQUEST_BYTES);
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw new HttpRequestError("request body must be a JSON object", 400);
+        }
+        body = value as { decision?: unknown };
+      } catch (error) {
+        const status = error instanceof HttpRequestError ? error.status : 400;
+        return json({ error: error instanceof Error ? error.message : "invalid request body" }, status);
+      }
       if (body.decision !== "allow-once" && body.decision !== "deny") {
         return json({ error: "decision must be allow-once or deny" }, 400);
       }
@@ -62,9 +83,7 @@ export function startHostApprovalServer(options: HostApprovalServerOptions): {
   port: number;
 } {
   const host = options.host ?? process.env.ARGUS_HOST_APPROVAL_HOST ?? "127.0.0.1";
-  if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") {
-    throw new Error("Host approval server must bind to loopback");
-  }
+  assertLoopbackHostname(host, "Host approval server");
   const port = options.port ?? Number(process.env.ARGUS_HOST_APPROVAL_PORT ?? 8791);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("Host approval port is invalid");
   const handler = createHostApprovalRequestHandler(options);
@@ -76,16 +95,6 @@ export function startHostApprovalServer(options: HostApprovalServerOptions): {
 function decisionPathId(path: string): string | undefined {
   const match = /^\/api\/approvals\/([^/]+)\/decision$/.exec(path);
   return match ? decodeURIComponent(match[1]) : undefined;
-}
-
-function isSameOrigin(request: Request): boolean {
-  const origin = request.headers.get("origin");
-  if (!origin) return true;
-  try {
-    return new URL(origin).host === new URL(request.url).host;
-  } catch {
-    return false;
-  }
 }
 
 async function serveFrontend(request: Request, pathname: string, distDir: string): Promise<Response> {

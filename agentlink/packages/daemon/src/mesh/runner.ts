@@ -9,7 +9,12 @@
 
 import { accessSync, constants, existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { MeshRunScopeSchema } from "@agentlink/wire";
+import {
+  MeshRunScopeSchema,
+  type MeshJsonValue,
+  type MeshRunnerMetadata,
+  type MeshWorkspaceCapability,
+} from "@agentlink/wire";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { MeshTaskLike } from "./executor";
 import { MeshExecutor } from "./executor";
@@ -18,6 +23,7 @@ const DEFAULT_RUNTIME_MS = 15 * 60_000;
 const MAX_RUNTIME_MS = 24 * 60 * 60_000;
 const DEFAULT_OUTPUT_BYTES = 256 * 1024;
 const MAX_OUTPUT_BYTES = 1 * 1024 * 1024;
+const MAX_RESULT_SUMMARY_BYTES = 32 * 1024;
 
 export interface MeshRunnerSpec {
   id: string;
@@ -40,6 +46,14 @@ export interface MeshRunnerSpec {
   allowInput?: boolean;
   /** Opt in to returning runner stdout/stderr to the requester. */
   exposeOutput?: boolean;
+  /** Public metadata. Executable, cwd, fixed args, and env are never included. */
+  title?: string;
+  inputSchema?: MeshJsonValue;
+  resultSchema?: MeshJsonValue;
+  approvalRequired?: boolean;
+  workspaceCapabilities?: MeshWorkspaceCapability[];
+  /** Opt in to returning bounded stderr separately from the result summary. */
+  exposeDebugOutput?: boolean;
 }
 
 interface RegisteredRunner extends Omit<MeshRunnerSpec, "executable" | "workdir"> {
@@ -49,7 +63,12 @@ interface RegisteredRunner extends Omit<MeshRunnerSpec, "executable" | "workdir"
   env: Record<string, string>;
   maxRuntimeMs: number;
   maxOutputBytes: number;
-  exposeOutput: boolean;
+  exposeDebugOutput: boolean;
+  title: string;
+  inputSchema: MeshJsonValue;
+  resultSchema: MeshJsonValue;
+  approvalRequired: boolean;
+  workspaceCapabilities: MeshWorkspaceCapability[];
 }
 
 export interface MeshRunnerResult {
@@ -59,11 +78,11 @@ export interface MeshRunnerResult {
   signal: string | null;
   timedOut: boolean;
   durationMs: number;
-  stdout: string;
-  stderr: string;
-  stdoutTruncated: boolean;
-  stderrTruncated: boolean;
-  outputExposed: boolean;
+  resultSummary: string;
+  debugOutput?: string;
+  resultSummaryTruncated: boolean;
+  debugOutputTruncated: boolean;
+  debugOutputSuppressed: boolean;
 }
 
 function isWithin(candidate: string, root: string): boolean {
@@ -100,6 +119,35 @@ function appendOutput(
   if (Buffer.byteLength(next, "utf8") <= maxBytes) return { value: next, truncated: false };
   const bytes = Buffer.from(next, "utf8").subarray(0, maxBytes);
   return { value: bytes.toString("utf8"), truncated: true };
+}
+
+function summarizeRunnerOutput(
+  raw: string,
+  purpose: "task" | "status",
+  sourceTruncated: boolean,
+): { value: string; truncated: boolean } {
+  const trimmed = raw.trim();
+  let value = trimmed;
+  let discarded = false;
+  if (purpose === "task" && trimmed) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        && Object.hasOwn(parsed, "resultSummary")) {
+        const summary = (parsed as { resultSummary?: unknown }).resultSummary;
+        value = typeof summary === "string" ? summary : JSON.stringify(summary ?? null);
+        discarded = Object.keys(parsed as Record<string, unknown>).some((key) => key !== "resultSummary");
+      } else {
+        value = JSON.stringify(parsed);
+      }
+    } catch {
+      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      value = lines.at(-1) ?? "";
+      discarded = lines.length > 1;
+    }
+  }
+  const bounded = appendOutput("", Buffer.from(value, "utf8"), MAX_RESULT_SUMMARY_BYTES);
+  return { value: bounded.value, truncated: sourceTruncated || discarded || bounded.truncated };
 }
 
 export class MeshRunnerRegistry {
@@ -146,10 +194,19 @@ export class MeshRunnerRegistry {
 
     const env = normalizeEnvironment(spec.env);
     if (Object.keys(env).length > 64) throw new Error("runner env 数量超出限制");
+    const purpose = spec.purpose ?? "task";
+    const approvalRequired = spec.approvalRequired ?? purpose === "task";
+    if (purpose === "task" && !approvalRequired) throw new Error("task runner 必须要求目标本地审批");
+    if (purpose === "status" && (approvalRequired || spec.allowDynamicArgs || spec.allowInput)) {
+      throw new Error("status runner 必须只读且不接受动态输入");
+    }
+    const workspaceCapabilities = [...(spec.workspaceCapabilities ?? (purpose === "status"
+      ? ["read-only-status" as const]
+      : []))];
     this.runners.set(spec.id, {
       id: spec.id,
       resourceId: spec.resourceId,
-      purpose: spec.purpose ?? "task",
+      purpose,
       executable,
       workdir: resolvedWorkdir,
       fixedArgs,
@@ -158,7 +215,12 @@ export class MeshRunnerRegistry {
       maxOutputBytes,
       allowDynamicArgs: spec.allowDynamicArgs === true,
       allowInput: spec.allowInput === true,
-      exposeOutput: spec.exposeOutput === true,
+      exposeDebugOutput: spec.exposeDebugOutput === true || spec.exposeOutput === true,
+      title: spec.title ?? spec.id,
+      inputSchema: spec.inputSchema ?? { type: "object" },
+      resultSchema: spec.resultSchema ?? { type: "object" },
+      approvalRequired,
+      workspaceCapabilities,
     });
   }
 
@@ -183,13 +245,31 @@ export class MeshRunnerRegistry {
       .map((runner) => runner.id);
   }
 
-  async run(task: MeshTaskLike): Promise<MeshRunnerResult> {
+  metadataForResource(resourceId: string): MeshRunnerMetadata[] {
+    return [...this.runners.values()]
+      .filter((runner) => runner.resourceId === resourceId)
+      .map((runner) => ({
+        runnerId: runner.id,
+        title: runner.title,
+        purpose: runner.purpose ?? "task",
+        inputSchema: structuredClone(runner.inputSchema),
+        resultSchema: structuredClone(runner.resultSchema),
+        approvalRequired: runner.approvalRequired,
+        maxRuntimeMs: runner.maxRuntimeMs,
+        workspaceCapabilities: [...runner.workspaceCapabilities],
+      }));
+  }
+
+  async run(task: MeshTaskLike, workspace?: string): Promise<MeshRunnerResult> {
     if (task.operation !== "run") throw new Error("runner 只接受 run 任务");
     const parsed = MeshRunScopeSchema.safeParse(task.scope ?? {});
     if (!parsed.success) throw new Error("run scope 必须只包含 runnerId、args、input、timeoutMs");
     const runner = this.runners.get(parsed.data.runnerId);
     if (!runner || runner.resourceId !== task.resourceId || runner.purpose !== "task") {
       throw new Error("runner 与资源或用途不匹配");
+    }
+    if (runner.workspaceCapabilities.includes("task-scoped-workspace") && !parsed.data.baseArtifactId) {
+      throw new Error("该 runner 必须使用 task-scoped artifact workspace");
     }
     if (this.activeTasks.has(task.taskId)) throw new Error("同一 taskId 的 runner 已在执行");
     if (parsed.data.args.length > 0 && !runner.allowDynamicArgs) {
@@ -199,8 +279,21 @@ export class MeshRunnerRegistry {
       throw new Error("该 runner 不接受远程 stdin");
     }
     for (const [index, arg] of parsed.data.args.entries()) assertSafeArg(arg, `run args[${index}]`);
+    let workdir = runner.workdir;
+    if (parsed.data.baseArtifactId) {
+      if (!workspace || !runner.workspaceCapabilities.includes("task-scoped-workspace")) {
+        throw new Error("runner 不支持 task-scoped artifact workspace");
+      }
+      if (!isAbsolute(workspace) || !existsSync(workspace) || lstatSync(workspace).isSymbolicLink()) {
+        throw new Error("artifact workspace 无效");
+      }
+      workdir = realpathSync(workspace);
+      if (!statSync(workdir).isDirectory()) throw new Error("artifact workspace 不是目录");
+    } else if (workspace) {
+      throw new Error("没有 baseArtifactId 的任务不能覆盖 runner workdir");
+    }
     const timeoutMs = Math.min(parsed.data.timeoutMs ?? runner.maxRuntimeMs, runner.maxRuntimeMs);
-    return this.runRegistered(task.taskId, parsed.data.runnerId, runner, parsed.data.args, parsed.data.input, timeoutMs);
+    return this.runRegistered(task.taskId, parsed.data.runnerId, runner, parsed.data.args, parsed.data.input, timeoutMs, workdir);
   }
 
   cancel(taskId: string): boolean {
@@ -216,7 +309,7 @@ export class MeshRunnerRegistry {
     if (!runner || runner.resourceId !== resourceId || runner.purpose !== "status") {
       throw new Error("status runner 与资源或用途不匹配");
     }
-    return this.runRegistered(undefined, runnerId, runner, [], undefined, runner.maxRuntimeMs);
+    return this.runRegistered(undefined, runnerId, runner, [], undefined, runner.maxRuntimeMs, runner.workdir);
   }
 
   private async runRegistered(
@@ -226,10 +319,11 @@ export class MeshRunnerRegistry {
     args: string[],
     input: string | undefined,
     timeoutMs: number,
+    workdir: string,
   ): Promise<MeshRunnerResult> {
     const startedAt = Date.now();
     const child = spawn(runner.executable, [...runner.fixedArgs, ...args], {
-      cwd: runner.workdir,
+      cwd: workdir,
       env: runner.env,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
@@ -269,7 +363,12 @@ export class MeshRunnerRegistry {
         settled = true;
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (killHandle) clearTimeout(killHandle);
+        // A successful wrapper can otherwise leave a background descendant
+        // racing artifact capture. Node has no portable Windows job-object API,
+        // but the dedicated POSIX process group lets us reap that boundary.
+        if (process.platform !== "win32") stop("SIGKILL");
         if (taskId) this.activeTasks.delete(taskId);
+        const summary = summarizeRunnerOutput(stdout, runner.purpose ?? "task", stdoutTruncated);
         resolveResult({
           runnerId,
           status: timedOut || cancelled ? "cancelled" : exitCode === 0 ? "completed" : "failed",
@@ -277,11 +376,11 @@ export class MeshRunnerRegistry {
           signal: signal ? String(signal) : null,
           timedOut,
           durationMs: Date.now() - startedAt,
-          stdout,
-          stderr,
-          stdoutTruncated,
-          stderrTruncated,
-          outputExposed: runner.exposeOutput,
+          resultSummary: summary.value,
+          ...(runner.exposeDebugOutput ? { debugOutput: stderr } : {}),
+          resultSummaryTruncated: summary.truncated,
+          debugOutputTruncated: stderrTruncated,
+          debugOutputSuppressed: !runner.exposeDebugOutput,
         });
       };
 
