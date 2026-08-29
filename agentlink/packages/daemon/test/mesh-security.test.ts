@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MeshAuditEvent, MeshTaskRequest } from "@agentlink/wire";
@@ -62,5 +62,15 @@ describe("Mesh security invariants", () => {
     store.begin(task("task-1"));
     expect(() => store.begin(task("task-2"))).toThrow("记录上限");
     expect(new MeshTaskStore(file, 1).get("task-1")?.taskId).toBe("task-1");
+  });
+
+  test("fails closed when the target replay journal contains duplicate task ids", () => {
+    const file = join(tempRoot("argus-mesh-tasks-duplicate-"), "tasks.json");
+    const store = new MeshTaskStore(file, 2);
+    store.begin(task("task-duplicate"));
+    const journal = JSON.parse(readFileSync(file, "utf8")) as { tasks: unknown[] };
+    journal.tasks.push(journal.tasks[0]);
+    writeFileSync(file, JSON.stringify(journal), { mode: 0o600 });
+    expect(() => new MeshTaskStore(file, 2)).toThrow("重复 taskId");
   });
 });

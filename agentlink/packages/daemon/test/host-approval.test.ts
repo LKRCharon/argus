@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MeshTaskRequest } from "@agentlink/wire";
+import { meshArtifactSha256, type MeshTaskRequest } from "@agentlink/wire";
 import { MeshApprovalInbox } from "../src/mesh/approval-inbox";
 import { createHostApprovalRequestHandler } from "../src/mesh/approval-server";
 
@@ -42,6 +42,24 @@ describe("target-local owner approval", () => {
     expect(recovered.claim("task-owner-approval")?.status).toBe("processing");
     expect(recovered.claim("task-owner-approval")).toBeUndefined();
     expect(recovered.listPending()).toEqual([]);
+  });
+
+  test("preserves a validated base artifact across the local approval handoff", () => {
+    const root = mkdtempSync(join(tmpdir(), "argus-approval-artifact-"));
+    roots.push(root);
+    const identity = { version: 1 as const, kind: "base" as const, files: [] };
+    const sha256 = meshArtifactSha256(identity);
+    const baseArtifact = { ...identity, artifactId: `sha256:${sha256}`, sha256 };
+    const task = {
+      ...request("task-owner-artifact"),
+      scope: { runnerId: "gpu:train", args: [], baseArtifactId: baseArtifact.artifactId },
+    };
+    const file = join(root, "approvals.json");
+    new MeshApprovalInbox(file).put({ kind: "mesh-task-request", task, baseArtifact });
+    expect(new MeshApprovalInbox(file).claim(task.taskId)).toMatchObject({
+      task: { taskId: task.taskId },
+      baseArtifact: { artifactId: baseArtifact.artifactId },
+    });
   });
 
   test("serves the local UI and rejects cross-origin approval decisions", async () => {

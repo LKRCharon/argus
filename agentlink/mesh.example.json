@@ -17,13 +17,18 @@
     "/srv/argus/workspaces"
   ],
   "quarantineRoot": "/srv/argus/quarantine",
+  "artifactRoot": "/srv/argus/task-workspaces",
   "resources": [
     {
       "id": "repo:gpu-project",
       "ownerNodeId": "LOCAL_NODE_FINGERPRINT",
       "kind": "repo",
       "displayName": "gpu-project",
-      "root": "/srv/argus/workspaces/gpu-project"
+      "root": "/srv/argus/workspaces/gpu-project",
+      "statusRunnerId": "gpu-project-status-v1",
+      "allowedGroupIds": [
+        "group-alpha"
+      ]
     }
   ],
   "runners": [
@@ -38,7 +43,57 @@
       "maxOutputBytes": 262144,
       "allowDynamicArgs": false,
       "allowInput": false,
-      "exposeOutput": false
+      "title": "GPU project task runner",
+      "inputSchema": {
+        "type": "object"
+      },
+      "resultSchema": {
+        "type": "object",
+        "required": [
+          "resultSummary"
+        ]
+      },
+      "approvalRequired": true,
+      "workspaceCapabilities": [
+        "structured-artifact-input",
+        "task-scoped-workspace",
+        "changed-file-manifest"
+      ],
+      "exposeDebugOutput": false
+    },
+    {
+      "id": "gpu-project-status-v1",
+      "resourceId": "repo:gpu-project",
+      "purpose": "status",
+      "executable": "/srv/argus/runners/workspace-status",
+      "fixedArgs": [],
+      "workdir": ".",
+      "maxRuntimeMs": 10000,
+      "maxOutputBytes": 16384,
+      "allowDynamicArgs": false,
+      "allowInput": false,
+      "title": "GPU project workspace status",
+      "inputSchema": {
+        "type": "null"
+      },
+      "resultSchema": {
+        "type": "object",
+        "required": [
+          "connectionStatus",
+          "watcherAvailable",
+          "codexAppServerAvailable",
+          "activeJobs",
+          "workspaceRevision",
+          "lastSuccess",
+          "lastErrorStage",
+          "checkedAt"
+        ]
+      },
+      "approvalRequired": false,
+      "workspaceCapabilities": [
+        "read-only-status"
+      ],
+      "exposeDebugOutput": false
     }
   ]
 }

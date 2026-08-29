@@ -11,6 +11,8 @@ import type { SecureChannel } from "@agentlink/wire";
 import {
   b64decode,
   fingerprint,
+  MeshArtifactRequestPayloadSchema,
+  MeshRequestIdSchema,
   MeshResourceListRequestPayloadSchema,
   MeshResourceStatusRequestPayloadSchema,
   MeshTaskCancelRequestPayloadSchema,
@@ -233,6 +235,7 @@ export async function serveWatch(
               const result = await opts.mesh!.handleRequest({
                 kind: "mesh-task-request",
                 task: claimed.task,
+                ...(claimed.baseArtifact ? { baseArtifact: claimed.baseArtifact } : {}),
                 grant,
                 approval,
               }, (progress) => enqueueControlSendAsync(progress));
@@ -478,6 +481,7 @@ export async function serveWatch(
           kind?: string;
           requestId?: string;
           controlRequestId?: string;
+          deadlineAt?: number;
           optionId?: string;
           text?: string;
           sessionId?: string;
@@ -488,10 +492,12 @@ export async function serveWatch(
           grant?: unknown;
           approval?: unknown;
         }>(msg.data?.enc);
-        const controlRequestId = typeof payload?.controlRequestId === "string"
-          ? payload.controlRequestId.slice(0, 128)
-          : undefined;
+        const parsedControlRequestId = MeshRequestIdSchema.safeParse(payload?.controlRequestId);
+        const controlRequestId = parsedControlRequestId.success ? parsedControlRequestId.data : undefined;
         const controlReply = controlRequestId ? { controlRequestId } : {};
+        const deadlineAt = typeof payload?.deadlineAt === "number" && Number.isSafeInteger(payload.deadlineAt)
+          ? Math.min(payload.deadlineAt, Date.now() + 2 * 60_000)
+          : Date.now() + 30_000;
 
         // Only log genuine phone->daemon commands. Relay buffering can echo a
         // daemon->phone kind (agent-event, session-list, …) back at us; those
@@ -500,16 +506,29 @@ export async function serveWatch(
           "list-sessions", "new-session", "user-input", "permission-response",
           "codex-threads", "codex-resume", "codex-history-cancel", "codex-input", "codex-interrupt",
           "cloud-session", "remote-control", "mesh-resource-list-request", "mesh-resource-status-request",
-          "mesh-task-status-request", "mesh-task-cancel-request", "mesh-task-request",
+          "mesh-task-status-request", "mesh-task-cancel-request", "mesh-artifact-request", "mesh-task-request",
         ]);
         const MESH_COMMANDS = new Set([
           "mesh-resource-list-request", "mesh-resource-status-request",
-          "mesh-task-status-request", "mesh-task-cancel-request", "mesh-task-request",
+          "mesh-task-status-request", "mesh-task-cancel-request", "mesh-artifact-request", "mesh-task-request",
+        ]);
+        const CODEX_COMMANDS = new Set([
+          "codex-threads", "codex-resume", "codex-input", "codex-interrupt", "new-session",
         ]);
         if (payload?.kind && PHONE_COMMANDS.has(payload.kind) && !MESH_COMMANDS.has(payload.kind)) {
           console.log(`[watch] 收到手机指令: ${payload.kind}`);
         }
-        if (meshModeEnabled && !opts.meshLegacyControl && typeof payload?.kind === "string"
+        if (controlRequestId && typeof payload?.kind === "string"
+          && CODEX_COMMANDS.has(payload.kind) && deadlineAt <= Date.now()) {
+          await sendPayload({
+            kind: "codex-error",
+            note: "request expired in watcher queue",
+            timedOut: true,
+            timedOutStage: "watcher",
+            retryable: true,
+            ...controlReply,
+          });
+        } else if (meshModeEnabled && !opts.meshLegacyControl && typeof payload?.kind === "string"
                     && PHONE_COMMANDS.has(payload.kind) && !MESH_COMMANDS.has(payload.kind)) {
           await enqueueControlSendAsync({
             kind: "mesh-error",
@@ -567,6 +586,19 @@ export async function serveWatch(
               await enqueueControlSendAsync({ kind: "mesh-error", code: "task-cancel-failed", message: "目标设备拒绝任务取消请求" });
             }
           }
+        } else if (payload?.kind === "mesh-artifact-request") {
+          const request = MeshArtifactRequestPayloadSchema.safeParse(payload);
+          if (!opts.mesh) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
+          } else if (!request.success) {
+            await enqueueControlSendAsync({ kind: "mesh-error", code: "invalid-artifact-request", message: "result artifact 请求格式无效" });
+          } else {
+            try {
+              await enqueueControlSendAsync(opts.mesh.resultArtifact(request.data));
+            } catch {
+              await enqueueControlSendAsync({ kind: "mesh-error", code: "artifact-read-failed", message: "目标设备拒绝读取 result artifact" });
+            }
+          }
         } else if (payload?.kind === "mesh-task-request") {
           if (!opts.mesh) {
             await enqueueControlSendAsync({ kind: "mesh-error", code: "mesh-disabled", message: "目标设备未启用 Mesh 配置" });
@@ -583,7 +615,7 @@ export async function serveWatch(
                 await enqueueControlSendAsync(proposal);
               } else {
                 try {
-                  approvalInbox.put(request.data.task);
+                  approvalInbox.put(request.data);
                   await enqueueControlSendAsync(proposal);
                 } catch {
                   const denied = opts.mesh.denyProposal(request.data.task.taskId, "目标设备的本地审批队列不可用");
@@ -608,23 +640,19 @@ export async function serveWatch(
           // Codex's own view of its threads — richer and more accurate than our
           // transcript scan (model-generated titles, live status, cwd).
           try {
-            const srv = await codexControl();
+            const srv = await withinDeadline(codexControl(), deadlineAt);
             await sendPayload({
               kind: "codex-thread-list",
-              threads: await srv.listThreads(40),
+              threads: await srv.listThreads(40, remainingMs(deadlineAt)),
               ...controlReply,
             });
           } catch (e) {
-            await sendPayload({
-              kind: "codex-error",
-              note: `${e instanceof Error ? e.message : e}`,
-              ...controlReply,
-            });
+            await sendPayload(codexErrorReply(e, controlReply));
           }
         } else if (payload?.kind === "codex-resume" && payload.sessionId) {
           try {
-            const srv = await codexControl();
-            const r = await srv.resume(payload.sessionId);
+            const srv = await withinDeadline(codexControl(), deadlineAt);
+            const r = await srv.resume(payload.sessionId, remainingMs(deadlineAt));
             await sendPayload({
               kind: "codex-resumed",
               sessionId: payload.sessionId,
@@ -636,11 +664,7 @@ export async function serveWatch(
               ...controlReply,
             });
           } catch (e) {
-            await sendPayload({
-              kind: "codex-error",
-              note: `${e instanceof Error ? e.message : e}`,
-              ...controlReply,
-            });
+            await sendPayload(codexErrorReply(e, controlReply));
           }
         } else if (payload?.kind === "codex-history-cancel" && payload.sessionId) {
           // The legacy Mac watcher returns one completed snapshot, so there is
@@ -651,14 +675,14 @@ export async function serveWatch(
           // Real two-way control: this lands in the same thread the desktop app
           // or VS Code has open, not a separate headless run.
           try {
-            const srv = await codexControl();
-            await srv.resume(payload.sessionId);
+            const srv = await withinDeadline(codexControl(), deadlineAt);
+            await srv.resume(payload.sessionId, remainingMs(deadlineAt));
             const active = activeTurns.get(payload.sessionId);
             let steered = false;
             if (active) {
               // Mid-turn: steer instead of queueing a second turn.
               try {
-                await srv.steerTurn(payload.sessionId, active, payload.text);
+                await srv.steerTurn(payload.sessionId, active, payload.text, remainingMs(deadlineAt));
                 steered = true;
               } catch {
                 // The turn ended without us hearing about it; drop the stale id
@@ -667,7 +691,7 @@ export async function serveWatch(
               }
             }
             if (!steered) {
-              const turnId = await srv.startTurn(payload.sessionId, payload.text);
+              const turnId = await srv.startTurn(payload.sessionId, payload.text, remainingMs(deadlineAt));
               if (turnId) activeTurns.set(payload.sessionId, turnId);
             }
             await sendPayload({
@@ -678,23 +702,24 @@ export async function serveWatch(
               ...controlReply,
             });
           } catch (e) {
-            await sendPayload({
-              kind: "input-ack",
-              sessionId: payload.sessionId,
-              status: "queued",
-              note: `发送失败: ${e instanceof Error ? e.message : e}`,
-              ...controlReply,
-            });
+            await sendPayload(controlRequestId
+              ? codexErrorReply(e, controlReply, payload.sessionId)
+              : {
+                  kind: "input-ack",
+                  sessionId: payload.sessionId,
+                  status: "queued",
+                  note: `发送失败: ${e instanceof Error ? e.message : e}`,
+                });
           }
         } else if (payload?.kind === "codex-interrupt" && payload.sessionId) {
           try {
-            const srv = await codexControl();
+            const srv = await withinDeadline(codexControl(), deadlineAt);
             const active = activeTurns.get(payload.sessionId);
             if (!active) throw new Error("该会话当前没有进行中的回合");
             // Delete first: if interrupt throws, the id is stale either way and
             // keeping it would wedge every later message into a failing steer.
             activeTurns.delete(payload.sessionId);
-            await srv.interruptTurn(payload.sessionId, active);
+            await srv.interruptTurn(payload.sessionId, active, remainingMs(deadlineAt));
             await sendPayload({
               kind: "input-ack",
               sessionId: payload.sessionId,
@@ -703,11 +728,7 @@ export async function serveWatch(
               ...controlReply,
             });
           } catch (e) {
-            await sendPayload({
-              kind: "codex-error",
-              note: `${e instanceof Error ? e.message : e}`,
-              ...controlReply,
-            });
+            await sendPayload(codexErrorReply(e, controlReply, payload.sessionId));
           }
         } else if (payload?.kind === "list-sessions") {
           // The mirrored stream only ever showed sessions that emitted an event
@@ -723,14 +744,29 @@ export async function serveWatch(
           if (wantCodex) {
             // Codex owns its threads, so a new one is a protocol call and the
             // first turn streams back like any other.
+            let createdThreadId: string | undefined;
             try {
-              const srv = await codexControl();
-              const threadId = await srv.startThread(cwd);
+              const srv = await withinDeadline(codexControl(), deadlineAt);
+              const threadId = await srv.startThread(cwd, remainingMs(deadlineAt), controlRequestId ? (lateThreadId) => {
+                void sendPayload({
+                  kind: "input-ack",
+                  sessionId: lateThreadId,
+                  status: "failed",
+                  note: "thread was created after its deadline; initial turn was not sent",
+                  lateAfterTimeout: true,
+                  ...controlReply,
+                });
+              } : undefined);
               if (!threadId) throw new Error("thread/start 未返回 threadId");
-              const turnId = await srv.startTurn(threadId, payload.text);
+              createdThreadId = threadId;
+              const turnId = await srv.startTurn(threadId, payload.text, remainingMs(deadlineAt));
               if (turnId) activeTurns.set(threadId, turnId);
               r = { ok: true, note: `已在 ${cwd} 新建 Codex 会话`, sessionId: threadId };
             } catch (e) {
+              if (controlRequestId) {
+                await sendPayload(codexErrorReply(e, controlReply, createdThreadId));
+                continue;
+              }
               r = { ok: false, note: `新建失败: ${e instanceof Error ? e.message : e}` };
             }
           } else {
@@ -894,6 +930,45 @@ export async function serveWatch(
   };
 
   return { hookServer, watcher, codexWatcher, stop };
+}
+
+function remainingMs(deadlineAt: number): number {
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) throw new Error("app-server deadline exceeded");
+  return Math.max(1, Math.min(remaining, 2 * 60_000));
+}
+
+async function withinDeadline<T>(promise: Promise<T>, deadlineAt: number): Promise<T> {
+  const timeoutMs = remainingMs(deadlineAt);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("app-server deadline exceeded")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function codexErrorReply(
+  error: unknown,
+  controlReply: { controlRequestId?: string },
+  sessionId?: string,
+): Record<string, unknown> {
+  const note = `${error instanceof Error ? error.message : error}`.slice(0, 512);
+  const timedOut = /超时|timeout|deadline/i.test(note);
+  return {
+    kind: "codex-error",
+    note,
+    timedOut,
+    timedOutStage: "app-server",
+    retryable: timedOut || /连接|connect|unavailable/i.test(note),
+    ...(sessionId ? { sessionId } : {}),
+    ...controlReply,
+  };
 }
 
 /** watch 命令入口：连接已配对设备的通道 + 启动监听 */

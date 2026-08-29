@@ -13,6 +13,8 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
   MeshTaskRequestPayloadSchema,
+  MeshNodeIdSchema,
+  MeshTaskIdSchema,
   MeshTimestampSchema,
   stableStringify,
   type MeshTaskRequestPayload,
@@ -21,12 +23,12 @@ import { configDir } from "../store";
 
 const FILE_VERSION = 1;
 const MAX_RECORDS = 500;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
 const ControlOutboxRecordSchema = z.object({
   version: z.literal(FILE_VERSION),
-  taskId: z.string().min(1),
-  targetNodeId: z.string().min(1),
+  taskId: MeshTaskIdSchema,
+  targetNodeId: MeshNodeIdSchema,
   requestDigest: z.string().length(64),
   payload: MeshTaskRequestPayloadSchema,
   attempts: z.number().int().nonnegative(),
@@ -137,7 +139,12 @@ export class ControlTaskOutbox {
     if (!parsed.success) {
       throw new Error("control outbox is invalid; task delivery stopped to avoid replay");
     }
-    for (const record of parsed.data.tasks) this.records.set(record.taskId, record);
+    for (const record of parsed.data.tasks) {
+      if (this.records.has(record.taskId)) {
+        throw new Error("control outbox has duplicate task ids; task delivery stopped to avoid replay");
+      }
+      this.records.set(record.taskId, record);
+    }
   }
 
   private persistOrRollback(taskId: string, previous: ControlOutboxRecord | undefined): void {

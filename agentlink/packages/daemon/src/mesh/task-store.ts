@@ -12,8 +12,11 @@ import { chmodSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, 
 import { join } from "node:path";
 import { z } from "zod";
 import {
-  MeshIdSchema,
+  MeshGroupIdSchema,
+  MeshNodeIdSchema,
   MeshOperationSchema,
+  MeshResourceIdSchema,
+  MeshTaskIdSchema,
   MeshTaskResultPayloadSchema,
   MeshTimestampSchema,
   stableStringify,
@@ -33,11 +36,11 @@ export type MeshTaskLifecycleStatus = z.infer<typeof MeshTaskLifecycleStatusSche
 
 const MeshTaskRecordSchema = z.object({
   version: z.literal(FILE_VERSION),
-  taskId: MeshIdSchema,
-  groupId: MeshIdSchema,
-  requesterNodeId: MeshIdSchema,
-  targetNodeId: MeshIdSchema,
-  resourceId: MeshIdSchema,
+  taskId: MeshTaskIdSchema,
+  groupId: MeshGroupIdSchema,
+  requesterNodeId: MeshNodeIdSchema,
+  targetNodeId: MeshNodeIdSchema,
+  resourceId: MeshResourceIdSchema,
   operation: MeshOperationSchema,
   requestDigest: z.string().length(64),
   status: MeshTaskLifecycleStatusSchema,
@@ -165,7 +168,12 @@ export class MeshTaskStore {
     if (parsed.data.tasks.length > this.maxRecords) {
       throw new Error("Mesh task journal 超过配置的记录上限；为避免重复执行，已停止 Mesh");
     }
-    for (const record of parsed.data.tasks) this.records.set(record.taskId, record);
+    for (const record of parsed.data.tasks) {
+      if (this.records.has(record.taskId)) {
+        throw new Error("Mesh task journal 包含重复 taskId；为避免重复执行，已停止 Mesh");
+      }
+      this.records.set(record.taskId, record);
+    }
   }
 
   private persist(): void {

@@ -67,6 +67,8 @@ type Pending = {
   resolve: (v: any) => void;
   reject: (e: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  timedOut?: boolean;
+  onLateResult?: (value: any) => void;
 };
 
 /**
@@ -260,6 +262,10 @@ export class CodexAppServer {
       if (!p) return;
       this.pending.delete(msg.id);
       clearTimeout(p.timer);
+      if (p.timedOut) {
+        if (!msg.error) p.onLateResult?.(msg.result);
+        return;
+      }
       if (msg.error) p.reject(new Error(msg.error.message ?? "app-server 错误"));
       else p.resolve(msg.result);
       return;
@@ -272,18 +278,29 @@ export class CodexAppServer {
     if (msg.method) this.onNotification?.(msg.method, msg.params);
   }
 
-  call<T = any>(method: string, params: unknown = {}, timeoutMs = 30_000): Promise<T> {
+  call<T = any>(
+    method: string,
+    params: unknown = {},
+    timeoutMs = 30_000,
+    onLateResult?: (value: T) => void,
+  ): Promise<T> {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("app-server 未连接"));
     }
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
+      const pending: Pending = { resolve, reject, timer: undefined as unknown as ReturnType<typeof setTimeout>, onLateResult };
       const timer = setTimeout(() => {
-        this.pending.delete(id);
+        if (onLateResult) {
+          pending.timedOut = true;
+        } else {
+          this.pending.delete(id);
+        }
         reject(new Error(`${method} 超时`));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      pending.timer = timer;
+      this.pending.set(id, pending);
       ws.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -308,7 +325,7 @@ export class CodexAppServer {
    * Every thread Codex knows about. `sourceKinds` matters: omitting it returns
    * only interactive sources, which silently hides app and exec threads.
    */
-  async listThreads(limit = 40): Promise<CodexThread[]> {
+  async listThreads(limit = 40, timeoutMs = 30_000): Promise<CodexThread[]> {
     const res = await this.call<any>("thread/list", {
       // Omitting sourceKinds returns only "interactive sources" and answers
       // with zero rows on a machine full of sessions. `vscode` is what the
@@ -321,7 +338,7 @@ export class CodexAppServer {
         "subAgentThreadSpawn", "subAgentOther",
       ],
       limit,
-    });
+    }, timeoutMs);
     const rows: any[] = res?.data ?? [];
     return rows.map((t) => {
       const spawn = describeSpawn(t.source);
@@ -351,13 +368,13 @@ export class CodexAppServer {
    * is app-server's, and teaching a second client about it would mean two places
    * to update when it changes.
    */
-  async resume(threadId: string): Promise<{
+  async resume(threadId: string, timeoutMs = 30_000): Promise<{
     canAcceptDirectInput: boolean;
     turns: any[];
     events: Record<string, unknown>[];
     cwd?: string;
   }> {
-    const res = await this.call<any>("thread/resume", { threadId });
+    const res = await this.call<any>("thread/resume", { threadId }, timeoutMs);
     const turns: any[] = res?.initialTurnsPage?.data ?? res?.thread?.turns ?? [];
     return {
       canAcceptDirectInput: res?.thread?.canAcceptDirectInput === true,
@@ -368,11 +385,11 @@ export class CodexAppServer {
   }
 
   /** Send a message, starting a new turn. */
-  async startTurn(threadId: string, text: string): Promise<string | null> {
+  async startTurn(threadId: string, text: string, timeoutMs = 30_000): Promise<string | null> {
     const res = await this.call<any>("turn/start", {
       threadId,
       input: [{ type: "text", text }],
-    });
+    }, timeoutMs);
     return res?.turnId ?? res?.turn?.id ?? null;
   }
 
@@ -380,21 +397,28 @@ export class CodexAppServer {
    * Redirect a turn that is already running. Needs the active turn id as a
    * precondition, so a stale steer cannot land on the wrong turn.
    */
-  async steerTurn(threadId: string, turnId: string, text: string): Promise<void> {
+  async steerTurn(threadId: string, turnId: string, text: string, timeoutMs = 30_000): Promise<void> {
     await this.call("turn/steer", {
       threadId,
       expectedTurnId: turnId,
       input: [{ type: "text", text }],
-    });
+    }, timeoutMs);
   }
 
-  async interruptTurn(threadId: string, turnId: string): Promise<void> {
-    await this.call("turn/interrupt", { threadId, turnId });
+  async interruptTurn(threadId: string, turnId: string, timeoutMs = 30_000): Promise<void> {
+    await this.call("turn/interrupt", { threadId, turnId }, timeoutMs);
   }
 
   /** Start a brand-new thread in `cwd`. */
-  async startThread(cwd?: string): Promise<string | null> {
-    const res = await this.call<any>("thread/start", cwd ? { cwd } : {});
+  async startThread(
+    cwd?: string,
+    timeoutMs = 30_000,
+    onLateThread?: (threadId: string) => void,
+  ): Promise<string | null> {
+    const res = await this.call<any>("thread/start", cwd ? { cwd } : {}, timeoutMs, (late) => {
+      const threadId = late?.thread?.id ?? late?.threadId;
+      if (threadId) onLateThread?.(String(threadId));
+    });
     return res?.thread?.id ?? res?.threadId ?? null;
   }
 

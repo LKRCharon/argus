@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   b64decode,
   fingerprint,
+  MeshArtifactPayloadSchema,
   MeshResourceListPayloadSchema,
   MeshResourceStatusPayloadSchema,
   MeshTaskCancelledPayloadSchema,
@@ -9,7 +10,10 @@ import {
   MeshTaskResultPayloadSchema,
   MeshTaskRequestPayloadSchema,
   MeshTaskStatusPayloadSchema,
+  stableStringify,
   type MeshApproval,
+  type MeshBaseArtifactManifest,
+  type MeshResultArtifactManifest,
   type MeshCapabilityGrant,
   type MeshResource,
   type MeshResourceStatus,
@@ -26,10 +30,18 @@ import {
   type ControlOutboxRecord,
 } from "./outbox";
 import {
+  CodexGatewayError,
   CodexPeerGateway,
   type RemoteCodexApproval,
   type RemoteCodexEventsPage,
 } from "./codex";
+import {
+  CodexOperationStore,
+  codexOperationTimeoutPatch,
+  type CodexOperationListQuery,
+  type CodexOperationRecord,
+} from "./codex-operations";
+import { validateResultArtifactManifest } from "../mesh/artifact-store";
 
 export type PeerConnectionState = "offline" | "connecting" | "online" | "error";
 
@@ -80,6 +92,14 @@ interface PendingTaskCancelRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingArtifactRequest {
+  taskId: string;
+  artifactId: string;
+  resolve: (manifest: MeshResultArtifactManifest) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 interface PeerSession {
   peer: StoredPeer;
   conn: WsConn;
@@ -89,6 +109,7 @@ interface PeerSession {
   pendingStatuses: Map<string, PendingResourceStatusRequest>;
   pendingTaskStatuses: Map<string, PendingTaskStatusRequest>;
   pendingTaskCancels: Map<string, PendingTaskCancelRequest>;
+  pendingArtifacts: Map<string, PendingArtifactRequest>;
   sendChain: Promise<void>;
   receiveLoop: Promise<void>;
 }
@@ -102,6 +123,14 @@ export interface MeshControllerOptions {
   journal?: ControlTaskJournal;
   outbox?: ControlTaskOutbox;
   reconnectDelayMs?: number;
+  codexOperationStore?: CodexOperationStore;
+  codexRequestTimeoutMs?: number;
+}
+
+export interface ControlTaskSubmission {
+  idempotencyKey: string;
+  idempotencyDigest: string;
+  baseArtifact?: MeshBaseArtifactManifest;
 }
 
 /**
@@ -115,6 +144,7 @@ export class MeshController {
   readonly journal: ControlTaskJournal;
   readonly outbox: ControlTaskOutbox;
   readonly codex: CodexPeerGateway;
+  readonly codexOperations: CodexOperationStore;
 
   private readonly loadPeers: () => Record<string, StoredPeer>;
   private readonly reconnectDelayMs: number;
@@ -130,9 +160,15 @@ export class MeshController {
     this.loadPeers = options.loadPeers ?? listPeers;
     this.journal = options.journal ?? new ControlTaskJournal();
     this.outbox = options.outbox ?? new ControlTaskOutbox();
+    this.codexOperations = options.codexOperationStore ?? new CodexOperationStore();
     this.reconnectDelayMs = options.reconnectDelayMs ?? 5_000;
     this.codex = new CodexPeerGateway(async (peerId, payload) => {
       await this.send(this.requireSession(peerId), payload);
+    }, {
+      requestTimeoutMs: options.codexRequestTimeoutMs,
+      onUnmatchedResponse: (peerId, controlRequestId, payload) => {
+        this.handleLateCodexOperation(peerId, controlRequestId, payload);
+      },
     });
     this.syncPeers();
   }
@@ -192,6 +228,7 @@ export class MeshController {
         pendingStatuses: new Map(),
         pendingTaskStatuses: new Map(),
         pendingTaskCancels: new Map(),
+        pendingArtifacts: new Map(),
         sendChain: Promise.resolve(),
         receiveLoop: Promise.resolve(),
       };
@@ -272,10 +309,21 @@ export class MeshController {
     task: MeshTaskRequest,
     grant?: MeshCapabilityGrant,
     approval?: MeshApproval,
+    submission?: ControlTaskSubmission,
   ): Promise<ControlTaskRecord> {
+    if (submission) {
+      const byKey = this.journal.findByIdempotencyKey(task.requesterNodeId, submission.idempotencyKey);
+      if (byKey) {
+        if (byKey.idempotencyDigest !== submission.idempotencyDigest) {
+          throw new Error("idempotencyKey 已绑定不同任务");
+        }
+        return byKey;
+      }
+    }
     const payload = MeshTaskRequestPayloadSchema.parse({
       kind: "mesh-task-request",
       task,
+      ...(submission?.baseArtifact ? { baseArtifact: submission.baseArtifact } : {}),
       ...(grant ? { grant } : {}),
       ...(approval ? { approval } : {}),
     });
@@ -289,11 +337,16 @@ export class MeshController {
     const now = Date.now();
     const record = existing ?? this.journal.create({
       taskId: task.taskId,
+      requesterNodeId: task.requesterNodeId,
       groupId: task.groupId,
       targetNodeId: task.targetNodeId,
       resourceId: task.resourceId,
       operation: task.operation,
       requestDigest,
+      ...(submission ? {
+        idempotencyKey: submission.idempotencyKey,
+        idempotencyDigest: submission.idempotencyDigest,
+      } : {}),
       status: "queued",
       createdAt: now,
       updatedAt: now,
@@ -382,24 +435,97 @@ export class MeshController {
     }
   }
 
-  async listCodexThreads(targetNodeId: string): Promise<Record<string, unknown>> {
-    return this.codex.listThreads(targetNodeId);
+  async requestResultArtifact(taskId: string): Promise<MeshResultArtifactManifest> {
+    const record = this.journal.get(taskId);
+    if (!record) throw new Error("未找到任务");
+    const artifactId = taskResultArtifactId(record);
+    if (!artifactId) throw new Error("任务尚未产生 result artifact");
+    const session = this.requireSession(record.targetNodeId);
+    const requestId = `artifact-${randomUUID()}`;
+    const response = new Promise<MeshResultArtifactManifest>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        session.pendingArtifacts.delete(requestId);
+        reject(new Error("等待 result artifact 响应超时"));
+      }, 30_000);
+      session.pendingArtifacts.set(requestId, { taskId, artifactId, resolve, reject, timer });
+    });
+    try {
+      await this.send(session, {
+        kind: "mesh-artifact-request",
+        requestId,
+        requesterNodeId: this.nodeId,
+        targetNodeId: record.targetNodeId,
+        taskId,
+        artifactId,
+      });
+      return await response;
+    } catch (error) {
+      const pending = session.pendingArtifacts.get(requestId);
+      if (pending) clearTimeout(pending.timer);
+      session.pendingArtifacts.delete(requestId);
+      throw error;
+    }
   }
 
-  async readCodexThread(targetNodeId: string, sessionId: string): Promise<Record<string, unknown>> {
-    return this.codex.readThread(targetNodeId, sessionId);
+  async listCodexThreads(targetNodeId: string, deadlineMs = 30_000): Promise<Record<string, unknown>> {
+    return this.codex.listThreads(targetNodeId, deadlineAt(deadlineMs));
   }
 
-  async startCodexThread(targetNodeId: string, text: string, cwd?: string): Promise<Record<string, unknown>> {
-    return this.codex.startThread(targetNodeId, text, cwd);
+  async readCodexThread(targetNodeId: string, sessionId: string, deadlineMs = 30_000): Promise<Record<string, unknown>> {
+    return this.codex.readThread(targetNodeId, sessionId, deadlineAt(deadlineMs));
   }
 
-  async sendCodexInput(targetNodeId: string, sessionId: string, text: string): Promise<Record<string, unknown>> {
-    return this.codex.sendInput(targetNodeId, sessionId, text);
+  startCodexThreadOperation(
+    targetNodeId: string,
+    text: string,
+    idempotencyKey: string,
+    cwd?: string,
+    deadlineMs = 120_000,
+  ): CodexOperationRecord {
+    const requestDigest = createHash("sha256").update(stableStringify({
+      targetNodeId,
+      text,
+      cwd: cwd ?? null,
+    }), "utf8").digest("hex");
+    const started = this.codexOperations.begin({
+      requesterNodeId: this.nodeId,
+      targetNodeId,
+      idempotencyKey,
+      requestDigest,
+      deadlineAt: deadlineAt(deadlineMs),
+    });
+    if (started.conflict) throw new Error("idempotencyKey 已绑定不同 Codex operation");
+    if (started.created) {
+      queueMicrotask(() => {
+        void this.executeCodexStart(started.record, text, cwd);
+      });
+    }
+    return started.record;
   }
 
-  async interruptCodexThread(targetNodeId: string, sessionId: string): Promise<Record<string, unknown>> {
-    return this.codex.interrupt(targetNodeId, sessionId);
+  getCodexOperation(operationId: string): CodexOperationRecord | undefined {
+    return this.codexOperations.get(operationId, this.nodeId);
+  }
+
+  listCodexOperations(query: CodexOperationListQuery): ReturnType<CodexOperationStore["list"]> {
+    return this.codexOperations.list(this.nodeId, query);
+  }
+
+  async sendCodexInput(
+    targetNodeId: string,
+    sessionId: string,
+    text: string,
+    deadlineMs = 30_000,
+  ): Promise<Record<string, unknown>> {
+    return this.codex.sendInput(targetNodeId, sessionId, text, deadlineAt(deadlineMs));
+  }
+
+  async interruptCodexThread(
+    targetNodeId: string,
+    sessionId: string,
+    deadlineMs = 30_000,
+  ): Promise<Record<string, unknown>> {
+    return this.codex.interrupt(targetNodeId, sessionId, deadlineAt(deadlineMs));
   }
 
   listCodexEvents(
@@ -421,6 +547,120 @@ export class MeshController {
     optionId: "allow" | "deny",
   ): Promise<Record<string, unknown>> {
     return this.codex.respondApproval(targetNodeId, requestId, optionId);
+  }
+
+  private async executeCodexStart(record: CodexOperationRecord, text: string, cwd?: string): Promise<void> {
+    const controlRequestId = `codex-op:${record.operationId}`;
+    try {
+      this.codexOperations.update(record.operationId, "sent", {
+        sentAt: Date.now(),
+        retryable: false,
+        message: "request dispatch started for paired peer",
+      });
+      const response = await this.codex.startThread(record.targetNodeId, text, cwd, {
+        controlRequestId,
+        deadlineAt: record.deadlineAt,
+      });
+      this.completeCodexStart(record.operationId, response);
+    } catch (error) {
+      const gateway = error instanceof CodexGatewayError
+        ? error
+        : new CodexGatewayError(error instanceof Error ? error.message : String(error), "controller", true, false);
+      if (gateway.timedOut) {
+        this.codexOperations.update(
+          record.operationId,
+          "timed_out",
+          {
+            ...codexOperationTimeoutPatch(gateway.stage, gateway.message),
+            ...(gateway.sessionId ? { sessionId: gateway.sessionId } : {}),
+          },
+        );
+      } else {
+        this.codexOperations.update(record.operationId, "failed", {
+          ...(gateway.sessionId ? { sessionId: gateway.sessionId } : {}),
+          retryable: gateway.retryable,
+          message: gateway.message.slice(0, 512),
+          completedAt: Date.now(),
+        });
+      }
+    }
+  }
+
+  private completeCodexStart(operationId: string, response: Record<string, unknown>): void {
+    const sessionId = typeof response.sessionId === "string" ? response.sessionId : undefined;
+    if (!sessionId) {
+      this.codexOperations.update(operationId, "failed", {
+        retryable: false,
+        message: "watcher acknowledgement did not include sessionId",
+        completedAt: Date.now(),
+      });
+      return;
+    }
+    const now = Date.now();
+    this.codexOperations.update(operationId, "acknowledged", {
+      sessionId,
+      acknowledgedAt: now,
+      retryable: false,
+      message: "watcher acknowledged thread creation",
+    });
+    if (response.lateAfterTimeout === true || response.status === "failed") {
+      this.codexOperations.update(operationId, "failed", {
+        sessionId,
+        retryable: true,
+        message: "thread exists but the initial turn did not complete dispatch",
+        completedAt: Date.now(),
+      });
+      return;
+    }
+    this.codexOperations.update(operationId, "running", {
+      sessionId,
+      retryable: false,
+      message: "initial Codex turn is running",
+    });
+    this.codexOperations.update(operationId, "completed", {
+      sessionId,
+      retryable: false,
+      message: "thread and initial turn accepted",
+      completedAt: Date.now(),
+    });
+  }
+
+  private handleLateCodexOperation(
+    targetNodeId: string,
+    controlRequestId: string,
+    payload: Record<string, unknown>,
+  ): void {
+    const operationId = controlRequestId.slice("codex-op:".length);
+    const record = this.codexOperations.get(operationId, this.nodeId);
+    if (!record || record.targetNodeId !== targetNodeId) return;
+    try {
+      if (payload.kind === "input-ack") {
+        this.completeCodexStart(operationId, payload);
+        return;
+      }
+      if (payload.kind === "codex-error") {
+        const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
+        const stage = typeof payload.timedOutStage === "string"
+          && ["controller", "relay", "peer", "watcher", "app-server"].includes(payload.timedOutStage)
+          ? payload.timedOutStage as "controller" | "relay" | "peer" | "watcher" | "app-server"
+          : "app-server";
+        if (payload.timedOut === true) {
+          this.codexOperations.update(operationId, "timed_out", {
+            ...codexOperationTimeoutPatch(stage, String(payload.note ?? "remote deadline elapsed")),
+            ...(sessionId ? { sessionId } : {}),
+          });
+        } else {
+          this.codexOperations.update(operationId, "failed", {
+            ...(sessionId ? { sessionId } : {}),
+            retryable: payload.retryable === true,
+            message: String(payload.note ?? "remote Codex operation failed").slice(0, 512),
+            completedAt: Date.now(),
+          });
+        }
+      }
+    } catch {
+      // A malformed or stale late response cannot erase the durable operation.
+    }
   }
 
   overview(): ControllerOverview {
@@ -539,6 +779,26 @@ export class MeshController {
         clearTimeout(pending.timer);
         session.pendingTaskCancels.delete(cancelled.data.requestId);
         pending.resolve(cancelled.data);
+      }
+      return;
+    }
+
+    const artifact = MeshArtifactPayloadSchema.safeParse(payload);
+    if (artifact.success) {
+      if (artifact.data.targetNodeId !== session.peer.fingerprint) return;
+      const pending = session.pendingArtifacts.get(artifact.data.requestId);
+      if (pending
+        && pending.taskId === artifact.data.taskId
+        && pending.artifactId === artifact.data.manifest.artifactId) {
+        clearTimeout(pending.timer);
+        session.pendingArtifacts.delete(artifact.data.requestId);
+        try {
+          const manifest = validateResultArtifactManifest(artifact.data.manifest);
+          if (manifest.taskId !== artifact.data.taskId) throw new Error("result artifact task binding mismatch");
+          pending.resolve(manifest);
+        } catch {
+          pending.reject(new Error("result artifact integrity validation failed"));
+        }
       }
       return;
     }
@@ -691,6 +951,11 @@ export class MeshController {
       pending.reject(error);
     }
     session.pendingTaskCancels.clear();
+    for (const pending of session.pendingArtifacts.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    session.pendingArtifacts.clear();
   }
 
   private scheduleReconnect(peerId: string): void {
@@ -719,4 +984,17 @@ function isTerminal(status: ControlTaskRecord["status"]): boolean {
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function deadlineAt(deadlineMs: number): number {
+  const bounded = Number.isFinite(deadlineMs)
+    ? Math.max(1_000, Math.min(Math.trunc(deadlineMs), 2 * 60_000))
+    : 30_000;
+  return Date.now() + bounded;
+}
+
+function taskResultArtifactId(record: ControlTaskRecord): string | undefined {
+  if (!record.result || typeof record.result !== "object" || Array.isArray(record.result)) return undefined;
+  const value = (record.result as Record<string, unknown>).resultArtifactId;
+  return typeof value === "string" ? value : undefined;
 }

@@ -14,6 +14,7 @@ import {
   MeshRunScopeSchema,
   MeshTaskCancelRequestPayloadSchema,
   MeshTaskStatusRequestPayloadSchema,
+  MeshArtifactRequestPayloadSchema,
   isMeshCapabilityGrantExpired,
   b64encode,
   signMeshApproval,
@@ -21,10 +22,12 @@ import {
   verifyMeshApproval,
   verifyMeshCapabilityGrant,
   type MeshApproval,
+  type MeshArtifactPayload,
   type MeshCapabilityGrant,
   type MeshResource,
   type MeshResourceListPayload,
   type MeshResourceStatusPayload,
+  type MeshJsonValue,
   type MeshTaskRequest,
   type MeshTaskCancelledPayload,
   type MeshTaskProgressPayload,
@@ -41,6 +44,8 @@ import { MeshPolicyEngine, type MeshPolicyEngineOptions } from "./policy";
 import { loadOrCreateMeshSigningKey } from "./signing";
 import { appendMeshAuditEvent } from "./audit";
 import { failedGpuStatus, parseGpuStatus } from "./gpu-status";
+import { failedWorkspaceStatus, parseWorkspaceStatus } from "./workspace-status";
+import { MeshArtifactStore, validateBaseArtifactManifest } from "./artifact-store";
 
 export interface MeshServiceOptions {
   nodeId: string;
@@ -50,9 +55,11 @@ export interface MeshServiceOptions {
   resources?: LocalMeshResource[];
   allowedRoots?: string[];
   quarantineRoot?: string;
+  artifactRoot?: string;
   maxEntries?: number;
   runners?: MeshRunnerSpec[];
   taskStore?: MeshTaskStore;
+  artifactStore?: MeshArtifactStore;
   auditSink?: MeshPolicyEngineOptions["auditSink"];
   /** Test/integration injection; production defaults to the persisted owner key. */
   signingKey?: MeshSigningKeyPair;
@@ -65,9 +72,11 @@ export class MeshService {
   readonly executor: MeshExecutor;
   readonly runners: MeshRunnerRegistry;
   readonly tasks: MeshTaskStore;
+  readonly artifacts: MeshArtifactStore;
   readonly policy: MeshPolicyEngine;
   private readonly signingKey: MeshSigningKeyPair;
   private readonly trustedRequesters?: ReadonlySet<string>;
+  private readonly trustedGroups: ReadonlySet<string>;
   private readonly resources = new Map<string, LocalMeshResource>();
   /** In-memory marker distinguishes a live task from a journal entry left by a restart. */
   private readonly activeTasks = new Set<string>();
@@ -77,6 +86,7 @@ export class MeshService {
     this.nodeId = options.nodeId;
     this.signingKey = options.signingKey ?? loadOrCreateMeshSigningKey();
     this.trustedRequesters = options.trustedRequesters;
+    this.trustedGroups = options.trustedGroups;
     this.executor = new MeshExecutor({
       allowedRoots: options.allowedRoots,
       quarantineRoot: options.quarantineRoot,
@@ -92,6 +102,7 @@ export class MeshService {
       }
     }
     this.tasks = options.taskStore ?? new MeshTaskStore();
+    this.artifacts = options.artifactStore ?? new MeshArtifactStore(options.artifactRoot);
 
     const ownerPublicKey = b64encode(this.signingKey.publicKey);
     this.policy = new MeshPolicyEngine({
@@ -114,26 +125,37 @@ export class MeshService {
       throw new Error("Mesh 本地资源的 ownerNodeId 必须是当前目标节点");
     }
     if (this.resources.has(resource.id)) throw new Error(`Mesh resource id 重复: ${resource.id}`);
+    if (resource.allowedGroupIds?.some((groupId) => !this.trustedGroups.has(groupId))) {
+      throw new Error("资源 allowedGroupIds 包含未受信任组");
+    }
     this.executor.registerResource(resource);
     this.resources.set(resource.id, { ...resource });
   }
 
   listResources(): MeshResource[] {
-    return [...this.resources.values()].map((resource) => ({
+    return [...this.resources.values()].map((resource) => {
+      const allowedGroupIds = [...(resource.allowedGroupIds ?? this.trustedGroups)].sort();
+      const allowedOperations = [
+        "inspect" as const,
+        ...(this.runners.forResource(resource.id).length > 0 ? ["run" as const] : []),
+        "quarantine" as const,
+      ];
+      return {
       id: resource.id,
       ownerNodeId: resource.ownerNodeId,
       kind: resource.kind,
       displayName: resource.displayName,
       // Deliberately avoid sending an absolute local path over the channel.
       rootHint: resource.displayName,
-      capabilities: [
-        "inspect",
-        ...(this.runners.forResource(resource.id).length > 0 ? ["run" as const] : []),
-        "quarantine",
-      ],
+      capabilities: allowedOperations,
+      allowedOperations,
+      allowedGroupIds,
+      ...(allowedGroupIds.length === 1 ? { defaultGroupId: allowedGroupIds[0] } : {}),
       runnerIds: this.runners.forResource(resource.id),
+      runners: this.runners.metadataForResource(resource.id),
       ...(resource.statusRunnerId ? { statusRunnerId: resource.statusRunnerId } : {}),
-    }));
+      };
+    });
   }
 
   /** Return discovery metadata without exposing local paths or environment. */
@@ -155,16 +177,24 @@ export class MeshService {
 
     const observedAt = new Date().toISOString();
     let status;
-    if (resource.kind !== "gpu" || !resource.statusRunnerId) {
-      status = failedGpuStatus("资源未配置只读 GPU 状态探针", observedAt);
+    if (!resource.statusRunnerId) {
+      status = resource.kind === "gpu"
+        ? failedGpuStatus("资源未配置只读 GPU 状态探针", observedAt)
+        : failedWorkspaceStatus("资源未配置只读 workspace 状态探针", observedAt);
     } else {
       try {
         const runner = await this.runners.runStatus(resource.statusRunnerId, resource.id);
         status = runner.status === "completed"
-          ? parseGpuStatus(runner.stdout, observedAt)
-          : failedGpuStatus("GPU 状态探针未成功完成", observedAt);
+          ? resource.kind === "gpu"
+            ? parseGpuStatus(runner.resultSummary, observedAt)
+            : parseWorkspaceStatus(runner.resultSummary, observedAt)
+          : resource.kind === "gpu"
+            ? failedGpuStatus("GPU 状态探针未成功完成", observedAt)
+            : failedWorkspaceStatus("workspace 状态探针未成功完成", observedAt);
       } catch {
-        status = failedGpuStatus("GPU 状态探针不可用", observedAt);
+        status = resource.kind === "gpu"
+          ? failedGpuStatus("GPU 状态探针不可用", observedAt)
+          : failedWorkspaceStatus("workspace 状态探针不可用", observedAt);
       }
     }
     return {
@@ -188,6 +218,9 @@ export class MeshService {
     if (!resource || resource.ownerNodeId !== this.nodeId || task.targetNodeId !== this.nodeId) {
       throw new Error("只有目标资源所有者可以签发 Mesh grant");
     }
+    if (resource.allowedGroupIds && !resource.allowedGroupIds.includes(task.groupId)) {
+      throw new Error("资源不允许该 trusted group");
+    }
     if (["deploy", "delete", "sudo", "secret-read", "arbitrary-shell"].includes(task.operation)) {
       throw new Error("Mesh v0 不为部署、删除、sudo、密钥或任意 shell 签发 grant");
     }
@@ -196,7 +229,11 @@ export class MeshService {
       const runner = runScope.success ? this.runners.get(runScope.data.runnerId) : undefined;
       if (!runScope.success || !runner || runner.resourceId !== task.resourceId || runner.purpose !== "task"
         || (runScope.data.args.length > 0 && !runner.allowDynamicArgs)
-        || (runScope.data.input !== undefined && !runner.allowInput)) {
+        || (runScope.data.input !== undefined && !runner.allowInput)
+        || (runner.workspaceCapabilities?.includes("task-scoped-workspace")
+          && !runScope.data.baseArtifactId)
+        || (runScope.data.baseArtifactId !== undefined
+          && !runner.workspaceCapabilities?.includes("task-scoped-workspace"))) {
         throw new Error("run grant 必须绑定一个有效的本地 runnerId 和受限 scope");
       }
     }
@@ -263,6 +300,8 @@ export class MeshService {
    */
   proposeTask(payload: MeshTaskRequestPayload): MeshTaskProgressPayload | MeshTaskResultPayload {
     const task = payload.task;
+    const artifactError = this.artifactBindingError(payload);
+    if (artifactError) return this.result(task, "denied", "deny", `策略拒绝: ${artifactError}`);
     let begun;
     try {
       begun = this.tasks.begin(task);
@@ -293,6 +332,7 @@ export class MeshService {
         kind: resource.kind,
         displayName: resource.displayName,
         rootHint: resource.displayName,
+        allowedGroupIds: resource.allowedGroupIds,
       } : undefined,
     });
     if (task.operation !== "run" || boundary.reason !== "grant-required") {
@@ -305,7 +345,9 @@ export class MeshService {
     const runner = runScope.success ? this.runners.get(runScope.data.runnerId) : undefined;
     if (!runScope.success || !runner || runner.resourceId !== task.resourceId || runner.purpose !== "task"
       || (runScope.data.args.length > 0 && !runner.allowDynamicArgs)
-      || (runScope.data.input !== undefined && !runner.allowInput)) {
+      || (runScope.data.input !== undefined && !runner.allowInput)
+      || (runScope.data.baseArtifactId !== undefined
+        && !runner.workspaceCapabilities?.includes("task-scoped-workspace"))) {
       const denied = this.result(task, "denied", "deny", "策略拒绝: invalid-runner-scope");
       this.rememberResult(task.taskId, "denied", denied);
       return denied;
@@ -357,6 +399,29 @@ export class MeshService {
     };
   }
 
+  resultArtifact(request: unknown): MeshArtifactPayload {
+    const parsed = MeshArtifactRequestPayloadSchema.parse(request);
+    this.assertControlRequester(parsed.requesterNodeId, parsed.targetNodeId);
+    const record = this.tasks.get(parsed.taskId);
+    if (!record || record.requesterNodeId !== parsed.requesterNodeId || !record.result) {
+      throw new Error("目标设备没有该任务的 result artifact");
+    }
+    const result = record.result.result;
+    const resultRecord = result && typeof result === "object" && !Array.isArray(result)
+      ? result as Record<string, unknown>
+      : undefined;
+    if (resultRecord?.resultArtifactId !== parsed.artifactId) {
+      throw new Error("result artifact 与任务不匹配");
+    }
+    return {
+      kind: "mesh-artifact",
+      requestId: parsed.requestId,
+      targetNodeId: this.nodeId,
+      taskId: parsed.taskId,
+      manifest: this.artifacts.readResult(parsed.taskId, parsed.artifactId),
+    };
+  }
+
   cancelTask(request: unknown): MeshTaskCancelledPayload {
     const parsed = MeshTaskCancelRequestPayloadSchema.parse(request);
     this.assertControlRequester(parsed.requesterNodeId, parsed.targetNodeId);
@@ -380,6 +445,8 @@ export class MeshService {
 
   async handleRequest(payload: MeshTaskRequestPayload, onProgress?: MeshTaskProgressSink): Promise<MeshTaskResultPayload> {
     const task = payload.task;
+    const artifactError = this.artifactBindingError(payload);
+    if (artifactError) return this.result(task, "denied", "deny", `策略拒绝: ${artifactError}`);
     let begun;
     try {
       begun = this.tasks.begin(task);
@@ -413,6 +480,7 @@ export class MeshService {
           kind: resource.kind,
           displayName: resource.displayName,
           rootHint: resource.displayName,
+          allowedGroupIds: resource.allowedGroupIds,
         } : undefined,
         grant: payload.grant,
         approval: payload.approval,
@@ -433,18 +501,24 @@ export class MeshService {
 
       this.tasks.update(task.taskId, { status: "running" });
       if (task.operation === "run") {
+        const workspace = payload.baseArtifact
+          ? this.artifacts.materialize(task.taskId, payload.baseArtifact)
+          : undefined;
         // `run()` registers the child synchronously before returning its
         // promise. Publish "running" only after that point so an immediate
         // cancel request cannot race ahead of the runner registry.
-        const runnerPromise = this.runners.run(task);
+        const runnerPromise = this.runners.run(task, workspace?.workspace);
         await this.emitProgress(task, "running", "任务正在目标设备执行", onProgress);
         const runner = await runnerPromise;
+        const artifact = workspace && payload.baseArtifact
+          ? this.artifacts.captureResult(task.taskId, payload.baseArtifact, workspace.workspace)
+          : undefined;
         const result = this.result(
           task,
           runner.status === "completed" ? "completed" : runner.status,
           decision.decision,
           runner.status === "completed" ? "任务已完成" : "typed runner 未成功完成任务",
-          this.runnerResult(runner, resource?.root),
+          this.runnerResult(runner, resource?.root, artifact),
         );
         this.rememberResult(task.taskId, runner.status, result);
         await this.emitProgress(task, runner.status, result.message, onProgress);
@@ -569,26 +643,74 @@ export class MeshService {
     }
   }
 
-  private runnerResult(runner: MeshRunnerResult, resourceRoot?: string): Record<string, string | number | boolean | null> {
+  private runnerResult(
+    runner: MeshRunnerResult,
+    resourceRoot?: string,
+    artifact?: { artifactId: string; sha256: string; baseArtifactId: string; changed: unknown[]; deleted: unknown[] },
+  ): Record<string, MeshJsonValue> {
     const redact = (value: string): string => {
       const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
       return value
         .replaceAll(resourceRoot ?? "\u0000", "<resource>")
         .replaceAll(home || "\u0000", "<home>");
     };
+    const summary = truncateUtf8(redact(runner.resultSummary), 16 * 1024);
+    const debug = runner.debugOutput === undefined
+      ? undefined
+      : truncateUtf8(redact(runner.debugOutput), 8 * 1024);
+    const meshTruncated = summary.truncated || Boolean(debug?.truncated);
+    const complete = !runner.resultSummaryTruncated
+      && !runner.debugOutputTruncated
+      && !meshTruncated;
     return {
       runnerId: runner.runnerId,
       exitCode: runner.exitCode,
       signal: runner.signal,
       timedOut: runner.timedOut,
       durationMs: runner.durationMs,
-      stdout: runner.outputExposed ? redact(runner.stdout) : "",
-      stderr: runner.outputExposed ? redact(runner.stderr) : "",
-      stdoutTruncated: runner.stdoutTruncated,
-      stderrTruncated: runner.stderrTruncated,
-      outputExposed: runner.outputExposed,
-      outputSuppressed: !runner.outputExposed,
+      resultSummary: summary.value,
+      ...(debug ? { debugOutput: debug.value } : {}),
+      integrity: {
+        complete,
+        runner: {
+          resultSummaryTruncated: runner.resultSummaryTruncated,
+          debugOutputTruncated: runner.debugOutputTruncated,
+          debugOutputSuppressed: runner.debugOutputSuppressed,
+        },
+        mesh: {
+          resultSummaryTruncated: summary.truncated,
+          debugOutputTruncated: debug?.truncated ?? false,
+        },
+      },
+      ...(artifact ? {
+        baseArtifactId: artifact.baseArtifactId,
+        resultArtifactId: artifact.artifactId,
+        resultArtifactSha256: artifact.sha256,
+        changedFiles: artifact.changed.length,
+        deletedFiles: artifact.deleted.length,
+      } : {}),
     };
+  }
+
+  private artifactBindingError(payload: MeshTaskRequestPayload): string | undefined {
+    if (payload.task.operation !== "run") return payload.baseArtifact ? "artifact-requires-run" : undefined;
+    const scope = MeshRunScopeSchema.safeParse(payload.task.scope ?? {});
+    if (!scope.success) return "invalid-runner-scope";
+    const runner = this.runners.get(scope.data.runnerId);
+    if (runner?.workspaceCapabilities?.includes("task-scoped-workspace") && !payload.baseArtifact) {
+      return "artifact-required-for-runner";
+    }
+    if (Boolean(scope.data.baseArtifactId) !== Boolean(payload.baseArtifact)) {
+      return "artifact-binding-required";
+    }
+    if (!payload.baseArtifact) return undefined;
+    if (scope.data.baseArtifactId !== payload.baseArtifact.artifactId) return "artifact-id-mismatch";
+    try {
+      validateBaseArtifactManifest(payload.baseArtifact);
+      return undefined;
+    } catch {
+      return "invalid-artifact-manifest";
+    }
   }
 
   private result(
@@ -596,7 +718,7 @@ export class MeshService {
     status: MeshTaskResultPayload["status"],
     decision: MeshTaskResultPayload["decision"],
     message: string,
-    result?: Record<string, string | number | boolean | null>,
+    result?: Record<string, MeshJsonValue>,
   ): MeshTaskResultPayload {
     return {
       kind: "mesh-task-result",
@@ -632,4 +754,10 @@ export class MeshService {
 
 function isTerminal(status: MeshTaskLifecycleStatus): boolean {
   return ["completed", "denied", "failed", "cancelled"].includes(status);
+}
+
+function truncateUtf8(value: string, maxBytes: number): { value: string; truncated: boolean } {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.byteLength <= maxBytes) return { value, truncated: false };
+  return { value: bytes.subarray(0, maxBytes).toString("utf8"), truncated: true };
 }

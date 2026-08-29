@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CodexPeerGateway } from "../src/control/codex";
+import { CodexGatewayError, CodexPeerGateway } from "../src/control/codex";
 
 describe("CodexPeerGateway", () => {
   test("correlates thread requests to the authenticated target peer", async () => {
@@ -118,5 +118,80 @@ describe("CodexPeerGateway", () => {
     await Promise.resolve();
     gateway.handleDisconnect("mac-node", new Error("relay disconnected"));
     await expect(pending).rejects.toThrow("relay disconnected");
+  });
+
+  test("reports the exact watcher, app-server, and peer failure stages", async () => {
+    const relay = new CodexPeerGateway(
+      async () => await new Promise<void>(() => undefined),
+      { requestTimeoutMs: 10 },
+    );
+    try {
+      await relay.listThreads("mac-node", Date.now() + 20);
+      throw new Error("expected relay timeout");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CodexGatewayError);
+      expect(error).toMatchObject({ stage: "relay", timedOut: true, retryable: true });
+    }
+
+    const watcher = new CodexPeerGateway(async () => undefined, { requestTimeoutMs: 10 });
+    try {
+      await watcher.listThreads("mac-node", Date.now() + 20);
+      throw new Error("expected watcher timeout");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CodexGatewayError);
+      expect(error).toMatchObject({ stage: "watcher", timedOut: true, retryable: true });
+    }
+
+    let sent: Record<string, unknown> | undefined;
+    const appServer = new CodexPeerGateway(async (_target, payload) => { sent = payload; });
+    const appPending = appServer.readThread("mac-node", "thread-1", Date.now() + 1_000);
+    await Promise.resolve();
+    appServer.handlePayload("mac-node", {
+      kind: "codex-error",
+      controlRequestId: sent?.controlRequestId,
+      note: "thread/resume timed out",
+      timedOut: true,
+      timedOutStage: "app-server",
+      retryable: true,
+      sessionId: "thread-created-before-timeout",
+    });
+    try {
+      await appPending;
+      throw new Error("expected app-server timeout");
+    } catch (error) {
+      expect(error).toMatchObject({
+        stage: "app-server",
+        timedOut: true,
+        retryable: true,
+        sessionId: "thread-created-before-timeout",
+      });
+    }
+
+    let failedSent: Record<string, unknown> | undefined;
+    const appFailure = new CodexPeerGateway(async (_target, payload) => { failedSent = payload; });
+    const failedPending = appFailure.readThread("mac-node", "thread-1", Date.now() + 1_000);
+    await Promise.resolve();
+    appFailure.handlePayload("mac-node", {
+      kind: "codex-error",
+      controlRequestId: failedSent?.controlRequestId,
+      note: "thread/resume rejected",
+      timedOut: false,
+      timedOutStage: "app-server",
+      retryable: false,
+    });
+    try {
+      await failedPending;
+      throw new Error("expected app-server failure");
+    } catch (error) {
+      expect(error).toMatchObject({ stage: "app-server", timedOut: false, retryable: false });
+    }
+
+    const peer = new CodexPeerGateway(async () => { throw new Error("设备未连接"); });
+    try {
+      await peer.sendInput("mac-node", "thread-1", "continue", Date.now() + 1_000);
+      throw new Error("expected peer failure");
+    } catch (error) {
+      expect(error).toMatchObject({ stage: "peer", timedOut: false, retryable: true });
+    }
   });
 });

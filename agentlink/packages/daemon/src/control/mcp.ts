@@ -2,12 +2,29 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import {
+  MeshBaseArtifactManifestSchema,
+  MeshArtifactPayloadSchema,
+  MeshGroupIdSchema,
+  MeshIdempotencyKeySchema,
+  MeshNodeIdSchema,
+  MeshOperationIdSchema,
+  MeshRequestIdSchema,
+  MeshResourceIdSchema,
+  MeshRunnerIdSchema,
+  MeshTaskIdSchema,
+  MeshThreadIdSchema,
+  meshArtifactSha256,
+} from "@agentlink/wire";
 import { isLoopbackHostname } from "./http-security";
+import { validateResultArtifactManifest } from "../mesh/artifact-store";
 
 const DEFAULT_CONTROL_URL = "http://127.0.0.1:8790";
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_HTTP_RESPONSE_BYTES = 64 * 1024;
-const MAX_TOOL_TEXT_CHARS = 12_000;
+const MAX_ARTIFACT_HTTP_RESPONSE_BYTES = 12 * 1024 * 1024;
+const MAX_LIST_HTTP_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_TOOL_TEXT_CHARS = 256 * 1024;
 const MAX_ERROR_TEXT_CHARS = 512;
 const MAX_PEERS = 32;
 const MAX_RESOURCES = 64;
@@ -19,36 +36,45 @@ const MAX_TASK_RESULT_DEPTH = 3;
 const MAX_TASK_RESULT_ITEMS = 16;
 const MAX_TASK_RESULT_STRING_CHARS = 1_024;
 
-const IdSchema = z.string().trim().min(1).max(256);
-const TaskIdSchema = z.string()
-  .trim()
-  .min(1)
-  .max(256)
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "taskId 必须是安全的单路径段标识符");
+const DeadlineMsSchema = z.number().int().min(1_000).max(2 * 60_000);
 
 const SubmitJobInputSchema = z.object({
-  groupId: IdSchema,
-  targetNodeId: IdSchema,
-  resourceId: IdSchema,
+  groupId: MeshGroupIdSchema.optional(),
+  targetNodeId: MeshNodeIdSchema,
+  resourceId: MeshResourceIdSchema,
   operation: z.union([z.literal("inspect"), z.literal("run")]),
-  runnerId: IdSchema.optional(),
+  runnerId: MeshRunnerIdSchema.optional(),
   args: z.array(z.string().max(4_096)).max(64).optional(),
   input: z.string().max(1_048_576).optional(),
   timeoutMs: z.number().int().min(1_000).max(24 * 60 * 60_000).optional(),
+  idempotencyKey: MeshIdempotencyKeySchema.optional(),
+  baseArtifact: MeshBaseArtifactManifestSchema.optional(),
 }).strip();
 
 const JobIdInputSchema = z.object({
-  taskId: TaskIdSchema,
+  taskId: MeshTaskIdSchema,
+}).strip();
+const ListJobsInputSchema = z.object({
+  targetNodeId: MeshNodeIdSchema.optional(),
+  resourceId: MeshResourceIdSchema.optional(),
+  groupId: MeshGroupIdSchema.optional(),
+  status: z.enum(["queued", "running", "completed", "denied", "approval-required", "failed", "cancelled"]).optional(),
+  createdAfter: z.number().int().nonnegative().optional(),
+  limit: z.number().int().min(1).max(100).optional().default(50),
+  cursor: z.string().min(1).max(512).optional(),
 }).strip();
 const RemoteTargetInputSchema = z.object({
-  targetNodeId: IdSchema,
+  targetNodeId: MeshNodeIdSchema,
+  deadlineMs: DeadlineMsSchema.optional().default(30_000),
 }).strip();
 const RemoteThreadInputSchema = RemoteTargetInputSchema.extend({
-  sessionId: IdSchema,
+  sessionId: MeshThreadIdSchema,
 }).strip();
 const RemoteStartInputSchema = RemoteTargetInputSchema.extend({
   text: z.string().max(64 * 1024).refine((value) => value.trim().length > 0, "text 不能为空"),
   cwd: z.string().max(4_096).optional(),
+  idempotencyKey: MeshIdempotencyKeySchema.optional(),
+  deadlineMs: DeadlineMsSchema.optional().default(120_000),
 }).strip();
 const RemoteInputSchema = RemoteThreadInputSchema.extend({
   text: z.string().max(64 * 1024).refine((value) => value.trim().length > 0, "text 不能为空"),
@@ -56,11 +82,21 @@ const RemoteInputSchema = RemoteThreadInputSchema.extend({
 const RemoteEventsInputSchema = RemoteTargetInputSchema.extend({
   afterSeq: z.number().int().min(0).optional().default(0),
   limit: z.number().int().min(1).max(100).optional().default(50),
-  sessionId: IdSchema.optional(),
+  sessionId: MeshThreadIdSchema.optional(),
 }).strip();
 const RemoteApprovalInputSchema = RemoteTargetInputSchema.extend({
-  requestId: IdSchema,
+  requestId: MeshRequestIdSchema,
   optionId: z.enum(["allow", "deny"]),
+}).strip();
+const RemoteOperationInputSchema = z.object({
+  operationId: MeshOperationIdSchema,
+}).strip();
+const RemoteOperationListInputSchema = z.object({
+  targetNodeId: MeshNodeIdSchema.optional(),
+  status: z.enum(["queued", "sent", "acknowledged", "running", "completed", "failed", "timed_out"]).optional(),
+  createdAfter: z.number().int().nonnegative().optional(),
+  limit: z.number().int().min(1).max(100).optional().default(50),
+  cursor: z.string().min(1).max(512).optional(),
 }).strip();
 
 export type MeshSubmitJobInput = z.infer<typeof SubmitJobInputSchema>;
@@ -101,10 +137,12 @@ export class ControlApiClient {
 
   async submitJob(input: MeshSubmitJobInput): Promise<unknown> {
     const common = {
-      groupId: input.groupId,
+      ...(input.groupId ? { groupId: input.groupId } : {}),
       targetNodeId: input.targetNodeId,
       resourceId: input.resourceId,
       operation: input.operation,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      ...(input.baseArtifact ? { baseArtifact: input.baseArtifact } : {}),
     };
     const body = input.operation === "run" ? {
       ...common,
@@ -113,9 +151,23 @@ export class ControlApiClient {
         args: input.args ?? [],
         ...(input.input !== undefined ? { input: input.input } : {}),
         ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+        ...(input.baseArtifact ? { baseArtifactId: input.baseArtifact.artifactId } : {}),
       },
     } : common;
     return this.request("POST", "/api/tasks", body);
+  }
+
+  async listJobs(input: z.infer<typeof ListJobsInputSchema>): Promise<unknown> {
+    const query = new URLSearchParams({ limit: String(input.limit) });
+    if (input.targetNodeId) query.set("targetNodeId", input.targetNodeId);
+    if (input.resourceId) query.set("resourceId", input.resourceId);
+    if (input.groupId) query.set("groupId", input.groupId);
+    if (input.status) query.set("status", input.status);
+    if (input.createdAfter !== undefined) query.set("createdAfter", String(input.createdAfter));
+    if (input.cursor) query.set("cursor", input.cursor);
+    return this.request("GET", `/api/tasks?${query}`, undefined, {
+      maxResponseBytes: MAX_LIST_HTTP_RESPONSE_BYTES,
+    });
   }
 
   async getJob(taskId: string): Promise<unknown> {
@@ -126,28 +178,57 @@ export class ControlApiClient {
     return this.request("POST", `/api/tasks/${encodePathSegment(taskId)}/cancel`);
   }
 
-  async listCodexThreads(targetNodeId: string): Promise<unknown> {
-    return this.request("GET", `/api/codex/threads?targetNodeId=${encodeURIComponent(targetNodeId)}`);
-  }
-
-  async readCodexThread(targetNodeId: string, sessionId: string): Promise<unknown> {
-    return this.request("POST", "/api/codex/read", { targetNodeId, sessionId });
-  }
-
-  async startCodexThread(targetNodeId: string, text: string, cwd?: string): Promise<unknown> {
-    return this.request("POST", "/api/codex/start", {
-      targetNodeId,
-      text,
-      ...(cwd ? { cwd } : {}),
+  async getResultArtifact(taskId: string): Promise<unknown> {
+    return this.request("GET", `/api/tasks/${encodePathSegment(taskId)}/artifact`, undefined, {
+      maxResponseBytes: MAX_ARTIFACT_HTTP_RESPONSE_BYTES,
+      timeoutMs: 35_000,
     });
   }
 
-  async sendCodexInput(targetNodeId: string, sessionId: string, text: string): Promise<unknown> {
-    return this.request("POST", "/api/codex/input", { targetNodeId, sessionId, text });
+  async listCodexThreads(targetNodeId: string, deadlineMs: number): Promise<unknown> {
+    const query = new URLSearchParams({ targetNodeId, deadlineMs: String(deadlineMs) });
+    return this.request("GET", `/api/codex/threads?${query}`, undefined, { timeoutMs: deadlineMs + 2_000 });
   }
 
-  async interruptCodexThread(targetNodeId: string, sessionId: string): Promise<unknown> {
-    return this.request("POST", "/api/codex/interrupt", { targetNodeId, sessionId });
+  async readCodexThread(targetNodeId: string, sessionId: string, deadlineMs: number): Promise<unknown> {
+    return this.request("POST", "/api/codex/read", { targetNodeId, sessionId, deadlineMs }, { timeoutMs: deadlineMs + 2_000 });
+  }
+
+  async startCodexThread(
+    targetNodeId: string,
+    text: string,
+    deadlineMs: number,
+    cwd?: string,
+    idempotencyKey?: string,
+  ): Promise<unknown> {
+    return this.request("POST", "/api/codex/start", {
+      targetNodeId,
+      text,
+      deadlineMs,
+      ...(cwd ? { cwd } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+  }
+
+  async getCodexOperation(operationId: string): Promise<unknown> {
+    return this.request("GET", `/api/codex/operations/${encodePathSegment(operationId)}`);
+  }
+
+  async listCodexOperations(input: z.infer<typeof RemoteOperationListInputSchema>): Promise<unknown> {
+    const query = new URLSearchParams({ limit: String(input.limit) });
+    if (input.targetNodeId) query.set("targetNodeId", input.targetNodeId);
+    if (input.status) query.set("status", input.status);
+    if (input.createdAfter !== undefined) query.set("createdAfter", String(input.createdAfter));
+    if (input.cursor) query.set("cursor", input.cursor);
+    return this.request("GET", `/api/codex/operations?${query}`);
+  }
+
+  async sendCodexInput(targetNodeId: string, sessionId: string, text: string, deadlineMs: number): Promise<unknown> {
+    return this.request("POST", "/api/codex/input", { targetNodeId, sessionId, text, deadlineMs }, { timeoutMs: deadlineMs + 2_000 });
+  }
+
+  async interruptCodexThread(targetNodeId: string, sessionId: string, deadlineMs: number): Promise<unknown> {
+    return this.request("POST", "/api/codex/interrupt", { targetNodeId, sessionId, deadlineMs }, { timeoutMs: deadlineMs + 2_000 });
   }
 
   async listCodexEvents(
@@ -189,9 +270,15 @@ export class ControlApiClient {
     return endpoint;
   }
 
-  private async request(method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> {
+  private async request(
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    options: { timeoutMs?: number; maxResponseBytes?: number } = {},
+  ): Promise<unknown> {
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), this.requestTimeoutMs);
+    const timeoutMs = boundedRequestTimeout(options.timeoutMs ?? this.requestTimeoutMs);
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
     try {
       let response: Response;
       try {
@@ -205,11 +292,11 @@ export class ControlApiClient {
           redirect: "error",
         });
       } catch {
-        if (abort.signal.aborted) throw new GatewayError("本地控制 API 请求超时");
+        if (abort.signal.aborted) throw new GatewayError("本地控制 API 请求超时（timedOutStage=controller, retryable=true）");
         throw new GatewayError("本地控制 API 不可用");
       }
 
-      const payload = await readBoundedJson(response);
+      const payload = await readBoundedJson(response, options.maxResponseBytes ?? MAX_HTTP_RESPONSE_BYTES);
       if (!response.ok) {
         const detail = safeApiErrorDetail(payload);
         throw new GatewayError(
@@ -219,7 +306,7 @@ export class ControlApiClient {
       return payload;
     } catch (error) {
       if (error instanceof GatewayError) throw error;
-      if (abort.signal.aborted) throw new GatewayError("本地控制 API 请求超时");
+      if (abort.signal.aborted) throw new GatewayError("本地控制 API 请求超时（timedOutStage=controller, retryable=true）");
       throw new GatewayError("控制 API 响应读取失败");
     } finally {
       clearTimeout(timer);
@@ -248,6 +335,18 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
     },
   }, async () => toolCall(async () => summarizeOverview(await api.listDevices())));
 
+  server.registerTool("mesh_list_jobs", {
+    title: "List Mesh jobs",
+    description: "按目标、资源、可信组、状态和时间列出调用方可见任务；最多返回 100 条并使用 cursor 翻页。",
+    inputSchema: ListJobsInputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, async (input) => toolCall(async () => summarizeJobPage(await api.listJobs(input))));
+
   server.registerTool("mesh_submit_job", {
     title: "Submit Mesh job",
     description: "经 Seoul 控制 API 提交 inspect，或把 named runner 任务送到目标设备等待所有者本地批准。",
@@ -255,7 +354,7 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
     annotations: {
       readOnlyHint: false,
       destructiveHint: true,
-      idempotentHint: false,
+      idempotentHint: true,
       openWorldHint: false,
     },
   }, async (input) => toolCall(async () => {
@@ -276,6 +375,18 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
       openWorldHint: false,
     },
   }, async ({ taskId }) => toolCall(async () => summarizeTask(await api.getJob(taskId))));
+
+  server.registerTool("mesh_get_result_artifact", {
+    title: "Get Mesh result artifact",
+    description: "按 taskId 读取并校验目标返回的 content-addressed changed/deleted file manifest。",
+    inputSchema: JobIdInputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, async ({ taskId }) => artifactToolCall(async () => await api.getResultArtifact(taskId)));
 
   server.registerTool("mesh_cancel_job", {
     title: "Cancel Mesh job",
@@ -299,8 +410,8 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async ({ targetNodeId }) => toolCall(async () => (
-    summarizeCodexThreadList(await api.listCodexThreads(targetNodeId), targetNodeId)
+  }, async ({ targetNodeId, deadlineMs }) => toolCall(async () => (
+    summarizeCodexThreadList(await api.listCodexThreads(targetNodeId, deadlineMs), targetNodeId)
   )));
 
   server.registerTool("remote_codex_read_thread", {
@@ -313,22 +424,56 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async ({ targetNodeId, sessionId }) => toolCall(async () => (
-    summarizeCodexThread(await api.readCodexThread(targetNodeId, sessionId), targetNodeId)
+  }, async ({ targetNodeId, sessionId, deadlineMs }) => toolCall(async () => (
+    summarizeCodexThread(await api.readCodexThread(targetNodeId, sessionId, deadlineMs), targetNodeId)
   )));
 
   server.registerTool("remote_codex_start_thread", {
     title: "Start remote Codex thread",
-    description: "在指定设备上新建 Codex 线程并发送首条消息。该操作可能触发目标上的工具和审批。",
+    description: "持久化异步创建操作并立即返回 operationId；使用状态工具取得最终 sessionId 和超时阶段。",
     inputSchema: RemoteStartInputSchema,
     annotations: {
       readOnlyHint: false,
       destructiveHint: true,
-      idempotentHint: false,
+      idempotentHint: true,
       openWorldHint: false,
     },
-  }, async ({ targetNodeId, text, cwd }) => toolCall(async () => (
-    summarizeCodexAck(await api.startCodexThread(targetNodeId, text, cwd), targetNodeId)
+  }, async ({ targetNodeId, text, cwd, idempotencyKey, deadlineMs }) => toolCall(async () => (
+    summarizeCodexOperation(await api.startCodexThread(
+      targetNodeId,
+      text,
+      deadlineMs,
+      cwd,
+      idempotencyKey,
+    ))
+  )));
+
+  server.registerTool("remote_codex_get_operation", {
+    title: "Get remote Codex operation",
+    description: "读取异步 Codex 创建操作的持久状态、超时阶段、可重试性和最终 sessionId。",
+    inputSchema: RemoteOperationInputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, async ({ operationId }) => toolCall(async () => (
+    summarizeCodexOperation(await api.getCodexOperation(operationId))
+  )));
+
+  server.registerTool("remote_codex_list_operations", {
+    title: "List remote Codex operations",
+    description: "有界列出调用方可见的异步 Codex 操作，并支持 cursor 翻页。",
+    inputSchema: RemoteOperationListInputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, async (input) => toolCall(async () => summarizeCodexOperationPage(
+    await api.listCodexOperations(input),
   )));
 
   server.registerTool("remote_codex_send_message", {
@@ -341,8 +486,8 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
       idempotentHint: false,
       openWorldHint: false,
     },
-  }, async ({ targetNodeId, sessionId, text }) => toolCall(async () => (
-    summarizeCodexAck(await api.sendCodexInput(targetNodeId, sessionId, text), targetNodeId)
+  }, async ({ targetNodeId, sessionId, text, deadlineMs }) => toolCall(async () => (
+    summarizeCodexAck(await api.sendCodexInput(targetNodeId, sessionId, text, deadlineMs), targetNodeId)
   )));
 
   server.registerTool("remote_codex_interrupt", {
@@ -355,8 +500,8 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async ({ targetNodeId, sessionId }) => toolCall(async () => (
-    summarizeCodexAck(await api.interruptCodexThread(targetNodeId, sessionId), targetNodeId)
+  }, async ({ targetNodeId, sessionId, deadlineMs }) => toolCall(async () => (
+    summarizeCodexAck(await api.interruptCodexThread(targetNodeId, sessionId, deadlineMs), targetNodeId)
   )));
 
   server.registerTool("remote_codex_get_events", {
@@ -413,7 +558,7 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
 export async function startControlMcpServer(options: ControlMcpOptions = {}): Promise<void> {
   const server = createControlMcpServer(options);
   const transport = new StdioServerTransport(process.stdin, process.stdout, {
-    maxBufferSize: 2 * 1024 * 1024,
+    maxBufferSize: 16 * 1024 * 1024,
   });
   await server.connect(transport);
 }
@@ -421,6 +566,28 @@ export async function startControlMcpServer(options: ControlMcpOptions = {}): Pr
 async function toolCall(load: () => Promise<unknown>): Promise<CallToolResult> {
   try {
     return textResult(safeJsonText(await load()));
+  } catch (error) {
+    return {
+      isError: true,
+      content: [{ type: "text", text: safeGatewayError(error) }],
+    };
+  }
+}
+
+async function artifactToolCall(load: () => Promise<unknown>): Promise<CallToolResult> {
+  try {
+    const payload = MeshArtifactPayloadSchema.parse(await load());
+    const manifest = validateResultArtifactManifest(payload.manifest);
+    if (manifest.taskId !== payload.taskId) throw new GatewayError("result artifact 任务绑定校验失败");
+    const digest = meshArtifactSha256(manifest);
+    if (payload.manifest.sha256 !== digest || payload.manifest.artifactId !== `sha256:${digest}`) {
+      throw new GatewayError("result artifact 完整性校验失败");
+    }
+    const text = JSON.stringify(payload, null, 2);
+    if (Buffer.byteLength(text, "utf8") > MAX_ARTIFACT_HTTP_RESPONSE_BYTES) {
+      throw new GatewayError("result artifact 超过 MCP 安全上限");
+    }
+    return textResult(text);
   } catch (error) {
     return {
       isError: true,
@@ -446,7 +613,7 @@ function summarizeOverview(value: unknown): Record<string, unknown> {
   }
 
   return {
-    controllerNodeId: textField(overview, "controllerNodeId", 256),
+    controllerNodeId: idField(overview, "controllerNodeId", MeshNodeIdSchema),
     generatedAt: numberField(overview, "generatedAt"),
     counts: {
       peers: peers.length,
@@ -467,7 +634,7 @@ function summarizeOverview(value: unknown): Record<string, unknown> {
 function summarizePeer(value: unknown): Record<string, unknown> {
   const peer = record(value);
   return {
-    nodeId: textField(peer, "fingerprint", 256),
+    nodeId: idField(peer, "fingerprint", MeshNodeIdSchema),
     deviceName: textField(peer, "deviceName", 256),
     platform: textField(peer, "platform", 128),
     status: textField(peer, "status", 64),
@@ -480,16 +647,34 @@ function summarizeResource(value: unknown): Record<string, unknown> {
   const resource = record(value);
   const status = record(resource?.status);
   const gpu = record(status?.gpu);
+  const workspace = record(status?.workspace);
   const devices = array(gpu?.devices);
+  const runners = array(resource?.runners);
   return {
-    resourceId: textField(resource, "id", 256),
-    nodeId: textField(resource, "nodeId", 256),
+    resourceId: idField(resource, "id", MeshResourceIdSchema),
+    nodeId: idField(resource, "nodeId", MeshNodeIdSchema),
     deviceName: textField(resource, "deviceName", 256),
     kind: textField(resource, "kind", 64),
     displayName: textField(resource, "displayName", 256),
     capabilities: stringArray(resource?.capabilities, 32, 64),
-    runnerIds: stringArray(resource?.runnerIds, 32, 256),
-    statusRunnerId: textField(resource, "statusRunnerId", 256),
+    allowedOperations: stringArray(resource?.allowedOperations, 16, 64),
+    allowedGroupIds: typedStringArray(resource?.allowedGroupIds, 32, MeshGroupIdSchema),
+    defaultGroupId: idField(resource, "defaultGroupId", MeshGroupIdSchema),
+    runnerIds: typedStringArray(resource?.runnerIds, 32, MeshRunnerIdSchema),
+    statusRunnerId: idField(resource, "statusRunnerId", MeshRunnerIdSchema),
+    runners: runners.slice(0, 32).map((item) => {
+      const runner = record(item);
+      return {
+        runnerId: idField(runner, "runnerId", MeshRunnerIdSchema),
+        title: textField(runner, "title", 128),
+        purpose: textField(runner, "purpose", 16),
+        approvalRequired: runner?.approvalRequired === true,
+        maxRuntimeMs: numberField(runner, "maxRuntimeMs"),
+        workspaceCapabilities: stringArray(runner?.workspaceCapabilities, 8, 64),
+        inputSchema: safeUnknown(runner?.inputSchema, 0),
+        resultSchema: safeUnknown(runner?.resultSchema, 0),
+      };
+    }),
     ...(status ? {
       status: {
         state: textField(status, "state", 64),
@@ -509,6 +694,18 @@ function summarizeResource(value: unknown): Record<string, unknown> {
           };
         }),
         truncatedGpuDevices: Math.max(0, devices.length - MAX_GPU_DEVICES),
+        ...(workspace ? {
+          workspace: {
+            connectionStatus: textField(workspace, "connectionStatus", 32),
+            watcherAvailable: workspace.watcherAvailable === true,
+            codexAppServerAvailable: workspace.codexAppServerAvailable === true,
+            activeJobs: numberField(workspace, "activeJobs"),
+            workspaceRevision: workspaceRevisionField(workspace.workspaceRevision),
+            lastSuccess: textField(workspace, "lastSuccess", 128),
+            lastErrorStage: textField(workspace, "lastErrorStage", 32),
+            checkedAt: textField(workspace, "checkedAt", 128),
+          },
+        } : {}),
       },
     } : {}),
   };
@@ -518,20 +715,101 @@ function summarizeTask(value: unknown): Record<string, unknown> {
   const outer = record(value);
   const candidate = record(outer?.task) ?? record(outer?.job) ?? outer;
   if (!candidate) throw new GatewayError("控制 API 返回的任务格式无效");
+  const directSummary = Object.hasOwn(candidate, "resultSummary")
+    ? safeUnknownTracked(candidate.resultSummary, 0)
+    : undefined;
   return {
-    taskId: textField(candidate, "taskId", 256),
-    groupId: textField(candidate, "groupId", 256),
-    targetNodeId: textField(candidate, "targetNodeId", 256),
-    resourceId: textField(candidate, "resourceId", 256),
+    taskId: idField(candidate, "taskId", MeshTaskIdSchema),
+    groupId: idField(candidate, "groupId", MeshGroupIdSchema),
+    targetNodeId: idField(candidate, "targetNodeId", MeshNodeIdSchema),
+    resourceId: idField(candidate, "resourceId", MeshResourceIdSchema),
     operation: textField(candidate, "operation", 64),
     status: textField(candidate, "status", 64),
+    phase: textField(candidate, "phase", 64),
+    approvalStatus: textField(candidate, "approvalStatus", 64),
     decision: textField(candidate, "decision", 64),
     message: textField(candidate, "message", 512),
     createdAt: numberField(candidate, "createdAt"),
     updatedAt: numberField(candidate, "updatedAt"),
-    ...(Object.hasOwn(candidate, "result")
-      ? { result: safeUnknown(candidate.result, 0) }
+    pollAfterMs: numberField(candidate, "pollAfterMs"),
+    idempotencyKey: idField(candidate, "idempotencyKey", MeshIdempotencyKeySchema),
+    baseArtifactId: idField(candidate, "baseArtifactId", z.string().regex(/^sha256:[a-f0-9]{64}$/)),
+    resultArtifactId: idField(candidate, "resultArtifactId", z.string().regex(/^sha256:[a-f0-9]{64}$/)),
+    resultArtifactSha256: idField(
+      candidate,
+      "resultArtifactSha256",
+      z.string().regex(/^[a-f0-9]{64}$/),
+    ),
+    ...(directSummary
+      ? { resultSummary: directSummary.value }
       : {}),
+    ...(Object.hasOwn(candidate, "integrity")
+      ? { integrity: gatewayIntegrity(candidate.integrity, directSummary?.truncated ?? false) }
+      : {}),
+    ...(Object.hasOwn(candidate, "result")
+      ? summarizeLegacyTaskResult(candidate.result)
+      : {}),
+  };
+}
+
+function summarizeJobPage(value: unknown): Record<string, unknown> {
+  const page = record(value);
+  if (!page) throw new GatewayError("控制 API 返回的任务列表格式无效");
+  const jobs = array(page.jobs);
+  return {
+    jobs: jobs.slice(0, 100).map(summarizeTask),
+    nextCursor: cursorField(page.nextCursor),
+  };
+}
+
+function summarizeLegacyTaskResult(value: unknown): { result: unknown } {
+  const safe = safeUnknownTracked(value, 0);
+  const output = record(safe.value);
+  if (output && Object.hasOwn(output, "integrity")) {
+    output.integrity = gatewayIntegrity(record(value)?.integrity, safe.truncated);
+  }
+  return { result: output ?? safe.value };
+}
+
+function gatewayIntegrity(value: unknown, gatewayTruncated: boolean): Record<string, unknown> {
+  const upstream = record(value);
+  const sanitized = record(safeUnknown(value, 0)) ?? {};
+  return {
+    ...sanitized,
+    complete: upstream?.complete === true && !gatewayTruncated,
+    gateway: { truncated: gatewayTruncated },
+  };
+}
+
+function summarizeCodexOperation(value: unknown): Record<string, unknown> {
+  const operation = record(value);
+  if (!operation) throw new GatewayError("控制 API 返回的 Codex operation 格式无效");
+  return {
+    operationId: idField(operation, "operationId", MeshOperationIdSchema),
+    targetNodeId: idField(operation, "targetNodeId", MeshNodeIdSchema),
+    idempotencyKey: idField(operation, "idempotencyKey", MeshIdempotencyKeySchema),
+    kind: textField(operation, "kind", 64),
+    status: textField(operation, "status", 64),
+    timedOutStage: textField(operation, "timedOutStage", 64),
+    retryable: operation.retryable === true,
+    sessionId: idField(operation, "sessionId", MeshThreadIdSchema),
+    message: textField(operation, "message", 512),
+    createdAt: numberField(operation, "createdAt"),
+    updatedAt: numberField(operation, "updatedAt"),
+    deadlineAt: numberField(operation, "deadlineAt"),
+    sentAt: numberField(operation, "sentAt"),
+    acknowledgedAt: numberField(operation, "acknowledgedAt"),
+    completedAt: numberField(operation, "completedAt"),
+    pollAfterMs: numberField(operation, "pollAfterMs"),
+  };
+}
+
+function summarizeCodexOperationPage(value: unknown): Record<string, unknown> {
+  const page = record(value);
+  if (!page) throw new GatewayError("控制 API 返回的 Codex operation 列表格式无效");
+  return {
+    operations: array(page.operations).slice(0, 100).map(summarizeCodexOperation),
+    nextCursor: cursorField(page.nextCursor),
   };
 }
 
@@ -556,7 +834,7 @@ function summarizeCodexThread(value: unknown, targetNodeId: string): Record<stri
   const events = array(payload.events);
   return {
     targetNodeId,
-    sessionId: textField(payload, "sessionId", 256),
+    sessionId: idField(payload, "sessionId", MeshThreadIdSchema),
     cwd: textField(payload, "cwd", 4_096),
     canAcceptDirectInput: payload.canAcceptDirectInput === true,
     events: events.slice(-MAX_CODEX_EVENTS).map(summarizeCodexEventPayload),
@@ -572,8 +850,8 @@ function summarizeCodexAck(value: unknown, targetNodeId: string): Record<string,
   return {
     targetNodeId,
     kind: textField(payload, "kind", 64),
-    sessionId: textField(payload, "sessionId", 256),
-    requestId: textField(payload, "requestId", 256),
+    sessionId: idField(payload, "sessionId", MeshThreadIdSchema),
+    requestId: idField(payload, "requestId", MeshRequestIdSchema),
     status: textField(payload, "status", 64),
     note: textField(payload, "note", 512),
   };
@@ -607,8 +885,8 @@ function summarizeCodexApprovals(value: unknown, targetNodeId: string): Record<s
     approvals: approvals.slice(0, MAX_CODEX_APPROVALS).map((item) => {
       const approval = record(item);
       return {
-        requestId: textField(approval, "requestId", 256),
-        sessionId: textField(approval, "sessionId", 256),
+        requestId: idField(approval, "requestId", MeshRequestIdSchema),
+        sessionId: idField(approval, "sessionId", MeshThreadIdSchema),
         toolName: textField(approval, "toolName", 256),
         summary: textField(approval, "summary", 2_000),
         options: array(approval?.options).slice(0, 16).map((optionValue) => {
@@ -628,13 +906,13 @@ function summarizeCodexApprovals(value: unknown, targetNodeId: string): Record<s
 function summarizeCodexThreadRow(value: unknown): Record<string, unknown> {
   const thread = record(value);
   return {
-    sessionId: textField(thread, "id", 256),
+    sessionId: idField(thread, "id", MeshThreadIdSchema),
     name: textField(thread, "name", 512),
     preview: textField(thread, "preview", 1_024),
     cwd: textField(thread, "cwd", 4_096),
     status: textField(thread, "status", 64),
     source: textField(thread, "source", 64),
-    parentThreadId: textField(thread, "parentThreadId", 256),
+    parentThreadId: idField(thread, "parentThreadId", MeshThreadIdSchema),
     agentNickname: textField(thread, "agentNickname", 256),
     depth: numberField(thread, "depth"),
     updatedAt: numberField(thread, "updatedAt"),
@@ -649,7 +927,7 @@ function summarizeCodexEventPayload(value: unknown): Record<string, unknown> {
     kind: textField(event, "kind", 64),
     type: textField(event, "type", 64),
     method: textField(event, "method", 256),
-    sessionId: textField(event, "sessionId", 256),
+    sessionId: idField(event, "sessionId", MeshThreadIdSchema),
     agent: textField(event, "agent", 64),
     status: textField(event, "status", 64),
     name: textField(event, "name", 256),
@@ -663,7 +941,7 @@ function summarizeCodexEventPayload(value: unknown): Record<string, unknown> {
   };
 }
 
-async function readBoundedJson(response: Response): Promise<unknown> {
+async function readBoundedJson(response: Response, maxBytes: number): Promise<unknown> {
   if (!response.body) return null;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -674,7 +952,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       const chunk = await reader.read();
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
-      if (bytes > MAX_HTTP_RESPONSE_BYTES) {
+      if (bytes > maxBytes) {
         await reader.cancel();
         throw new GatewayError("控制 API 响应超过安全上限");
       }
@@ -695,7 +973,15 @@ async function readBoundedJson(response: Response): Promise<unknown> {
 function safeApiErrorDetail(value: unknown): string {
   const payload = record(value);
   const detail = payload?.error ?? payload?.message;
-  return typeof detail === "string" ? safeString(detail, 320) : "";
+  if (typeof detail === "string") return safeString(detail, 320);
+  const error = record(detail);
+  if (!error) return "";
+  const message = typeof error.message === "string" ? safeString(error.message, 240) : "";
+  const stage = typeof error.timedOutStage === "string" ? safeString(error.timedOutStage, 32) : "";
+  const retryable = typeof error.retryable === "boolean" ? String(error.retryable) : "";
+  return [message, stage ? `timedOutStage=${stage}` : "", retryable ? `retryable=${retryable}` : ""]
+    .filter(Boolean)
+    .join(", ");
 }
 
 function safeGatewayError(error: unknown): string {
@@ -705,32 +991,86 @@ function safeGatewayError(error: unknown): string {
 
 function safeJsonText(value: unknown): string {
   const text = JSON.stringify(value, null, 2) ?? "null";
-  return truncate(text, MAX_TOOL_TEXT_CHARS);
+  if (text.length <= MAX_TOOL_TEXT_CHARS) return text;
+  return JSON.stringify({
+    message: "MCP output exceeded its bounded response size; retry with a smaller page limit",
+    gatewayTruncated: true,
+    integrity: { complete: false, gateway: { truncated: true } },
+  }, null, 2);
 }
 
 function safeUnknown(value: unknown, depth: number): unknown {
-  if (value === null || typeof value === "boolean") return value;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value === "string") return safeString(value, MAX_TASK_RESULT_STRING_CHARS);
-  if (depth >= MAX_TASK_RESULT_DEPTH) return "[truncated]";
+  return safeUnknownTracked(value, depth).value;
+}
+
+function safeUnknownTracked(
+  value: unknown,
+  depth: number,
+  key?: string,
+): { value: unknown; truncated: boolean } {
+  if (value === null || typeof value === "boolean") return { value, truncated: false };
+  if (typeof value === "number") return { value: Number.isFinite(value) ? value : null, truncated: false };
+  if (typeof value === "string") {
+    const schema = key ? typedSchemaForKey(key) : undefined;
+    if (schema) {
+      const parsed = schema.safeParse(value);
+      if (!parsed.success) return { value: "<invalid-id>", truncated: false };
+      if (looksLikeExplicitSecret(parsed.data)) return { value: "<redacted>", truncated: false };
+      return { value: parsed.data, truncated: false };
+    }
+    return {
+      value: safeString(value, MAX_TASK_RESULT_STRING_CHARS),
+      truncated: value.length > MAX_TASK_RESULT_STRING_CHARS,
+    };
+  }
+  if (depth >= MAX_TASK_RESULT_DEPTH) return { value: "[truncated]", truncated: true };
   if (Array.isArray(value)) {
-    const output = value.slice(0, MAX_TASK_RESULT_ITEMS).map((item) => safeUnknown(item, depth + 1));
+    let truncated = value.length > MAX_TASK_RESULT_ITEMS;
+    const output = value.slice(0, MAX_TASK_RESULT_ITEMS).map((item) => {
+      const safe = safeUnknownTracked(item, depth + 1);
+      truncated ||= safe.truncated;
+      return safe.value;
+    });
     if (value.length > MAX_TASK_RESULT_ITEMS) output.push(`[${value.length - MAX_TASK_RESULT_ITEMS} more items]`);
-    return output;
+    return { value: output, truncated };
   }
   const input = record(value);
-  if (!input) return safeString(String(value), 128);
+  if (!input) return { value: safeString(String(value), 128), truncated: false };
   const output: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   const entries = Object.entries(input).slice(0, MAX_TASK_RESULT_ITEMS);
+  let truncated = Object.keys(input).length > MAX_TASK_RESULT_ITEMS;
   for (const [key, item] of entries) {
     const safeKey = safeString(key, 64);
     if (!safeKey || ["__proto__", "constructor", "prototype"].includes(safeKey)) continue;
-    output[safeKey] = sensitiveKey(safeKey) ? "<redacted>" : safeUnknown(item, depth + 1);
+    if (sensitiveKey(safeKey)) {
+      output[safeKey] = "<redacted>";
+    } else {
+      const safe = safeUnknownTracked(item, depth + 1, safeKey);
+      output[safeKey] = safe.value;
+      truncated ||= safe.truncated;
+    }
   }
   if (Object.keys(input).length > MAX_TASK_RESULT_ITEMS) {
     output._truncatedKeys = Object.keys(input).length - MAX_TASK_RESULT_ITEMS;
   }
-  return output;
+  return { value: output, truncated };
+}
+
+function typedSchemaForKey(key: string): z.ZodType<string> | undefined {
+  const compact = key.toLowerCase().replace(/[-_]/g, "");
+  if (compact === "taskid") return MeshTaskIdSchema;
+  if (["nodeid", "targetnodeid", "requesternodeid", "ownernodeid"].includes(compact)) return MeshNodeIdSchema;
+  if (compact === "resourceid") return MeshResourceIdSchema;
+  if (compact === "groupid") return MeshGroupIdSchema;
+  if (compact === "runnerid") return MeshRunnerIdSchema;
+  if (["threadid", "sessionid", "parentthreadid"].includes(compact)) return MeshThreadIdSchema;
+  if (compact === "requestid") return MeshRequestIdSchema;
+  if (compact === "operationid") return MeshOperationIdSchema;
+  if (["artifactid", "baseartifactid", "resultartifactid"].includes(compact)) {
+    return z.string().regex(/^sha256:[a-f0-9]{64}$/);
+  }
+  if (compact === "idempotencykey") return MeshIdempotencyKeySchema;
+  return undefined;
 }
 
 function sensitiveKey(key: string): boolean {
@@ -741,9 +1081,9 @@ function sensitiveKey(key: string): boolean {
     || compact === "proxyauthorization"
     || compact === "cookie"
     || compact === "setcookie"
-    || compact === "apikey"
-    || compact === "password"
-    || compact === "secret"
+    || compact.endsWith("apikey")
+    || compact.endsWith("password")
+    || compact.endsWith("secret")
     || compact.endsWith("token")
     || compact.endsWith("url")
     || compact.endsWith("uri")
@@ -784,6 +1124,16 @@ function textField(value: Record<string, unknown> | undefined, key: string, max:
   return typeof field === "string" ? safeString(field, max) : null;
 }
 
+function idField(
+  value: Record<string, unknown> | undefined,
+  key: string,
+  schema: z.ZodType<string>,
+): string | null {
+  const parsed = schema.safeParse(value?.[key]);
+  if (!parsed.success) return null;
+  return looksLikeExplicitSecret(parsed.data) ? "<redacted>" : parsed.data;
+}
+
 function numberField(value: Record<string, unknown> | undefined, key: string): number | null {
   const field = value?.[key];
   return typeof field === "number" && Number.isFinite(field) ? field : null;
@@ -794,6 +1144,33 @@ function stringArray(value: unknown, limit: number, maxString: number): string[]
     .filter((item): item is string => typeof item === "string")
     .slice(0, limit)
     .map((item) => safeString(item, maxString));
+}
+
+function typedStringArray(value: unknown, limit: number, schema: z.ZodType<string>): string[] {
+  return array(value)
+    .slice(0, limit)
+    .flatMap((item) => {
+      const parsed = schema.safeParse(item);
+      return parsed.success
+        ? [looksLikeExplicitSecret(parsed.data) ? "<redacted>" : parsed.data]
+        : [];
+    });
+}
+
+function workspaceRevisionField(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 256) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9._/@:+-]*$/.test(value) ? value : null;
+}
+
+function cursorField(value: unknown): string | null {
+  if (typeof value !== "string" || value.length < 1 || value.length > 512) return null;
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  return looksLikeExplicitSecret(value) ? "<redacted>" : value;
+}
+
+function looksLikeExplicitSecret(value: string): boolean {
+  return /^eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]{10,})?$/.test(value)
+    || /^(?:sk-(?:proj-)?|ghp_|github_pat_|xox[baprs]-|AIza|AKIA)[A-Za-z0-9._-]{16,}$/.test(value);
 }
 
 function parseControlUrl(value: string): URL {
@@ -818,7 +1195,7 @@ function parseControlUrl(value: string): URL {
 
 function boundedRequestTimeout(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) return DEFAULT_REQUEST_TIMEOUT_MS;
-  return Math.min(60_000, Math.max(1_000, Math.trunc(value)));
+  return Math.min(125_000, Math.max(1_000, Math.trunc(value)));
 }
 
 function encodePathSegment(value: string): string {

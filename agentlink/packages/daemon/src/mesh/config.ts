@@ -2,7 +2,16 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
-import { MeshIdSchema, MeshResourceKindSchema } from "@agentlink/wire";
+import {
+  MeshGroupIdSchema,
+  MeshIdSchema,
+  MeshJsonValueSchema,
+  MeshNodeIdSchema,
+  MeshResourceIdSchema,
+  MeshResourceKindSchema,
+  MeshRunnerIdSchema,
+  MeshWorkspaceCapabilitySchema,
+} from "@agentlink/wire";
 import { configDir } from "../store";
 import { MeshService, type MeshServiceOptions } from "./service";
 import { type MeshRunnerSpec } from "./runner";
@@ -10,24 +19,26 @@ import { type MeshRunnerSpec } from "./runner";
 const MeshConfigSchema = z.object({
   version: z.literal(1),
   groups: z.array(z.object({
-    id: MeshIdSchema,
-    members: z.array(MeshIdSchema).min(1),
+    id: MeshGroupIdSchema,
+    members: z.array(MeshNodeIdSchema).min(1),
   })).min(1),
-  requesters: z.array(MeshIdSchema).optional(),
+  requesters: z.array(MeshNodeIdSchema).optional(),
   legacyControl: z.boolean().default(false),
   allowedRoots: z.array(z.string().refine(isAbsolute, "allowedRoots must be absolute")).optional(),
   quarantineRoot: z.string().refine(isAbsolute, "quarantineRoot must be absolute").optional(),
+  artifactRoot: z.string().refine(isAbsolute, "artifactRoot must be absolute").optional(),
   resources: z.array(z.object({
-    id: MeshIdSchema,
-    ownerNodeId: MeshIdSchema,
+    id: MeshResourceIdSchema,
+    ownerNodeId: MeshNodeIdSchema,
     kind: MeshResourceKindSchema,
     displayName: MeshIdSchema,
     root: z.string().refine(isAbsolute, "resource root must be absolute"),
-    statusRunnerId: MeshIdSchema.optional(),
+    statusRunnerId: MeshRunnerIdSchema.optional(),
+    allowedGroupIds: z.array(MeshGroupIdSchema).max(32).optional(),
   })),
   runners: z.array(z.object({
-    id: MeshIdSchema,
-    resourceId: MeshIdSchema,
+    id: MeshRunnerIdSchema,
+    resourceId: MeshResourceIdSchema,
     purpose: z.enum(["task", "status"]).default("task"),
     executable: z.string().refine(isAbsolute, "runner executable must be absolute"),
     fixedArgs: z.array(z.string().max(4096)).max(32).optional(),
@@ -37,9 +48,16 @@ const MeshConfigSchema = z.object({
     maxOutputBytes: z.number().int().min(1_024).max(1 * 1024 * 1024).optional(),
     allowDynamicArgs: z.boolean().default(false),
     allowInput: z.boolean().default(false),
+    title: z.string().min(1).max(128).optional(),
+    inputSchema: MeshJsonValueSchema.optional(),
+    resultSchema: MeshJsonValueSchema.optional(),
+    approvalRequired: z.boolean().optional(),
+    workspaceCapabilities: z.array(MeshWorkspaceCapabilitySchema).max(8).optional(),
+    exposeDebugOutput: z.boolean().optional(),
+    /** Backward-compatible local name; never published to peers. */
     exposeOutput: z.boolean().optional(),
   })).optional(),
-});
+}).strict();
 
 export type MeshConfig = z.infer<typeof MeshConfigSchema>;
 
@@ -71,6 +89,7 @@ export function createMeshServiceForPeer(nodeId: string, peerNodeId: string, con
     trustedRequesters: trustedMeshRequestersForPeer(peerNodeId, config.requesters),
     allowedRoots: config.allowedRoots,
     quarantineRoot: config.quarantineRoot ?? join(homedir(), ".agentlink", "quarantine"),
+    artifactRoot: config.artifactRoot ?? join(homedir(), ".agentlink", "mesh-workspaces"),
     resources: config.resources,
     runners: config.runners as MeshRunnerSpec[] | undefined,
   };

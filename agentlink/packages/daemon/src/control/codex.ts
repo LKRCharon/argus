@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  MeshRequestIdSchema,
+  MeshThreadIdSchema,
+  type MeshDeadlineStage,
+} from "@agentlink/wire";
 
 export interface RemoteCodexApproval {
   targetNodeId: string;
@@ -27,6 +32,11 @@ export interface CodexPeerGatewayOptions {
   requestTimeoutMs?: number;
   maxEventsPerPeer?: number;
   maxApprovalsPerPeer?: number;
+  onUnmatchedResponse?: (
+    targetNodeId: string,
+    controlRequestId: string,
+    payload: Record<string, unknown>,
+  ) => void;
 }
 
 type SendToPeer = (targetNodeId: string, payload: Record<string, unknown>) => Promise<void>;
@@ -39,11 +49,28 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
+export interface CodexRequestOptions {
+  deadlineAt?: number;
+  controlRequestId?: string;
+  onSent?: () => void;
+}
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_EVENTS_PER_PEER = 500;
 const DEFAULT_MAX_APPROVALS_PER_PEER = 100;
-const MAX_CONTROL_ID_CHARS = 128;
 const MAX_REMOTE_ERROR_CHARS = 512;
+
+export class CodexGatewayError extends Error {
+  constructor(
+    message: string,
+    readonly stage: MeshDeadlineStage,
+    readonly retryable: boolean,
+    readonly timedOut: boolean,
+    readonly sessionId?: string,
+  ) {
+    super(message);
+  }
+}
 
 /**
  * Request/response and event state for Codex sessions on paired AgentLink peers.
@@ -56,6 +83,7 @@ export class CodexPeerGateway {
   private readonly requestTimeoutMs: number;
   private readonly maxEventsPerPeer: number;
   private readonly maxApprovalsPerPeer: number;
+  private readonly onUnmatchedResponse?: CodexPeerGatewayOptions["onUnmatchedResponse"];
   private nextEventSeq = 1;
 
   constructor(
@@ -65,41 +93,47 @@ export class CodexPeerGateway {
     this.requestTimeoutMs = boundedPositiveInt(options.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS);
     this.maxEventsPerPeer = boundedPositiveInt(options.maxEventsPerPeer, DEFAULT_MAX_EVENTS_PER_PEER);
     this.maxApprovalsPerPeer = boundedPositiveInt(options.maxApprovalsPerPeer, DEFAULT_MAX_APPROVALS_PER_PEER);
+    this.onUnmatchedResponse = options.onUnmatchedResponse;
   }
 
-  async listThreads(targetNodeId: string): Promise<Record<string, unknown>> {
-    return this.request(targetNodeId, { kind: "codex-threads" }, ["codex-thread-list"]);
+  async listThreads(targetNodeId: string, deadlineAt?: number): Promise<Record<string, unknown>> {
+    return this.request(targetNodeId, { kind: "codex-threads" }, ["codex-thread-list"], { deadlineAt });
   }
 
-  async readThread(targetNodeId: string, sessionId: string): Promise<Record<string, unknown>> {
+  async readThread(targetNodeId: string, sessionId: string, deadlineAt?: number): Promise<Record<string, unknown>> {
     return this.request(targetNodeId, {
       kind: "codex-resume",
       sessionId,
-    }, ["codex-resumed"]);
+    }, ["codex-resumed"], { deadlineAt });
   }
 
-  async startThread(targetNodeId: string, text: string, cwd?: string): Promise<Record<string, unknown>> {
+  async startThread(
+    targetNodeId: string,
+    text: string,
+    cwd?: string,
+    options: CodexRequestOptions = {},
+  ): Promise<Record<string, unknown>> {
     return this.request(targetNodeId, {
       kind: "new-session",
       agent: "codex",
       text,
       ...(cwd ? { cwd } : {}),
-    }, ["input-ack"]);
+    }, ["input-ack"], options);
   }
 
-  async sendInput(targetNodeId: string, sessionId: string, text: string): Promise<Record<string, unknown>> {
+  async sendInput(targetNodeId: string, sessionId: string, text: string, deadlineAt?: number): Promise<Record<string, unknown>> {
     return this.request(targetNodeId, {
       kind: "codex-input",
       sessionId,
       text,
-    }, ["input-ack"]);
+    }, ["input-ack"], { deadlineAt });
   }
 
-  async interrupt(targetNodeId: string, sessionId: string): Promise<Record<string, unknown>> {
+  async interrupt(targetNodeId: string, sessionId: string, deadlineAt?: number): Promise<Record<string, unknown>> {
     return this.request(targetNodeId, {
       kind: "codex-interrupt",
       sessionId,
-    }, ["input-ack"]);
+    }, ["input-ack"], { deadlineAt });
   }
 
   listEvents(
@@ -155,13 +189,13 @@ export class CodexPeerGateway {
     const value = record(payload);
     if (!value || typeof value.kind !== "string") return false;
 
-    const controlRequestId = boundedString(value.controlRequestId, MAX_CONTROL_ID_CHARS);
+    const controlRequestId = typedString(value.controlRequestId, MeshRequestIdSchema);
     if (controlRequestId) {
       const pending = this.pending.get(controlRequestId);
       if (pending && pending.targetNodeId === targetNodeId) {
         if (value.kind === "codex-error") {
           this.finishPending(controlRequestId);
-          pending.reject(new Error(boundedString(value.note, MAX_REMOTE_ERROR_CHARS) || "远端 Codex 请求失败"));
+          pending.reject(remoteGatewayError(value));
           return true;
         }
         if (pending.expectedKinds.has(value.kind)) {
@@ -169,6 +203,10 @@ export class CodexPeerGateway {
           pending.resolve(value);
           return true;
         }
+      }
+      if (!pending && controlRequestId.startsWith("codex-op:")) {
+        this.onUnmatchedResponse?.(targetNodeId, controlRequestId, value);
+        return true;
       }
     }
 
@@ -189,7 +227,7 @@ export class CodexPeerGateway {
     for (const [requestId, pending] of this.pending) {
       if (pending.targetNodeId !== targetNodeId) continue;
       this.finishPending(requestId);
-      pending.reject(error);
+      pending.reject(asTransportError(error));
     }
   }
 
@@ -197,13 +235,22 @@ export class CodexPeerGateway {
     targetNodeId: string,
     payload: Record<string, unknown>,
     expectedKinds: readonly string[],
+    options: CodexRequestOptions = {},
   ): Promise<Record<string, unknown>> {
-    const controlRequestId = `codex:${randomUUID()}`;
+    const controlRequestId = options.controlRequestId ?? `codex:${randomUUID()}`;
+    const deadlineAt = options.deadlineAt ?? Date.now() + this.requestTimeoutMs;
+    const remaining = Math.min(this.requestTimeoutMs, deadlineAt - Date.now());
+    if (remaining <= 0) {
+      throw new CodexGatewayError("controller deadline elapsed before dispatch", "controller", true, true);
+    }
+    let dispatched = false;
     const response = new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(controlRequestId);
-        reject(new Error("等待远端 Codex 响应超时"));
-      }, this.requestTimeoutMs);
+        reject(dispatched
+          ? new CodexGatewayError("等待 watcher 响应超时", "watcher", true, true)
+          : new CodexGatewayError("relay dispatch 超时", "relay", true, true));
+      }, remaining);
       this.pending.set(controlRequestId, {
         targetNodeId,
         expectedKinds: new Set(expectedKinds),
@@ -212,13 +259,16 @@ export class CodexPeerGateway {
         timer,
       });
     });
-    try {
-      await this.sendToPeer(targetNodeId, { ...payload, controlRequestId });
-    } catch (error) {
-      const pending = this.pending.get(controlRequestId);
-      this.finishPending(controlRequestId);
-      pending?.reject(error instanceof Error ? error : new Error(String(error)));
-    }
+    void Promise.resolve()
+      .then(() => this.sendToPeer(targetNodeId, { ...payload, controlRequestId, deadlineAt }))
+      .then(() => {
+        dispatched = true;
+        options.onSent?.();
+      }, (error) => {
+        const pending = this.pending.get(controlRequestId);
+        this.finishPending(controlRequestId);
+        pending?.reject(asTransportError(error));
+      });
     return await response;
   }
 
@@ -243,13 +293,13 @@ export class CodexPeerGateway {
   }
 
   private storeApproval(targetNodeId: string, payload: Record<string, unknown>): void {
-    const requestId = boundedString(payload.requestId, 256);
+    const requestId = typedString(payload.requestId, MeshRequestIdSchema);
     if (!requestId) return;
     const rows = this.approvals.get(targetNodeId) ?? new Map<string, RemoteCodexApproval>();
     rows.set(requestId, {
       targetNodeId,
       requestId,
-      sessionId: boundedString(payload.sessionId, 256),
+      sessionId: typedString(payload.sessionId, MeshThreadIdSchema),
       toolName: boundedString(payload.toolName, 256),
       summary: boundedString(payload.summary, 2_000),
       options: Array.isArray(payload.options)
@@ -292,6 +342,33 @@ function boundedPositiveInt(value: number | undefined, fallback: number): number
 
 function boundedString(value: unknown, max: number): string {
   return typeof value === "string" ? value.slice(0, max) : "";
+}
+
+function typedString(value: unknown, schema: typeof MeshRequestIdSchema): string {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : "";
+}
+
+function remoteGatewayError(payload: Record<string, unknown>): CodexGatewayError {
+  const candidate = boundedString(payload.timedOutStage, 32);
+  const stage: MeshDeadlineStage = ["controller", "relay", "peer", "watcher", "app-server"].includes(candidate)
+    ? candidate as MeshDeadlineStage
+    : "app-server";
+  const timedOut = payload.timedOut === true;
+  return new CodexGatewayError(
+    boundedString(payload.note, MAX_REMOTE_ERROR_CHARS) || "远端 Codex 请求失败",
+    stage,
+    payload.retryable === true || timedOut,
+    timedOut,
+    typedString(payload.sessionId, MeshThreadIdSchema) || undefined,
+  );
+}
+
+function asTransportError(error: unknown): CodexGatewayError {
+  if (error instanceof CodexGatewayError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  const stage: MeshDeadlineStage = /未连接|closed|关闭|peer/i.test(message) ? "peer" : "relay";
+  return new CodexGatewayError(message.slice(0, MAX_REMOTE_ERROR_CHARS), stage, true, false);
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
