@@ -555,6 +555,54 @@ describe.serial("MeshService", () => {
     })).toMatchObject({ known: true, status: "cancelled", result: { status: "cancelled" } });
   });
 
+  test("reaps POSIX runner descendants before artifact capture can begin", async () => {
+    if (process.platform === "win32") return;
+    const base = mkdtempSync(join(tmpdir(), "argus-runner-descendant-"));
+    const root = join(base, "workspace");
+    const marker = join(base, "background-marker");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const descendant = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "late"), 250)`;
+    const wrapper = [
+      'const { spawn } = require("node:child_process")',
+      `const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: "ignore" })`,
+      "child.unref()",
+      'console.log(JSON.stringify({ resultSummary: "done" }))',
+    ].join(";");
+    const value = new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      auditSink: () => {},
+      taskStore: new MeshTaskStore(join(base, "tasks.json")),
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{ id: "workspace:descendant", ownerNodeId: "node-b", kind: "directory", displayName: "descendant", root }],
+      runners: [{
+        id: "workspace:descendant-runner",
+        resourceId: "workspace:descendant",
+        executable: process.execPath,
+        fixedArgs: ["-e", wrapper],
+      }],
+    });
+    const request = {
+      groupId: "group-alpha",
+      taskId: "task-runner-descendant",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      resourceId: "workspace:descendant",
+      operation: "run" as const,
+      scope: { runnerId: "workspace:descendant-runner", args: [] },
+    };
+    const grant = value.issueGrant(request);
+    const approval = value.issueApproval(grant, "reap descendant fixture");
+
+    expect(await value.handleRequest({ kind: "mesh-task-request", task: request, grant, approval }))
+      .toMatchObject({ status: "completed" });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(existsSync(marker)).toBe(false);
+  });
+
   test("requires a grant and owner approval before quarantine, then moves safely", async () => {
     const { value, root } = service();
     const request = task("quarantine");

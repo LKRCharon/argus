@@ -363,6 +363,10 @@ export class MeshRunnerRegistry {
         settled = true;
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (killHandle) clearTimeout(killHandle);
+        // A successful wrapper can otherwise leave a background descendant
+        // racing artifact capture. Node has no portable Windows job-object API,
+        // but the dedicated POSIX process group lets us reap that boundary.
+        if (process.platform !== "win32") stop("SIGKILL");
         if (taskId) this.activeTasks.delete(taskId);
         const summary = summarizeRunnerOutput(stdout, runner.purpose ?? "task", stdoutTruncated);
         resolveResult({

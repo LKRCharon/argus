@@ -187,12 +187,11 @@ export class MeshArtifactStore {
     assertMovedDirectoryIdentity(snapshotWorkspace, ownedIdentity.workspace, "artifact workspace snapshot");
     assertContained(taskDir, snapshotWorkspace);
 
-    // Portable Node/Bun APIs cannot revoke handles held by a detached same-UID
-    // descendant. Capture therefore relies on the runner lifecycle to quiesce
-    // descendants; a process that deliberately retains a handle could still
-    // mutate files inside this pinned tree while it is scanned. Such mutation
-    // fails validation when observed, but cannot redirect the root to an
-    // outside replacement directory.
+    // MeshRunner reaps its process group on POSIX, but portable Node/Bun APIs
+    // cannot revoke handles held by a Windows descendant or a deliberately
+    // detached same-UID process. Such a process could still race path-based
+    // checks on nested entries, including replacing one with an outside link.
+    // The pinned root itself cannot be redirected to an outside replacement.
     const current = scanWorkspace(snapshotWorkspace, this.captureHooks.beforeFileRead);
     const original = new Map(base.files.map((file) => [file.path, file]));
     const changed = [...current.values()]
