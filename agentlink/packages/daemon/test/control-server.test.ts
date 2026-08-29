@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MeshTaskRequest } from "@agentlink/wire";
 import { ControlTaskJournal, type ControlTaskRecord } from "../src/control/journal";
@@ -9,14 +10,16 @@ import {
   type ControlController,
 } from "../src/control/server";
 
-function fakeController(root = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "argus-control-"))): {
+function fakeController(root = mkdtempSync(join(tmpdir(), "argus-control-"))): {
   controller: ControlController;
   submitted: MeshTaskRequest[];
   cancelled: string[];
+  codexCalls: Array<{ method: string; args: unknown[] }>;
 } {
   const journal = new ControlTaskJournal(join(root, "tasks.json"));
   const submitted: MeshTaskRequest[] = [];
   const cancelled: string[] = [];
+  const codexCalls: Array<{ method: string; args: unknown[] }> = [];
   const controller: ControlController = {
     nodeId: "node-seoul",
     journal,
@@ -50,8 +53,40 @@ function fakeController(root = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "a
       if (!record) throw new Error("未找到任务");
       return journal.update(taskId, { status: "cancelled", message: "任务已取消" })!;
     },
+    listCodexThreads: async (targetNodeId) => {
+      codexCalls.push({ method: "list", args: [targetNodeId] });
+      return { kind: "codex-thread-list", threads: [{ id: "thread-1" }] };
+    },
+    readCodexThread: async (targetNodeId, sessionId) => {
+      codexCalls.push({ method: "read", args: [targetNodeId, sessionId] });
+      return { kind: "codex-resumed", sessionId, events: [] };
+    },
+    startCodexThread: async (targetNodeId, text, cwd) => {
+      codexCalls.push({ method: "start", args: [targetNodeId, text, cwd] });
+      return { kind: "input-ack", sessionId: "thread-new", status: "running" };
+    },
+    sendCodexInput: async (targetNodeId, sessionId, text) => {
+      codexCalls.push({ method: "input", args: [targetNodeId, sessionId, text] });
+      return { kind: "input-ack", sessionId, status: "running" };
+    },
+    interruptCodexThread: async (targetNodeId, sessionId) => {
+      codexCalls.push({ method: "interrupt", args: [targetNodeId, sessionId] });
+      return { kind: "input-ack", sessionId, status: "done" };
+    },
+    listCodexEvents: (targetNodeId, afterSeq, limit, sessionId) => {
+      codexCalls.push({ method: "events", args: [targetNodeId, afterSeq, limit, sessionId] });
+      return { targetNodeId, events: [], nextSeq: afterSeq ?? 0 };
+    },
+    listCodexApprovals: (targetNodeId) => {
+      codexCalls.push({ method: "approvals", args: [targetNodeId] });
+      return [];
+    },
+    respondCodexApproval: async (targetNodeId, requestId, optionId) => {
+      codexCalls.push({ method: "approval", args: [targetNodeId, requestId, optionId] });
+      return { kind: "permission-response-ack", requestId, status: "answered" };
+    },
   };
-  return { controller, submitted, cancelled };
+  return { controller, submitted, cancelled, codexCalls };
 }
 
 describe("Seoul control API", () => {
@@ -67,6 +102,20 @@ describe("Seoul control API", () => {
       peers: 0,
       onlinePeers: 0,
     });
+  });
+
+  test("rejects non-loopback hosts and cross-origin mutations", async () => {
+    const { controller, cancelled } = fakeController();
+    const handler = createControlRequestHandler({ controller });
+    const externalHost = await handler(new Request("http://control.example/health"));
+    expect(externalHost.status).toBe(403);
+
+    const crossOrigin = await handler(new Request("http://127.0.0.1:8790/api/tasks/task-1/cancel", {
+      method: "POST",
+      headers: { origin: "https://evil.example" },
+    }));
+    expect(crossOrigin.status).toBe(403);
+    expect(cancelled).toEqual([]);
   });
 
   test("accepts a typed inspect task and binds the requester to Seoul", async () => {
@@ -114,6 +163,23 @@ describe("Seoul control API", () => {
     });
   });
 
+  test("requires JSON and bounds task request bodies", async () => {
+    const { controller } = fakeController();
+    const handler = createControlRequestHandler({ controller });
+    const wrongType = await handler(new Request("http://localhost/api/tasks", {
+      method: "POST",
+      body: "{}",
+    }));
+    expect(wrongType.status).toBe(415);
+
+    const oversized = await handler(new Request("http://localhost/api/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ padding: "x".repeat(2 * 1024 * 1024) }),
+    }));
+    expect(oversized.status).toBe(413);
+  });
+
   test("returns one task and routes cancellation through the controller", async () => {
     const { controller, cancelled } = fakeController();
     const now = Date.now();
@@ -140,8 +206,65 @@ describe("Seoul control API", () => {
     expect(await cancelledResponse.json()).toMatchObject({ status: "cancelled" });
   });
 
+  test("routes bounded remote Codex reads and mutations through the controller", async () => {
+    const { controller, codexCalls } = fakeController();
+    const handler = createControlRequestHandler({ controller });
+
+    const threads = await handler(new Request(
+      "http://localhost/api/codex/threads?targetNodeId=mac-node",
+    ));
+    expect(threads.status).toBe(200);
+    expect(await threads.json()).toMatchObject({ kind: "codex-thread-list" });
+
+    const input = await handler(new Request("http://localhost/api/codex/input", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        targetNodeId: "mac-node",
+        sessionId: "thread-1",
+        text: "continue",
+        ignored: "must be stripped",
+      }),
+    }));
+    expect(input.status).toBe(202);
+    expect(codexCalls).toEqual([
+      { method: "list", args: ["mac-node"] },
+      { method: "input", args: ["mac-node", "thread-1", "continue"] },
+    ]);
+  });
+
+  test("requires JSON and an explicit allow or deny for remote Codex approvals", async () => {
+    const { controller, codexCalls } = fakeController();
+    const handler = createControlRequestHandler({ controller });
+    const invalid = await handler(new Request("http://localhost/api/codex/approval", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        targetNodeId: "mac-node",
+        requestId: "approval-1",
+        optionId: "always",
+      }),
+    }));
+    expect(invalid.status).toBe(400);
+    expect(codexCalls).toEqual([]);
+
+    const allowed = await handler(new Request("http://localhost/api/codex/approval", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        targetNodeId: "mac-node",
+        requestId: "approval-1",
+        optionId: "deny",
+      }),
+    }));
+    expect(allowed.status).toBe(202);
+    expect(codexCalls).toEqual([
+      { method: "approval", args: ["mac-node", "approval-1", "deny"] },
+    ]);
+  });
+
   test("serves the built console and keeps traversal outside the dist root", async () => {
-    const root = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "argus-control-dist-"));
+    const root = mkdtempSync(join(tmpdir(), "argus-control-dist-"));
     mkdirSync(join(root, "assets"));
     writeFileSync(join(root, "index.html"), "mesh-console");
     const { controller } = fakeController();
@@ -156,7 +279,7 @@ describe("Seoul control API", () => {
 
 describe("ControlTaskJournal", () => {
   test("recovers its atomic task list across process restarts", () => {
-    const root = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "argus-journal-"));
+    const root = mkdtempSync(join(tmpdir(), "argus-journal-"));
     const file = join(root, "tasks.json");
     const journal = new ControlTaskJournal(file);
     journal.create({
@@ -177,7 +300,7 @@ describe("ControlTaskJournal", () => {
 
 describe("ControlTaskOutbox", () => {
   test("recovers an idempotent pending delivery across controller restarts", () => {
-    const root = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "argus-outbox-"));
+    const root = mkdtempSync(join(tmpdir(), "argus-outbox-"));
     const file = join(root, "outbox.json");
     const outbox = new ControlTaskOutbox(file);
     const payload = {

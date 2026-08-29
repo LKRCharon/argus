@@ -27,7 +27,8 @@ Pairing authenticates the encrypted transport. It is not authorization.
 Authorization additionally requires:
 
 1. The requester and target are members of the configured group.
-2. The requester is in the local `requesters` allowlist, when one is set.
+2. The requester ID is the authenticated transport peer. A local `requesters`
+   allowlist can reject that peer, but cannot let it claim another member's ID.
 3. The target resolves the resource ID from its local configuration. Remote
    paths, working directories, and command strings are ignored.
 4. Mutating tasks carry an owner-signed Ed25519 capability grant bound to the
@@ -152,7 +153,10 @@ bun run packages/daemon/src/index.ts mesh approve \
 The target keeps a `mesh-tasks.json` journal with lifecycle and sanitized result
 metadata. Reconnecting with a completed task ID returns the stored result
 instead of running it again; reusing the ID with different task fields is a
-conflict.
+conflict. The journal fails closed when its 1,000-record replay ledger is full;
+the owner must archive state locally before accepting more unique task IDs.
+Archive it only after every recorded grant has expired, or rotate the owner's
+signing key first, so removing replay records cannot make an old task valid again.
 
 The grant and approval contain public signatures, not the owner's private key.
 Treat them as authorization records and do not leave them in a shared writable
@@ -180,14 +184,16 @@ The daemon can also run a Seoul-side controller for several paired peers:
 bun run control
 ```
 
-The controller binds to `127.0.0.1:8790` by default and serves `/mesh`. It
+The controller binds to `127.0.0.1:8790` and serves `/mesh`. Non-loopback bind
+addresses, non-loopback Host headers, and cross-origin mutations are rejected. It
 maintains one encrypted channel per stored peer, periodically discovers local
 resources, and records sanitized task lifecycle metadata in
 `control-tasks.json`. The browser never receives peer long-term keys.
 
 Only `inspect` and named-runner `run` are exposed by the console. A `run` task
-must still include a target-owner grant and separate approval; the dashboard
-does not mint either signature. Use an SSH local forward to view it remotely:
+arrives as an unsigned proposal; the target creates the exact one-shot grant
+and approval only after its owner approves locally. The dashboard never holds
+target signing material. Use an SSH local forward to view it remotely:
 
 ```bash
 ssh -N -L 8790:127.0.0.1:8790 seoul

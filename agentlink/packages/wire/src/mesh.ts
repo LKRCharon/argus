@@ -13,7 +13,7 @@ import { b64decode, b64encode, stableStringify, utf8 } from "./crypto";
 import { ed25519 } from "@noble/curves/ed25519";
 
 /** IDs are opaque protocol values, but an empty/whitespace-only ID is never valid. */
-export const MeshIdSchema = z.string().refine((value) => value.trim().length > 0, {
+export const MeshIdSchema = z.string().max(256).refine((value) => value.trim().length > 0, {
   message: "must not be empty",
 });
 export type MeshId = z.infer<typeof MeshIdSchema>;

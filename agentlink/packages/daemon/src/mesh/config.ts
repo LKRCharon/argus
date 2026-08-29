@@ -65,15 +65,25 @@ export function createMeshServiceForPeer(nodeId: string, peerNodeId: string, con
     nodeId,
     trustedGroups: new Set(config.groups.map((group) => group.id)),
     groupMembers: new Map(config.groups.map((group) => [group.id, new Set(group.members)])),
-    // Pairing establishes the transport peer; an explicit requester list can
-    // further narrow it. Never accept an arbitrary requester from the task.
-    trustedRequesters: new Set(config.requesters ?? [peerNodeId]),
+    // The requester carried in a task must be the authenticated transport
+    // peer. A configured allowlist may deny that peer, but can never let it
+    // claim another allowlisted identity.
+    trustedRequesters: trustedMeshRequestersForPeer(peerNodeId, config.requesters),
     allowedRoots: config.allowedRoots,
     quarantineRoot: config.quarantineRoot ?? join(homedir(), ".agentlink", "quarantine"),
     resources: config.resources,
     runners: config.runners as MeshRunnerSpec[] | undefined,
   };
   return new MeshService(options);
+}
+
+export function trustedMeshRequestersForPeer(
+  peerNodeId: string,
+  configuredRequesters?: readonly string[],
+): ReadonlySet<string> {
+  return new Set(configuredRequesters === undefined || configuredRequesters.includes(peerNodeId)
+    ? [peerNodeId]
+    : []);
 }
 
 export function loadMeshServiceForPeer(nodeId: string, peerNodeId: string): MeshService | undefined {

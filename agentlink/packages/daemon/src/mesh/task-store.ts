@@ -71,7 +71,13 @@ export interface MeshTaskBeginResult {
 export class MeshTaskStore {
   private readonly records = new Map<string, MeshTaskRecord>();
 
-  constructor(private readonly file = meshTaskStorePath()) {
+  constructor(
+    private readonly file = meshTaskStorePath(),
+    private readonly maxRecords = MAX_RECORDS,
+  ) {
+    if (!Number.isInteger(maxRecords) || maxRecords < 1 || maxRecords > MAX_RECORDS) {
+      throw new Error(`Mesh task journal 上限必须在 1 到 ${MAX_RECORDS} 之间`);
+    }
     this.load();
   }
 
@@ -92,6 +98,11 @@ export class MeshTaskStore {
     const existing = this.records.get(task.taskId);
     if (existing) {
       return { record: { ...existing }, created: false, conflict: existing.requestDigest !== digest };
+    }
+    // Never evict replay tombstones silently. A full journal stops new work
+    // until the owner archives it locally, preserving one-shot semantics.
+    if (this.records.size >= this.maxRecords) {
+      throw new Error("Mesh task journal 已达到记录上限");
     }
     const now = new Date().toISOString();
     const record: MeshTaskRecord = {
@@ -151,13 +162,16 @@ export class MeshTaskStore {
     }
     const parsed = MeshTaskJournalSchema.safeParse(value);
     if (!parsed.success) throw new Error("Mesh task journal 格式无效；为避免重复执行，已停止 Mesh");
+    if (parsed.data.tasks.length > this.maxRecords) {
+      throw new Error("Mesh task journal 超过配置的记录上限；为避免重复执行，已停止 Mesh");
+    }
     for (const record of parsed.data.tasks) this.records.set(record.taskId, record);
   }
 
   private persist(): void {
     const tasks = [...this.records.values()]
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-      .slice(0, MAX_RECORDS);
+      .slice(0, this.maxRecords);
     const content = JSON.stringify({ version: FILE_VERSION, tasks }, null, 2) + "\n";
     if (Buffer.byteLength(content, "utf8") > MAX_FILE_BYTES) {
       throw new Error("Mesh task journal 已达到大小上限");

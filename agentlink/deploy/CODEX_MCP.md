@@ -4,6 +4,10 @@ The gateway is a local STDIO MCP server. It talks only to the Seoul control
 API on loopback and owns no device identity, channel key, grant, approval, or
 runner executable path.
 
+`ARGUS_CONTROL_URL` is restricted to `localhost`, `127.0.0.1`, or `::1`; the
+gateway refuses remote HTTP endpoints even when an environment variable tries
+to configure one.
+
 Install workspace dependencies and confirm the control service is healthy:
 
 ```bash

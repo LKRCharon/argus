@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  ControlApiClient,
   createControlMcpServer,
   type ControlFetch,
 } from "../src/control/mcp";
@@ -15,7 +16,7 @@ interface ConnectedMcp {
 
 async function connectMcp(fetchImpl: ControlFetch): Promise<ConnectedMcp> {
   const server = createControlMcpServer({
-    controlUrl: "http://control.test",
+    controlUrl: "http://127.0.0.1:8790",
     fetchImpl,
     requestTimeoutMs: 1_000,
   });
@@ -46,7 +47,11 @@ function textContent(result: Awaited<ReturnType<Client["callTool"]>>): string {
 }
 
 describe("Seoul Codex MCP gateway", () => {
-  test("registers the four tools and returns a bounded device summary", async () => {
+  test("refuses a non-loopback control API", () => {
+    expect(() => new ControlApiClient({ controlUrl: "https://control.example" })).toThrow();
+  });
+
+  test("registers Mesh and remote Codex tools and returns a bounded device summary", async () => {
     let captured: Request | undefined;
     const fetchImpl: ControlFetch = async (input, init) => {
       captured = new Request(input, init);
@@ -88,6 +93,14 @@ describe("Seoul Codex MCP gateway", () => {
         "mesh_get_job",
         "mesh_list_devices",
         "mesh_submit_job",
+        "remote_codex_get_events",
+        "remote_codex_interrupt",
+        "remote_codex_list_approvals",
+        "remote_codex_list_threads",
+        "remote_codex_read_thread",
+        "remote_codex_respond_approval",
+        "remote_codex_send_message",
+        "remote_codex_start_thread",
       ]);
       const submitTool = tools.tools.find((tool) => tool.name === "mesh_submit_job");
       expect(submitTool?.inputSchema.properties).toHaveProperty("groupId");
@@ -212,6 +225,83 @@ describe("Seoul Codex MCP gateway", () => {
         "/api/tasks/task%3Aa%2Eb-1",
         "/api/tasks/task%3Aa%2Eb-1/cancel",
       ]);
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  test("routes bounded remote Codex thread, input, and approval calls", async () => {
+    const captured: Request[] = [];
+    const fetchImpl: ControlFetch = async (input, init) => {
+      const request = new Request(input, init);
+      captured.push(request);
+      const path = new URL(request.url).pathname;
+      if (path === "/api/codex/threads") {
+        return Response.json({
+          kind: "codex-thread-list",
+          threads: [{
+            id: "thread-1",
+            name: "Mac work",
+            preview: "Authorization: Bearer private-token",
+            cwd: "/Users/test/project",
+            status: "idle",
+            canAcceptDirectInput: true,
+          }],
+        });
+      }
+      if (path === "/api/codex/input") {
+        return Response.json({
+          kind: "input-ack",
+          sessionId: "thread-1",
+          status: "running",
+          note: "已发送到 Codex 会话",
+        }, { status: 202 });
+      }
+      return Response.json({
+        kind: "permission-response-ack",
+        requestId: "codex-approval-1",
+        status: "answered",
+      }, { status: 202 });
+    };
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const listed = await mcp.client.callTool({
+        name: "remote_codex_list_threads",
+        arguments: { targetNodeId: "mac-node" },
+      });
+      const listedText = textContent(listed);
+      expect(new URL(captured[0].url).searchParams.get("targetNodeId")).toBe("mac-node");
+      expect(listedText).toContain("thread-1");
+      expect(listedText).not.toContain("private-token");
+
+      await mcp.client.callTool({
+        name: "remote_codex_send_message",
+        arguments: {
+          targetNodeId: "mac-node",
+          sessionId: "thread-1",
+          text: "continue",
+        },
+      });
+      expect(await captured[1].clone().json()).toEqual({
+        targetNodeId: "mac-node",
+        sessionId: "thread-1",
+        text: "continue",
+      });
+
+      const approval = await mcp.client.callTool({
+        name: "remote_codex_respond_approval",
+        arguments: {
+          targetNodeId: "mac-node",
+          requestId: "codex-approval-1",
+          optionId: "deny",
+        },
+      });
+      expect(approval.isError).not.toBe(true);
+      expect(await captured[2].clone().json()).toEqual({
+        targetNodeId: "mac-node",
+        requestId: "codex-approval-1",
+        optionId: "deny",
+      });
     } finally {
       await mcp.close();
     }

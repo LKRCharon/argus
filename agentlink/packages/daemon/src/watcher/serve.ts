@@ -477,6 +477,7 @@ export async function serveWatch(
         const payload = await chan.open<{
           kind?: string;
           requestId?: string;
+          controlRequestId?: string;
           optionId?: string;
           text?: string;
           sessionId?: string;
@@ -487,6 +488,10 @@ export async function serveWatch(
           grant?: unknown;
           approval?: unknown;
         }>(msg.data?.enc);
+        const controlRequestId = typeof payload?.controlRequestId === "string"
+          ? payload.controlRequestId.slice(0, 128)
+          : undefined;
+        const controlReply = controlRequestId ? { controlRequestId } : {};
 
         // Only log genuine phone->daemon commands. Relay buffering can echo a
         // daemon->phone kind (agent-event, session-list, …) back at us; those
@@ -604,9 +609,17 @@ export async function serveWatch(
           // transcript scan (model-generated titles, live status, cwd).
           try {
             const srv = await codexControl();
-            await sendPayload({ kind: "codex-thread-list", threads: await srv.listThreads(40) });
+            await sendPayload({
+              kind: "codex-thread-list",
+              threads: await srv.listThreads(40),
+              ...controlReply,
+            });
           } catch (e) {
-            await sendPayload({ kind: "codex-error", note: `${e instanceof Error ? e.message : e}` });
+            await sendPayload({
+              kind: "codex-error",
+              note: `${e instanceof Error ? e.message : e}`,
+              ...controlReply,
+            });
           }
         } else if (payload?.kind === "codex-resume" && payload.sessionId) {
           try {
@@ -620,9 +633,14 @@ export async function serveWatch(
               // Flattened history, not raw turns: the phone speaks the event
               // vocabulary, not app-server's item taxonomy.
               events: r.events,
+              ...controlReply,
             });
           } catch (e) {
-            await sendPayload({ kind: "codex-error", note: `${e instanceof Error ? e.message : e}` });
+            await sendPayload({
+              kind: "codex-error",
+              note: `${e instanceof Error ? e.message : e}`,
+              ...controlReply,
+            });
           }
         } else if (payload?.kind === "codex-history-cancel" && payload.sessionId) {
           // The legacy Mac watcher returns one completed snapshot, so there is
@@ -656,7 +674,8 @@ export async function serveWatch(
               kind: "input-ack",
               sessionId: payload.sessionId,
               status: "running",
-              note: active ? "已插话到进行中的回合" : "已发送到 Codex 会话",
+              note: steered ? "已插话到进行中的回合" : "已发送到 Codex 会话",
+              ...controlReply,
             });
           } catch (e) {
             await sendPayload({
@@ -664,6 +683,7 @@ export async function serveWatch(
               sessionId: payload.sessionId,
               status: "queued",
               note: `发送失败: ${e instanceof Error ? e.message : e}`,
+              ...controlReply,
             });
           }
         } else if (payload?.kind === "codex-interrupt" && payload.sessionId) {
@@ -675,9 +695,19 @@ export async function serveWatch(
             // keeping it would wedge every later message into a failing steer.
             activeTurns.delete(payload.sessionId);
             await srv.interruptTurn(payload.sessionId, active);
-            await sendPayload({ kind: "input-ack", sessionId: payload.sessionId, status: "done", note: "已打断" });
+            await sendPayload({
+              kind: "input-ack",
+              sessionId: payload.sessionId,
+              status: "done",
+              note: "已打断",
+              ...controlReply,
+            });
           } catch (e) {
-            await sendPayload({ kind: "codex-error", note: `${e instanceof Error ? e.message : e}` });
+            await sendPayload({
+              kind: "codex-error",
+              note: `${e instanceof Error ? e.message : e}`,
+              ...controlReply,
+            });
           }
         } else if (payload?.kind === "list-sessions") {
           // The mirrored stream only ever showed sessions that emitted an event
@@ -722,6 +752,7 @@ export async function serveWatch(
               agent: wantCodex ? "codex" : "qoder",
               cwd,
               prompt: payload.text,
+              ...controlReply,
             });
           }
           await sendPayload({
@@ -731,6 +762,7 @@ export async function serveWatch(
             sessionId: newId ?? payload.sessionId ?? "",
             status: r.ok ? "running" : "queued",
             note: r.note,
+            ...controlReply,
           });
         } else if (payload?.kind === "remote-control") {
           const r = startRemoteControl({ name: payload.text, directory: payload.cwd });
@@ -755,12 +787,31 @@ export async function serveWatch(
           codexServer?.respond(serverReqId, {
             decision: payload.optionId === "allow" ? "approved" : "denied",
           });
+          if (controlRequestId) {
+            await sendPayload({
+              kind: "permission-response-ack",
+              requestId: payload.requestId,
+              sessionId: payload.sessionId ?? "",
+              status: "answered",
+              ...controlReply,
+            });
+          }
         } else if (payload?.kind === "permission-response" && payload.requestId
                    && !hookServer.hasPending(String(payload.requestId))) {
           // Neither ACP, Codex, nor a live hook request owns this id — most
           // likely a stale answer from before a daemon restart. Dropping it beats
           // handing an unrelated id to the hook server.
           console.log(`[watch] 忽略过期的审批回应 ${payload.requestId}`);
+          if (controlRequestId) {
+            await sendPayload({
+              kind: "permission-response-ack",
+              requestId: payload.requestId,
+              sessionId: payload.sessionId ?? "",
+              status: "stale",
+              note: "远端审批已过期",
+              ...controlReply,
+            });
+          }
         } else if (payload?.kind === "permission-response" && payload.requestId) {
           // 手机端审批结果 → 解除 hook 等待
           hookServer.resolvePermission(payload.requestId, payload.optionId ?? "deny");

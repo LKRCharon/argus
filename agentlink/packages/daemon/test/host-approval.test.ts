@@ -66,6 +66,9 @@ describe("target-local owner approval", () => {
     const list = await handler(new Request("http://127.0.0.1:8791/api/approvals"));
     expect(await list.json()).toMatchObject({ nodeId: "node-l40", approvals: [{ taskId: "task-owner-approval" }] });
 
+    const rebound = await handler(new Request("http://approval.evil.example/api/approvals"));
+    expect(rebound.status).toBe(403);
+
     const rejected = await handler(new Request("http://127.0.0.1:8791/api/approvals/task-owner-approval/decision", {
       method: "POST",
       headers: { "content-type": "application/json", origin: "https://evil.example" },
@@ -81,5 +84,12 @@ describe("target-local owner approval", () => {
     }));
     expect(accepted.status).toBe(202);
     expect(decisions).toEqual(["task-owner-approval:allow-once"]);
+
+    const oversized = await handler(new Request("http://127.0.0.1:8791/api/approvals/another/decision", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://127.0.0.1:8791" },
+      body: JSON.stringify({ decision: "deny", padding: "x".repeat(16 * 1024) }),
+    }));
+    expect(oversized.status).toBe(413);
   });
 });

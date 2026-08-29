@@ -25,6 +25,11 @@ import {
   digestControlTaskPayload,
   type ControlOutboxRecord,
 } from "./outbox";
+import {
+  CodexPeerGateway,
+  type RemoteCodexApproval,
+  type RemoteCodexEventsPage,
+} from "./codex";
 
 export type PeerConnectionState = "offline" | "connecting" | "online" | "error";
 
@@ -109,6 +114,7 @@ export class MeshController {
   readonly relayUrl: string;
   readonly journal: ControlTaskJournal;
   readonly outbox: ControlTaskOutbox;
+  readonly codex: CodexPeerGateway;
 
   private readonly loadPeers: () => Record<string, StoredPeer>;
   private readonly reconnectDelayMs: number;
@@ -125,6 +131,9 @@ export class MeshController {
     this.journal = options.journal ?? new ControlTaskJournal();
     this.outbox = options.outbox ?? new ControlTaskOutbox();
     this.reconnectDelayMs = options.reconnectDelayMs ?? 5_000;
+    this.codex = new CodexPeerGateway(async (peerId, payload) => {
+      await this.send(this.requireSession(peerId), payload);
+    });
     this.syncPeers();
   }
 
@@ -148,7 +157,9 @@ export class MeshController {
     for (const session of this.sessions.values()) {
       session.closed = true;
       session.conn.close();
-      this.rejectPending(session, new Error("Mesh controller stopped"));
+      const error = new Error("Mesh controller stopped");
+      this.rejectPending(session, error);
+      this.codex.handleDisconnect(session.peer.fingerprint, error);
     }
     this.sessions.clear();
   }
@@ -371,6 +382,47 @@ export class MeshController {
     }
   }
 
+  async listCodexThreads(targetNodeId: string): Promise<Record<string, unknown>> {
+    return this.codex.listThreads(targetNodeId);
+  }
+
+  async readCodexThread(targetNodeId: string, sessionId: string): Promise<Record<string, unknown>> {
+    return this.codex.readThread(targetNodeId, sessionId);
+  }
+
+  async startCodexThread(targetNodeId: string, text: string, cwd?: string): Promise<Record<string, unknown>> {
+    return this.codex.startThread(targetNodeId, text, cwd);
+  }
+
+  async sendCodexInput(targetNodeId: string, sessionId: string, text: string): Promise<Record<string, unknown>> {
+    return this.codex.sendInput(targetNodeId, sessionId, text);
+  }
+
+  async interruptCodexThread(targetNodeId: string, sessionId: string): Promise<Record<string, unknown>> {
+    return this.codex.interrupt(targetNodeId, sessionId);
+  }
+
+  listCodexEvents(
+    targetNodeId: string,
+    afterSeq = 0,
+    limit = 100,
+    sessionId?: string,
+  ): RemoteCodexEventsPage {
+    return this.codex.listEvents(targetNodeId, afterSeq, limit, sessionId);
+  }
+
+  listCodexApprovals(targetNodeId?: string): RemoteCodexApproval[] {
+    return this.codex.listApprovals(targetNodeId);
+  }
+
+  async respondCodexApproval(
+    targetNodeId: string,
+    requestId: string,
+    optionId: "allow" | "deny",
+  ): Promise<Record<string, unknown>> {
+    return this.codex.respondApproval(targetNodeId, requestId, optionId);
+  }
+
   overview(): ControllerOverview {
     this.syncPeers();
     const peers = [...this.snapshots.values()].sort((a, b) => a.deviceName.localeCompare(b.deviceName));
@@ -408,6 +460,8 @@ export class MeshController {
   }
 
   private handlePayload(session: PeerSession, payload: unknown): void {
+    if (this.codex.handlePayload(session.peer.fingerprint, payload)) return;
+
     const resources = MeshResourceListPayloadSchema.safeParse(payload);
     if (resources.success) {
       const pending = session.pendingResources.get(resources.data.requestId);
@@ -610,6 +664,7 @@ export class MeshController {
     if (session.closed) return;
     session.closed = true;
     this.rejectPending(session, error);
+    this.codex.handleDisconnect(session.peer.fingerprint, error);
     if (this.sessions.get(session.peer.fingerprint) === session) this.sessions.delete(session.peer.fingerprint);
     this.setSnapshot(session.peer, { status: "offline", error: error.message });
     this.scheduleReconnect(session.peer.fingerprint);

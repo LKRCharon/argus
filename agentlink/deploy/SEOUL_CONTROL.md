@@ -47,6 +47,10 @@ outside versioned code:
 /data3/lkr/argus-host/state/mesh.json
 ```
 
+The daemon rejects non-loopback bind addresses and Host headers as well as
+cross-origin state changes. Keep using SSH forwarding instead of exposing the
+HTTP port on a LAN interface.
+
 The first Seoul/L40 group uses a local `gpu:l40` resource and a fixed
 `gpu:status` runner backed by `/usr/bin/nvidia-smi`; the runner does not accept
 an executable, cwd, environment, or shell command from the controller.

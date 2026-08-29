@@ -55,8 +55,12 @@ jobs:
         run: ./gradlew assembleDebug --no-daemon
 
   agentlink:
-    name: Agentlink protocol and daemon tests
-    runs-on: ubuntu-latest
+    name: Agentlink tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: agentlink
@@ -77,3 +81,6 @@ jobs:
 
       - name: Test agentlink
         run: bun test
+
+      - name: Build agentlink app
+        run: bun run build:app

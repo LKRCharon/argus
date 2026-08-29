@@ -10,9 +10,8 @@ export function meshAuditPath(): string {
 }
 
 /** Append only redacted policy events; never write grants, approvals, paths, or secrets. */
-export function appendMeshAuditEvent(event: MeshAuditEvent): void {
-  const file = meshAuditPath();
-  if (existsSync(file) && (statSync(file).mode & 0o077) !== 0) {
+export function appendMeshAuditEvent(event: MeshAuditEvent, file = meshAuditPath()): void {
+  if (process.platform !== "win32" && existsSync(file) && (statSync(file).mode & 0o077) !== 0) {
     throw new Error("Mesh 审计文件权限过宽，请设置为 0600");
   }
   const line = JSON.stringify(event) + "\n";

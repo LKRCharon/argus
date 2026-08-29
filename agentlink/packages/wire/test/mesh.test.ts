@@ -286,9 +286,13 @@ describe("Mesh wire schema", () => {
     expect(MeshCapabilityGrantSchema.safeParse(invalidGrant).success).toBe(false);
   });
 
-  test("rejects an empty identifier", () => {
+  test("rejects an empty or oversized identifier", () => {
     expect(MeshResourcePayloadSchema.safeParse({ kind: "mesh-resource", resource: { ...resource, id: "" } }).success).toBe(false);
     expect(MeshTaskRequestPayloadSchema.safeParse({ kind: "mesh-task-request", task: { ...task, taskId: "   " } }).success).toBe(false);
+    expect(MeshTaskRequestPayloadSchema.safeParse({
+      kind: "mesh-task-request",
+      task: { ...task, taskId: "x".repeat(257) },
+    }).success).toBe(false);
   });
 
   test("rejects an expiry that is not later than issuedAt and detects an expired grant", () => {

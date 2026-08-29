@@ -1,12 +1,48 @@
 import { existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import {
   MeshRunScopeSchema,
   MeshTaskRequestSchema,
 } from "@agentlink/wire";
 import { MeshController, type ControllerOverview } from "./controller";
 import { type ControlTaskJournal, type ControlTaskRecord } from "./journal";
+import {
+  HttpRequestError,
+  assertLoopbackHostname,
+  hasJsonContentType,
+  isLoopbackRequest,
+  isSameOriginRequest,
+  readBoundedJson,
+} from "./http-security";
+
+const MAX_CONTROL_REQUEST_BYTES = 2 * 1024 * 1024;
+const ControlIdSchema = z.string().trim().min(1).max(256);
+const CodexTextSchema = z.string().max(64 * 1024)
+  .refine((value) => value.trim().length > 0, "text must not be blank");
+const CodexTargetSchema = z.object({
+  targetNodeId: ControlIdSchema,
+}).strip();
+const CodexThreadSchema = CodexTargetSchema.extend({
+  sessionId: ControlIdSchema,
+}).strip();
+const CodexStartSchema = CodexTargetSchema.extend({
+  text: CodexTextSchema,
+  cwd: z.string().max(4_096).optional(),
+}).strip();
+const CodexInputSchema = CodexThreadSchema.extend({
+  text: CodexTextSchema,
+}).strip();
+const CodexEventsSchema = CodexTargetSchema.extend({
+  afterSeq: z.coerce.number().int().min(0).optional().default(0),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(100),
+  sessionId: ControlIdSchema.optional(),
+}).strip();
+const CodexApprovalSchema = CodexTargetSchema.extend({
+  requestId: ControlIdSchema,
+  optionId: z.enum(["allow", "deny"]),
+}).strip();
 
 export interface ControlServerOptions {
   host?: string;
@@ -25,6 +61,14 @@ export interface ControlController {
   refreshResources(): Promise<void>;
   submitTask(task: Parameters<MeshController["submitTask"]>[0], grant?: Parameters<MeshController["submitTask"]>[1], approval?: Parameters<MeshController["submitTask"]>[2]): Promise<ControlTaskRecord>;
   cancelTask(taskId: string): Promise<ControlTaskRecord>;
+  listCodexThreads(targetNodeId: string): Promise<Record<string, unknown>>;
+  readCodexThread(targetNodeId: string, sessionId: string): Promise<Record<string, unknown>>;
+  startCodexThread(targetNodeId: string, text: string, cwd?: string): Promise<Record<string, unknown>>;
+  sendCodexInput(targetNodeId: string, sessionId: string, text: string): Promise<Record<string, unknown>>;
+  interruptCodexThread(targetNodeId: string, sessionId: string): Promise<Record<string, unknown>>;
+  listCodexEvents(targetNodeId: string, afterSeq?: number, limit?: number, sessionId?: string): unknown;
+  listCodexApprovals(targetNodeId?: string): unknown;
+  respondCodexApproval(targetNodeId: string, requestId: string, optionId: "allow" | "deny"): Promise<Record<string, unknown>>;
 }
 
 export function createControlRequestHandler(options: ControlRequestHandlerOptions): (request: Request) => Promise<Response> {
@@ -32,13 +76,17 @@ export function createControlRequestHandler(options: ControlRequestHandlerOption
   const controller = options.controller;
 
   return async (request) => {
+    if (!isLoopbackRequest(request)) return json({ error: "loopback host required" }, 403);
+    if (request.method !== "GET" && request.method !== "HEAD" && !isSameOriginRequest(request)) {
+      return json({ error: "cross-origin request rejected" }, 403);
+    }
     const url = new URL(request.url);
     if (url.pathname === "/health") {
       return json({ ok: true, service: "argus-mesh-control", ...controllerHealth(controller) });
     }
 
     if (url.pathname.startsWith("/api/")) {
-      return handleApi(request, url.pathname, controller);
+      return handleApi(request, url, controller);
     }
 
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -52,9 +100,11 @@ export async function startControlServer(
   controller: MeshController,
   options: ControlServerOptions = {},
 ): Promise<{ stop: () => void; port: number; host: string }> {
-  await controller.start();
   const host = options.host ?? process.env.ARGUS_CONTROL_HOST ?? "127.0.0.1";
   const port = options.port ?? Number(process.env.ARGUS_CONTROL_PORT ?? 8790);
+  assertLoopbackHostname(host, "Control server");
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("Control server port is invalid");
+  await controller.start();
   const handler = createControlRequestHandler({ ...options, host, port, controller });
   const server = Bun.serve({
     hostname: host,
@@ -69,11 +119,53 @@ export async function startControlServer(
   return { stop: () => { controller.stop(); server.stop(true); }, port: server.port ?? port, host };
 }
 
-async function handleApi(request: Request, path: string, controller: ControlController): Promise<Response> {
+async function handleApi(request: Request, url: URL, controller: ControlController): Promise<Response> {
   try {
+    const path = url.pathname;
     if (request.method === "GET" && path === "/api/overview") return json(controller.overview());
     if (request.method === "GET" && path === "/api/tasks") return json({ tasks: controller.journal.list(100) });
     if (request.method === "GET" && path === "/api/resources") return json({ resources: controller.overview().resources });
+    if (request.method === "GET" && path === "/api/codex/threads") {
+      const input = CodexTargetSchema.parse(Object.fromEntries(url.searchParams));
+      return json(await controller.listCodexThreads(input.targetNodeId));
+    }
+    if (request.method === "GET" && path === "/api/codex/events") {
+      const input = CodexEventsSchema.parse(Object.fromEntries(url.searchParams));
+      return json(controller.listCodexEvents(
+        input.targetNodeId,
+        input.afterSeq,
+        input.limit,
+        input.sessionId,
+      ));
+    }
+    if (request.method === "GET" && path === "/api/codex/approvals") {
+      const input = CodexTargetSchema.partial().parse(Object.fromEntries(url.searchParams));
+      return json({ approvals: controller.listCodexApprovals(input.targetNodeId) });
+    }
+    if (request.method === "POST" && path === "/api/codex/read") {
+      const input = CodexThreadSchema.parse(await readJsonRequest(request));
+      return json(await controller.readCodexThread(input.targetNodeId, input.sessionId));
+    }
+    if (request.method === "POST" && path === "/api/codex/start") {
+      const input = CodexStartSchema.parse(await readJsonRequest(request));
+      return json(await controller.startCodexThread(input.targetNodeId, input.text, input.cwd), 202);
+    }
+    if (request.method === "POST" && path === "/api/codex/input") {
+      const input = CodexInputSchema.parse(await readJsonRequest(request));
+      return json(await controller.sendCodexInput(input.targetNodeId, input.sessionId, input.text), 202);
+    }
+    if (request.method === "POST" && path === "/api/codex/interrupt") {
+      const input = CodexThreadSchema.parse(await readJsonRequest(request));
+      return json(await controller.interruptCodexThread(input.targetNodeId, input.sessionId), 202);
+    }
+    if (request.method === "POST" && path === "/api/codex/approval") {
+      const input = CodexApprovalSchema.parse(await readJsonRequest(request));
+      return json(await controller.respondCodexApproval(
+        input.targetNodeId,
+        input.requestId,
+        input.optionId,
+      ), 202);
+    }
     const taskId = taskPathId(path);
     if (request.method === "GET" && taskId) {
       const task = controller.journal.get(taskId);
@@ -92,8 +184,16 @@ async function handleApi(request: Request, path: string, controller: ControlCont
     }
     return new Response("not found", { status: 404 });
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    const status = error instanceof HttpRequestError ? error.status : 400;
+    return json({ error: error instanceof Error ? error.message : String(error) }, status);
   }
+}
+
+async function readJsonRequest(request: Request): Promise<unknown> {
+  if (!hasJsonContentType(request)) {
+    throw new HttpRequestError("content-type must be application/json", 415);
+  }
+  return readBoundedJson(request, MAX_CONTROL_REQUEST_BYTES);
 }
 
 function taskPathId(path: string): string | undefined {
@@ -107,7 +207,12 @@ function cancelTaskPathId(path: string): string | undefined {
 }
 
 async function createTask(request: Request, controller: ControlController): Promise<Response> {
-  const body = await request.json() as Record<string, unknown>;
+  if (!hasJsonContentType(request)) return json({ error: "content-type must be application/json" }, 415);
+  const value = await readBoundedJson(request, MAX_CONTROL_REQUEST_BYTES);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpRequestError("request body must be a JSON object", 400);
+  }
+  const body = value as Record<string, unknown>;
   const operation = typeof body.operation === "string" ? body.operation : "";
   if (operation !== "inspect" && operation !== "run") {
     return json({ error: "控制台当前只开放 inspect 和 named runner run" }, 400);

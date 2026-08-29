@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { isLoopbackHostname } from "./http-security";
 
 const DEFAULT_CONTROL_URL = "http://127.0.0.1:8790";
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
@@ -11,6 +12,9 @@ const MAX_ERROR_TEXT_CHARS = 512;
 const MAX_PEERS = 32;
 const MAX_RESOURCES = 64;
 const MAX_GPU_DEVICES = 16;
+const MAX_CODEX_THREADS = 40;
+const MAX_CODEX_EVENTS = 100;
+const MAX_CODEX_APPROVALS = 50;
 const MAX_TASK_RESULT_DEPTH = 3;
 const MAX_TASK_RESULT_ITEMS = 16;
 const MAX_TASK_RESULT_STRING_CHARS = 1_024;
@@ -35,6 +39,28 @@ const SubmitJobInputSchema = z.object({
 
 const JobIdInputSchema = z.object({
   taskId: TaskIdSchema,
+}).strip();
+const RemoteTargetInputSchema = z.object({
+  targetNodeId: IdSchema,
+}).strip();
+const RemoteThreadInputSchema = RemoteTargetInputSchema.extend({
+  sessionId: IdSchema,
+}).strip();
+const RemoteStartInputSchema = RemoteTargetInputSchema.extend({
+  text: z.string().max(64 * 1024).refine((value) => value.trim().length > 0, "text 不能为空"),
+  cwd: z.string().max(4_096).optional(),
+}).strip();
+const RemoteInputSchema = RemoteThreadInputSchema.extend({
+  text: z.string().max(64 * 1024).refine((value) => value.trim().length > 0, "text 不能为空"),
+}).strip();
+const RemoteEventsInputSchema = RemoteTargetInputSchema.extend({
+  afterSeq: z.number().int().min(0).optional().default(0),
+  limit: z.number().int().min(1).max(100).optional().default(50),
+  sessionId: IdSchema.optional(),
+}).strip();
+const RemoteApprovalInputSchema = RemoteTargetInputSchema.extend({
+  requestId: IdSchema,
+  optionId: z.enum(["allow", "deny"]),
 }).strip();
 
 export type MeshSubmitJobInput = z.infer<typeof SubmitJobInputSchema>;
@@ -100,11 +126,65 @@ export class ControlApiClient {
     return this.request("POST", `/api/tasks/${encodePathSegment(taskId)}/cancel`);
   }
 
+  async listCodexThreads(targetNodeId: string): Promise<unknown> {
+    return this.request("GET", `/api/codex/threads?targetNodeId=${encodeURIComponent(targetNodeId)}`);
+  }
+
+  async readCodexThread(targetNodeId: string, sessionId: string): Promise<unknown> {
+    return this.request("POST", "/api/codex/read", { targetNodeId, sessionId });
+  }
+
+  async startCodexThread(targetNodeId: string, text: string, cwd?: string): Promise<unknown> {
+    return this.request("POST", "/api/codex/start", {
+      targetNodeId,
+      text,
+      ...(cwd ? { cwd } : {}),
+    });
+  }
+
+  async sendCodexInput(targetNodeId: string, sessionId: string, text: string): Promise<unknown> {
+    return this.request("POST", "/api/codex/input", { targetNodeId, sessionId, text });
+  }
+
+  async interruptCodexThread(targetNodeId: string, sessionId: string): Promise<unknown> {
+    return this.request("POST", "/api/codex/interrupt", { targetNodeId, sessionId });
+  }
+
+  async listCodexEvents(
+    targetNodeId: string,
+    afterSeq = 0,
+    limit = 50,
+    sessionId?: string,
+  ): Promise<unknown> {
+    const query = new URLSearchParams({
+      targetNodeId,
+      afterSeq: String(afterSeq),
+      limit: String(limit),
+    });
+    if (sessionId) query.set("sessionId", sessionId);
+    return this.request("GET", `/api/codex/events?${query}`);
+  }
+
+  async listCodexApprovals(targetNodeId: string): Promise<unknown> {
+    return this.request("GET", `/api/codex/approvals?targetNodeId=${encodeURIComponent(targetNodeId)}`);
+  }
+
+  async respondCodexApproval(
+    targetNodeId: string,
+    requestId: string,
+    optionId: "allow" | "deny",
+  ): Promise<unknown> {
+    return this.request("POST", "/api/codex/approval", { targetNodeId, requestId, optionId });
+  }
+
   private endpoint(path: string): URL {
     const endpoint = new URL(this.baseUrl.href);
     const basePath = endpoint.pathname === "/" ? "" : endpoint.pathname.replace(/\/+$/, "");
-    endpoint.pathname = `${basePath}${path}`;
-    endpoint.search = "";
+    const queryAt = path.indexOf("?");
+    const pathname = queryAt >= 0 ? path.slice(0, queryAt) : path;
+    const query = queryAt >= 0 ? path.slice(queryAt + 1) : "";
+    endpoint.pathname = `${basePath}${pathname}`;
+    endpoint.search = query;
     endpoint.hash = "";
     return endpoint;
   }
@@ -150,10 +230,10 @@ export class ControlApiClient {
 export function createControlMcpServer(options: ControlMcpOptions = {}): McpServer {
   const api = new ControlApiClient(options);
   const server = new McpServer({
-    name: "argus-seoul-mesh",
-    version: "0.2.0",
+    name: "argus-seoul-control",
+    version: "0.3.0",
   }, {
-    instructions: "Argus Mesh 只调度已配对设备的 owner-configured typed runner。提交前先用 mesh_list_devices 读取资源和 runnerId；inspect 为只读，run 会在目标设备等待所有者另行批准。绝不要请求或发送 shell、cwd、env、密钥或任意命令。用 mesh_get_job 查询进度；只在用户明确要求时取消任务。",
+    instructions: "Argus Seoul Control 管理已配对设备。Mesh 只调度 owner-configured typed runner；远端 Codex 工具只操作用户指定的目标节点和线程，并保留目标 Codex 的审批。先用 mesh_list_devices 确认 targetNodeId；发送消息、打断回合或回答审批前必须有用户明确意图。绝不要请求或发送密钥、环境变量或任意 shell。",
   });
 
   server.registerTool("mesh_list_devices", {
@@ -208,6 +288,124 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
       openWorldHint: false,
     },
   }, async ({ taskId }) => toolCall(async () => summarizeTask(await api.cancelJob(taskId))));
+
+  server.registerTool("remote_codex_list_threads", {
+    title: "List remote Codex threads",
+    description: "列出指定已配对设备上的 Codex 线程、状态和工作目录摘要。",
+    inputSchema: RemoteTargetInputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, async ({ targetNodeId }) => toolCall(async () => (
+    summarizeCodexThreadList(await api.listCodexThreads(targetNodeId), targetNodeId)
+  )));
+
+  server.registerTool("remote_codex_read_thread", {
+    title: "Read remote Codex thread",
+    description: "续接并读取指定远端 Codex 线程的有界历史；不会发送新消息。",
+    inputSchema: RemoteThreadInputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, async ({ targetNodeId, sessionId }) => toolCall(async () => (
+    summarizeCodexThread(await api.readCodexThread(targetNodeId, sessionId), targetNodeId)
+  )));
+
+  server.registerTool("remote_codex_start_thread", {
+    title: "Start remote Codex thread",
+    description: "在指定设备上新建 Codex 线程并发送首条消息。该操作可能触发目标上的工具和审批。",
+    inputSchema: RemoteStartInputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  }, async ({ targetNodeId, text, cwd }) => toolCall(async () => (
+    summarizeCodexAck(await api.startCodexThread(targetNodeId, text, cwd), targetNodeId)
+  )));
+
+  server.registerTool("remote_codex_send_message", {
+    title: "Send remote Codex message",
+    description: "向指定远端 Codex 线程发送消息；运行中的回合会被 steer，空闲线程会开始新回合。",
+    inputSchema: RemoteInputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  }, async ({ targetNodeId, sessionId, text }) => toolCall(async () => (
+    summarizeCodexAck(await api.sendCodexInput(targetNodeId, sessionId, text), targetNodeId)
+  )));
+
+  server.registerTool("remote_codex_interrupt", {
+    title: "Interrupt remote Codex turn",
+    description: "打断指定远端 Codex 线程当前正在运行的回合。",
+    inputSchema: RemoteThreadInputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, async ({ targetNodeId, sessionId }) => toolCall(async () => (
+    summarizeCodexAck(await api.interruptCodexThread(targetNodeId, sessionId), targetNodeId)
+  )));
+
+  server.registerTool("remote_codex_get_events", {
+    title: "Get remote Codex events",
+    description: "按递增游标读取指定设备上的远端 Codex 事件；使用返回的 nextSeq 继续轮询。",
+    inputSchema: RemoteEventsInputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, async ({ targetNodeId, afterSeq, limit, sessionId }) => toolCall(async () => (
+    summarizeCodexEvents(
+      await api.listCodexEvents(targetNodeId, afterSeq, limit, sessionId),
+      targetNodeId,
+    )
+  )));
+
+  server.registerTool("remote_codex_list_approvals", {
+    title: "List remote Codex approvals",
+    description: "列出指定设备上等待用户决定的 Codex 审批，不会自动批准。",
+    inputSchema: RemoteTargetInputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, async ({ targetNodeId }) => toolCall(async () => (
+    summarizeCodexApprovals(await api.listCodexApprovals(targetNodeId), targetNodeId)
+  )));
+
+  server.registerTool("remote_codex_respond_approval", {
+    title: "Respond to remote Codex approval",
+    description: "仅在用户明确决定后，对指定远端 Codex 审批回答 allow 或 deny。",
+    inputSchema: RemoteApprovalInputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  }, async ({ targetNodeId, requestId, optionId }) => toolCall(async () => (
+    summarizeCodexAck(
+      await api.respondCodexApproval(targetNodeId, requestId, optionId),
+      targetNodeId,
+    )
+  )));
 
   return server;
 }
@@ -334,6 +532,134 @@ function summarizeTask(value: unknown): Record<string, unknown> {
     ...(Object.hasOwn(candidate, "result")
       ? { result: safeUnknown(candidate.result, 0) }
       : {}),
+  };
+}
+
+function summarizeCodexThreadList(value: unknown, targetNodeId: string): Record<string, unknown> {
+  const payload = record(value);
+  if (!payload || payload.kind !== "codex-thread-list") {
+    throw new GatewayError("控制 API 返回的 Codex 线程列表格式无效");
+  }
+  const threads = array(payload.threads);
+  return {
+    targetNodeId,
+    threads: threads.slice(0, MAX_CODEX_THREADS).map(summarizeCodexThreadRow),
+    truncatedThreads: Math.max(0, threads.length - MAX_CODEX_THREADS),
+  };
+}
+
+function summarizeCodexThread(value: unknown, targetNodeId: string): Record<string, unknown> {
+  const payload = record(value);
+  if (!payload || payload.kind !== "codex-resumed") {
+    throw new GatewayError("控制 API 返回的 Codex 线程历史格式无效");
+  }
+  const events = array(payload.events);
+  return {
+    targetNodeId,
+    sessionId: textField(payload, "sessionId", 256),
+    cwd: textField(payload, "cwd", 4_096),
+    canAcceptDirectInput: payload.canAcceptDirectInput === true,
+    events: events.slice(-MAX_CODEX_EVENTS).map(summarizeCodexEventPayload),
+    truncatedEvents: Math.max(0, events.length - MAX_CODEX_EVENTS),
+  };
+}
+
+function summarizeCodexAck(value: unknown, targetNodeId: string): Record<string, unknown> {
+  const payload = record(value);
+  if (!payload || !["input-ack", "permission-response-ack"].includes(String(payload.kind ?? ""))) {
+    throw new GatewayError("控制 API 返回的 Codex 操作回执格式无效");
+  }
+  return {
+    targetNodeId,
+    kind: textField(payload, "kind", 64),
+    sessionId: textField(payload, "sessionId", 256),
+    requestId: textField(payload, "requestId", 256),
+    status: textField(payload, "status", 64),
+    note: textField(payload, "note", 512),
+  };
+}
+
+function summarizeCodexEvents(value: unknown, targetNodeId: string): Record<string, unknown> {
+  const payload = record(value);
+  if (!payload) throw new GatewayError("控制 API 返回的 Codex 事件格式无效");
+  const events = array(payload.events);
+  return {
+    targetNodeId,
+    nextSeq: numberField(payload, "nextSeq"),
+    events: events.slice(0, MAX_CODEX_EVENTS).map((item) => {
+      const event = record(item);
+      return {
+        seq: numberField(event, "seq"),
+        receivedAt: numberField(event, "receivedAt"),
+        event: summarizeCodexEventPayload(event?.payload),
+      };
+    }),
+    truncatedEvents: Math.max(0, events.length - MAX_CODEX_EVENTS),
+  };
+}
+
+function summarizeCodexApprovals(value: unknown, targetNodeId: string): Record<string, unknown> {
+  const payload = record(value);
+  if (!payload) throw new GatewayError("控制 API 返回的 Codex 审批格式无效");
+  const approvals = array(payload.approvals);
+  return {
+    targetNodeId,
+    approvals: approvals.slice(0, MAX_CODEX_APPROVALS).map((item) => {
+      const approval = record(item);
+      return {
+        requestId: textField(approval, "requestId", 256),
+        sessionId: textField(approval, "sessionId", 256),
+        toolName: textField(approval, "toolName", 256),
+        summary: textField(approval, "summary", 2_000),
+        options: array(approval?.options).slice(0, 16).map((optionValue) => {
+          const option = record(optionValue);
+          return {
+            id: textField(option, "id", 64),
+            label: textField(option, "label", 128),
+          };
+        }),
+        receivedAt: numberField(approval, "receivedAt"),
+      };
+    }),
+    truncatedApprovals: Math.max(0, approvals.length - MAX_CODEX_APPROVALS),
+  };
+}
+
+function summarizeCodexThreadRow(value: unknown): Record<string, unknown> {
+  const thread = record(value);
+  return {
+    sessionId: textField(thread, "id", 256),
+    name: textField(thread, "name", 512),
+    preview: textField(thread, "preview", 1_024),
+    cwd: textField(thread, "cwd", 4_096),
+    status: textField(thread, "status", 64),
+    source: textField(thread, "source", 64),
+    parentThreadId: textField(thread, "parentThreadId", 256),
+    agentNickname: textField(thread, "agentNickname", 256),
+    depth: numberField(thread, "depth"),
+    updatedAt: numberField(thread, "updatedAt"),
+    canAcceptDirectInput: thread?.canAcceptDirectInput === true,
+  };
+}
+
+function summarizeCodexEventPayload(value: unknown): Record<string, unknown> {
+  const event = record(value);
+  if (!event) return { type: "unknown" };
+  return {
+    kind: textField(event, "kind", 64),
+    type: textField(event, "type", 64),
+    method: textField(event, "method", 256),
+    sessionId: textField(event, "sessionId", 256),
+    agent: textField(event, "agent", 64),
+    status: textField(event, "status", 64),
+    name: textField(event, "name", 256),
+    text: textField(event, "text", 2_000),
+    summary: textField(event, "summary", 2_000),
+    message: textField(event, "message", 2_000),
+    reason: textField(event, "reason", 256),
+    note: textField(event, "note", 512),
+    ...(Object.hasOwn(event, "event") ? { event: safeUnknown(event.event, 0) } : {}),
+    ...(Object.hasOwn(event, "params") ? { params: safeUnknown(event.params, 0) } : {}),
   };
 }
 
@@ -479,6 +805,7 @@ function parseControlUrl(value: string): URL {
   }
   if (!["http:", "https:"].includes(parsed.protocol)
     || !parsed.hostname
+    || !isLoopbackHostname(parsed.hostname)
     || parsed.username
     || parsed.password
     || parsed.search
