@@ -12,6 +12,20 @@
   "requesters": [
     "PEER_NODE_FINGERPRINT"
   ],
+  "unattendedRuns": {
+    "groupIds": [
+      "group-alpha"
+    ],
+    "requesterNodeIds": [
+      "PEER_NODE_FINGERPRINT"
+    ],
+    "resourceIds": [
+      "repo:gpu-project"
+    ],
+    "runnerIds": [
+      "gpu-project-runner-v1"
+    ]
+  },
   "legacyControl": false,
   "remoteCodexControl": false,
   "allowedRoots": [

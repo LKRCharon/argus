@@ -59,11 +59,19 @@ export interface MeshServiceOptions {
   artifactRoot?: string;
   maxEntries?: number;
   runners?: MeshRunnerSpec[];
+  unattendedRuns?: MeshUnattendedRunPolicy;
   taskStore?: MeshTaskStore;
   artifactStore?: MeshArtifactStore;
   auditSink?: MeshPolicyEngineOptions["auditSink"];
   /** Test/integration injection; production defaults to the persisted owner key. */
   signingKey?: MeshSigningKeyPair;
+}
+
+export interface MeshUnattendedRunPolicy {
+  groupIds: ReadonlySet<string>;
+  requesterNodeIds: ReadonlySet<string>;
+  resourceIds: ReadonlySet<string>;
+  runnerIds: ReadonlySet<string>;
 }
 
 export type MeshTaskProgressSink = (progress: MeshTaskProgressPayload) => void | Promise<void>;
@@ -78,6 +86,7 @@ export class MeshService {
   private readonly signingKey: MeshSigningKeyPair;
   private readonly trustedRequesters?: ReadonlySet<string>;
   private readonly trustedGroups: ReadonlySet<string>;
+  private readonly unattendedRuns?: MeshUnattendedRunPolicy;
   private readonly resources = new Map<string, LocalMeshResource>();
   /** In-memory marker distinguishes a live task from a journal entry left by a restart. */
   private readonly activeTasks = new Set<string>();
@@ -102,6 +111,13 @@ export class MeshService {
         throw new Error(`资源 ${resource.id} 的 statusRunnerId 未绑定只读 status runner`);
       }
     }
+    this.unattendedRuns = options.unattendedRuns ? {
+      groupIds: new Set(options.unattendedRuns.groupIds),
+      requesterNodeIds: new Set(options.unattendedRuns.requesterNodeIds),
+      resourceIds: new Set(options.unattendedRuns.resourceIds),
+      runnerIds: new Set(options.unattendedRuns.runnerIds),
+    } : undefined;
+    this.validateUnattendedRuns();
     this.tasks = options.taskStore ?? new MeshTaskStore();
     this.artifacts = options.artifactStore ?? new MeshArtifactStore(options.artifactRoot);
 
@@ -119,6 +135,28 @@ export class MeshService {
         && approval.approverPublicKey === ownerPublicKey
         && verifyMeshApproval(approval, this.signingKey.publicKey),
     });
+  }
+
+  /** Match an unsigned run proposal against every target-local allowlist. */
+  allowsUnattendedRun(task: MeshTaskRequest): boolean {
+    const policy = this.unattendedRuns;
+    if (!policy || task.operation !== "run" || task.targetNodeId !== this.nodeId) return false;
+    const scope = MeshRunScopeSchema.safeParse(task.scope ?? {});
+    if (!scope.success) return false;
+    const resource = this.resources.get(task.resourceId);
+    const runner = this.runners.get(scope.data.runnerId);
+    if (!resource || !runner) return false;
+    const needsWorkspace = runner.workspaceCapabilities?.includes("task-scoped-workspace") === true;
+    return policy.groupIds.has(task.groupId)
+      && policy.requesterNodeIds.has(task.requesterNodeId)
+      && policy.resourceIds.has(task.resourceId)
+      && policy.runnerIds.has(scope.data.runnerId)
+      && (!resource.allowedGroupIds || resource.allowedGroupIds.includes(task.groupId))
+      && runner.purpose === "task"
+      && runner.resourceId === task.resourceId
+      && (scope.data.args.length === 0 || runner.allowDynamicArgs === true)
+      && (scope.data.input === undefined || runner.allowInput === true)
+      && (needsWorkspace === Boolean(scope.data.baseArtifactId));
   }
 
   registerResource(resource: LocalMeshResource): void {
@@ -466,7 +504,7 @@ export class MeshService {
       return interrupted;
     }
     try {
-      this.tasks.update(task.taskId, { status: "queued" });
+      this.tasks.update(task.taskId, { status: "queued", message: "任务已进入目标队列" });
       await this.emitProgress(task, "queued", "任务已进入目标队列", onProgress);
     } catch {
       return this.result(task, "failed", "deny", "task journal unavailable");
@@ -500,7 +538,7 @@ export class MeshService {
         return result;
       }
 
-      this.tasks.update(task.taskId, { status: "running" });
+      this.tasks.update(task.taskId, { status: "running", message: "任务正在目标设备执行" });
       if (task.operation === "run") {
         const workspace = payload.baseArtifact
           ? this.artifacts.materialize(task.taskId, payload.baseArtifact)
@@ -571,6 +609,35 @@ export class MeshService {
     if (targetNodeId !== this.nodeId) throw new Error("任务控制请求目标不匹配");
     if (this.trustedRequesters && !this.trustedRequesters.has(requesterNodeId)) {
       throw new Error("任务控制请求者不受信任");
+    }
+  }
+
+  private validateUnattendedRuns(): void {
+    const policy = this.unattendedRuns;
+    if (!policy) return;
+    if (policy.groupIds.size === 0 || policy.requesterNodeIds.size === 0
+      || policy.resourceIds.size === 0 || policy.runnerIds.size === 0) {
+      throw new Error("无人值守 run 策略必须使用非空精确 allowlist");
+    }
+    if (!this.trustedRequesters) {
+      throw new Error("无人值守 run 策略要求显式 trustedRequesters");
+    }
+    for (const groupId of policy.groupIds) {
+      if (!this.trustedGroups.has(groupId)) throw new Error(`无人值守 group 不受信任: ${groupId}`);
+    }
+    for (const requesterNodeId of policy.requesterNodeIds) {
+      if (!this.trustedRequesters.has(requesterNodeId)) {
+        throw new Error(`无人值守 requester 不受信任: ${requesterNodeId}`);
+      }
+    }
+    for (const resourceId of policy.resourceIds) {
+      if (!this.resources.has(resourceId)) throw new Error(`无人值守 resource 不存在: ${resourceId}`);
+    }
+    for (const runnerId of policy.runnerIds) {
+      const runner = this.runners.get(runnerId);
+      if (!runner || runner.purpose !== "task" || !policy.resourceIds.has(runner.resourceId)) {
+        throw new Error(`无人值守 runner 未绑定 allowlist resource: ${runnerId}`);
+      }
     }
   }
 

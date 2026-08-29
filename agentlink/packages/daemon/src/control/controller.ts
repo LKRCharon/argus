@@ -66,6 +66,14 @@ export interface ControllerOverview {
   tasks: ControlTaskRecord[];
 }
 
+export interface ControllerReadiness {
+  state: "starting" | "ready" | "degraded";
+  reconciliationInProgress: boolean;
+  lastReconciliationStartedAt: number | null;
+  lastReconciliationCompletedAt: number | null;
+  lastReconciliationError: string | null;
+}
+
 interface PendingResourceRequest {
   resolve: (resources: MeshResource[]) => void;
   reject: (error: Error) => void;
@@ -153,6 +161,14 @@ export class MeshController {
   private readonly reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private started = false;
   private refreshTimer?: ReturnType<typeof setInterval>;
+  private reconciliation?: Promise<void>;
+  private readinessState: ControllerReadiness = {
+    state: "starting",
+    reconciliationInProgress: false,
+    lastReconciliationStartedAt: null,
+    lastReconciliationCompletedAt: null,
+    lastReconciliationError: null,
+  };
 
   constructor(options: MeshControllerOptions = {}) {
     this.relayUrl = options.relayUrl ?? process.env.AGENTLINK_RELAY ?? "ws://127.0.0.1:8787/ws";
@@ -176,12 +192,18 @@ export class MeshController {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
-    await this.connectAll();
-    await this.refreshResources();
     this.refreshTimer = setInterval(() => {
       void this.refreshResources();
     }, RESOURCE_REFRESH_INTERVAL_MS);
     this.refreshTimer.unref();
+    void this.runReconciliation(async () => {
+      await this.connectAll();
+      return this.refreshResourcesOnce();
+    });
+  }
+
+  readiness(): ControllerReadiness {
+    return { ...this.readinessState };
   }
 
   stop(): void {
@@ -237,8 +259,6 @@ export class MeshController {
       this.setSnapshot(peer, { status: "online", lastSeen: Date.now(), error: null });
       session.receiveLoop = this.receive(session);
       void session.receiveLoop.catch((error) => this.handleSessionLost(session, toError(error)));
-      void this.requestResources(peerId).catch(() => undefined);
-      void this.reconcilePeer(peerId).catch(() => undefined);
     } catch (error) {
       this.setSnapshot(peer, { status: "error", error: toError(error).message });
       this.scheduleReconnect(peerId);
@@ -247,18 +267,37 @@ export class MeshController {
   }
 
   async refreshResources(): Promise<void> {
+    return this.runReconciliation(() => this.refreshResourcesOnce());
+  }
+
+  private async refreshResourcesOnce(): Promise<number> {
     this.syncPeers();
-    await Promise.allSettled([...this.snapshots.keys()].map(async (peerId) => {
-      const session = this.sessions.get(peerId);
+    const failedPeers = new Set<string>();
+    await Promise.all([...this.snapshots.keys()].map(async (peerId) => {
+      let session = this.sessions.get(peerId);
       if (!session || session.closed) {
-        await this.connectPeer(peerId).catch(() => undefined);
-        return;
+        try {
+          await this.connectPeer(peerId);
+        } catch {
+          failedPeers.add(peerId);
+          return;
+        }
+        session = this.sessions.get(peerId);
+        if (!session || session.closed) {
+          failedPeers.add(peerId);
+          return;
+        }
       }
-      await Promise.allSettled([
+      const results = await Promise.allSettled([
         this.requestResources(peerId),
         this.reconcilePeer(peerId),
       ]);
+      if (results.some((result) => result.status === "rejected")) failedPeers.add(peerId);
     }));
+    for (const [peerId, snapshot] of this.snapshots) {
+      if (snapshot.status !== "online") failedPeers.add(peerId);
+    }
+    return failedPeers.size;
   }
 
   async requestResources(peerId: string): Promise<MeshResource[]> {
@@ -972,10 +1011,47 @@ export class MeshController {
     if (!this.started || this.reconnectTimers.has(peerId)) return;
     const timer = setTimeout(() => {
       this.reconnectTimers.delete(peerId);
-      void this.connectPeer(peerId).catch(() => undefined);
+      void this.connectPeer(peerId)
+        .then(() => this.refreshResources())
+        .catch(() => undefined);
     }, this.reconnectDelayMs);
     timer.unref();
     this.reconnectTimers.set(peerId, timer);
+  }
+
+  private runReconciliation(work: () => Promise<number>): Promise<void> {
+    if (this.reconciliation) return this.reconciliation;
+    const startedAt = Date.now();
+    this.readinessState = {
+      ...this.readinessState,
+      reconciliationInProgress: true,
+      lastReconciliationStartedAt: startedAt,
+    };
+    const reconciliation = (async () => {
+      let failedPeers = 0;
+      let unexpectedFailure = false;
+      try {
+        failedPeers = await work();
+      } catch {
+        unexpectedFailure = true;
+      }
+      this.readinessState = {
+        state: unexpectedFailure || failedPeers > 0 ? "degraded" : "ready",
+        reconciliationInProgress: false,
+        lastReconciliationStartedAt: startedAt,
+        lastReconciliationCompletedAt: Date.now(),
+        lastReconciliationError: unexpectedFailure
+          ? "controller reconciliation failed"
+          : failedPeers > 0
+            ? `${failedPeers} peer reconciliation operation(s) failed`
+            : null,
+      };
+    })();
+    this.reconciliation = reconciliation;
+    void reconciliation.then(() => {
+      if (this.reconciliation === reconciliation) this.reconciliation = undefined;
+    });
+    return reconciliation;
   }
 }
 

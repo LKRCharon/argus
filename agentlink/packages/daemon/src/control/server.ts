@@ -16,7 +16,7 @@ import {
   MeshThreadIdSchema,
   stableStringify,
 } from "@agentlink/wire";
-import { MeshController, type ControllerOverview } from "./controller";
+import { MeshController, type ControllerOverview, type ControllerReadiness } from "./controller";
 import { CodexGatewayError } from "./codex";
 import { CodexOperationStatusSchema, type CodexOperationListQuery, type CodexOperationRecord } from "./codex-operations";
 import { type ControlTaskJournal, type ControlTaskRecord } from "./journal";
@@ -81,6 +81,12 @@ export interface ControlServerOptions {
   host?: string;
   port?: number;
   distDir?: string;
+  serve?: (options: {
+    hostname: string;
+    port: number;
+    idleTimeout: number;
+    fetch: (request: Request) => Promise<Response>;
+  }) => { port?: number; stop(closeActiveConnections?: boolean): void };
 }
 
 export interface ControlRequestHandlerOptions extends ControlServerOptions {
@@ -90,6 +96,7 @@ export interface ControlRequestHandlerOptions extends ControlServerOptions {
 export interface ControlController {
   readonly nodeId: string;
   readonly journal: ControlTaskJournal;
+  readiness?(): ControllerReadiness;
   overview(): ControllerOverview;
   refreshResources(): Promise<void>;
   submitTask(
@@ -147,7 +154,7 @@ export async function startControlServer(
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("Control server port is invalid");
   await controller.start();
   const handler = createControlRequestHandler({ ...options, host, port, controller });
-  const server = Bun.serve({
+  const serveOptions = {
     hostname: host,
     port,
     // A manual refresh performs resource discovery followed by the optional
@@ -155,7 +162,8 @@ export async function startControlServer(
     // Bun's 10 second default can close a healthy refresh before it completes.
     idleTimeout: 40,
     fetch: handler,
-  });
+  };
+  const server = options.serve ? options.serve(serveOptions) : Bun.serve(serveOptions);
   console.log(`[control] Seoul Mesh Console: http://${host}:${server.port}`);
   return { stop: () => { controller.stop(); server.stop(true); }, port: server.port ?? port, host };
 }
@@ -479,6 +487,11 @@ function jobView(record: ControlTaskRecord): Record<string, unknown> {
     ? record.result as Record<string, unknown>
     : undefined;
   const integrity = result?.integrity;
+  const message = record.status === "queued"
+    ? "任务已进入目标队列"
+    : record.status === "running"
+      ? "任务正在目标设备执行"
+      : record.message;
   return {
     taskId: record.taskId,
     groupId: record.groupId,
@@ -496,7 +509,7 @@ function jobView(record: ControlTaskRecord): Record<string, unknown> {
           : "not-required",
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
-    ...(record.message ? { message: record.message } : {}),
+    ...(message ? { message } : {}),
     ...(result && Object.hasOwn(result, "resultSummary")
       ? { resultSummary: result.resultSummary }
       : {}),
@@ -532,8 +545,17 @@ function codexOperationView(record: CodexOperationRecord): Record<string, unknow
 
 function controllerHealth(controller: ControlController): Record<string, unknown> {
   const overview = controller.overview();
+  const readiness = controller.readiness?.() ?? {
+    state: "ready" as const,
+    reconciliationInProgress: false,
+    lastReconciliationStartedAt: null,
+    lastReconciliationCompletedAt: null,
+    lastReconciliationError: null,
+  };
   return {
     controllerNodeId: overview.controllerNodeId,
+    ready: readiness.state === "ready",
+    readiness,
     peers: overview.peers.length,
     onlinePeers: overview.peers.filter((peer) => peer.status === "online").length,
     tasks: overview.tasks.length,

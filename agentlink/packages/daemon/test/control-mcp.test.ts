@@ -183,8 +183,7 @@ describe("Seoul Codex MCP gateway", () => {
       expect(text).not.toContain("/private/gpu/path");
       expect(text).not.toContain("do-not-return");
       expect(text).not.toContain("must/not/cross");
-      expect(text).not.toContain(apiKeyInTypedIdArray);
-      expect(text).toContain("<redacted>");
+      expect(text).toContain(apiKeyInTypedIdArray);
     } finally {
       await mcp.close();
     }
@@ -552,20 +551,53 @@ describe("Seoul Codex MCP gateway", () => {
     }
   });
 
-  test("preserves long typed identifiers while still redacting real secrets", async () => {
-    const taskId = `task-${"a".repeat(80)}`;
-    const nodeId = `node-${"b".repeat(70)}`;
-    const resourceId = `workspace:${"c".repeat(70)}`;
-    const groupId = `group-${"d".repeat(70)}`;
-    const runnerId = `runner-${"e".repeat(70)}`;
-    const threadId = `thread-${"f".repeat(70)}`;
-    const operationId = `op-${"1".repeat(70)}`;
+  test("preserves authoritative token-shaped IDs but redacts them in free-form runner output", async () => {
+    const controllerNodeId = `sk-proj-${"c".repeat(24)}`;
+    const nodeId = `ghp_${"n".repeat(24)}`;
+    const requesterNodeId = `github_pat_${"q".repeat(24)}`;
+    const ownerNodeId = `xoxb-${"o".repeat(24)}`;
+    const taskId = `sk-${"a".repeat(24)}`;
+    const resourceId = `sk-proj-${"r".repeat(24)}`;
+    const groupId = `ghp_${"g".repeat(24)}`;
+    const runnerId = `github_pat_${"u".repeat(24)}`;
+    const threadId = "eyJaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbb.cccccccccccccccccccc";
+    const parentThreadId = `xoxa-${"p".repeat(24)}`;
+    const requestId = `AIza${"i".repeat(24)}`;
+    const operationId = `AKIA${"z".repeat(24)}`;
+    const idempotencyKey = `xoxr-${"d".repeat(24)}`;
     const artifactSha256 = "a".repeat(64);
     const artifactId = `sha256:${artifactSha256}`;
-    const jwtInTypedId = "eyJaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbb.cccccccccccccccccccc";
-    const apiKeyInTypedId = `sk-proj-${"s".repeat(24)}`;
+    const baseArtifactId = `sha256:${"b".repeat(64)}`;
     const fetchImpl: ControlFetch = async (input) => {
       const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+      if (path === "/api/overview") {
+        return Response.json({
+          controllerNodeId,
+          generatedAt: 1,
+          peers: [{
+            fingerprint: nodeId,
+            deviceName: "KMac",
+            platform: "darwin",
+            status: "online",
+            resources: [],
+          }],
+          resources: [{
+            id: resourceId,
+            nodeId,
+            deviceName: "KMac",
+            kind: "directory",
+            displayName: "workspace",
+            capabilities: ["run"],
+            allowedOperations: ["run"],
+            allowedGroupIds: [groupId],
+            defaultGroupId: groupId,
+            runnerIds: [runnerId],
+            statusRunnerId: runnerId,
+            runners: [{ runnerId, title: "runner", purpose: "task", approvalRequired: true }],
+          }],
+          tasks: [],
+        });
+      }
       if (path.startsWith("/api/tasks/")) {
         return Response.json({
           taskId,
@@ -573,18 +605,32 @@ describe("Seoul Codex MCP gateway", () => {
           resourceId,
           groupId,
           status: "completed",
+          idempotencyKey,
+          baseArtifactId,
           resultArtifactId: artifactId,
           resultArtifactSha256: artifactSha256,
           result: {
-            runnerId,
-            threadId,
             authorization: "Bearer header-secret",
             cookie: "session=cookie-secret",
             apiKey: "api-key-secret-value",
-            jwt: jwtInTypedId,
-            typedSecrets: {
-              threadId: jwtInTypedId,
-              runnerId: apiKeyInTypedId,
+            jwt: threadId,
+            identifiers: {
+              taskId,
+              nodeId,
+              requesterNodeId,
+              ownerNodeId,
+              resourceId,
+              groupId,
+              runnerId,
+              threadId,
+              sessionId: threadId,
+              parentThreadId,
+              requestId,
+              operationId,
+              artifactId,
+              baseArtifactId,
+              resultArtifactId: artifactId,
+              idempotencyKey,
             },
           },
         });
@@ -593,39 +639,109 @@ describe("Seoul Codex MCP gateway", () => {
         return Response.json({
           operationId,
           targetNodeId: nodeId,
-          idempotencyKey: `idem-${"2".repeat(70)}`,
+          idempotencyKey,
           status: "completed",
           retryable: false,
           sessionId: threadId,
         });
       }
+      if (path === "/api/codex/approvals") {
+        return Response.json({
+          approvals: [{ requestId, sessionId: threadId, toolName: "shell", summary: "safe" }],
+        });
+      }
       return Response.json({
         kind: "codex-thread-list",
-        threads: [{ id: threadId, parentThreadId: threadId, preview: "Cookie: secret-cookie" }],
+        threads: [{ id: threadId, parentThreadId, preview: "Cookie: secret-cookie" }],
       });
     };
     const mcp = await connectMcp(fetchImpl);
     try {
-      const job = textContent(await mcp.client.callTool({ name: "mesh_get_job", arguments: { taskId } }));
-      expect(JSON.parse(job)).toMatchObject({ resultArtifactSha256: artifactSha256 });
-      const operation = textContent(await mcp.client.callTool({
+      const devices = JSON.parse(textContent(await mcp.client.callTool({
+        name: "mesh_list_devices",
+        arguments: {},
+      })));
+      const job = JSON.parse(textContent(await mcp.client.callTool({ name: "mesh_get_job", arguments: { taskId } })));
+      expect(job).toMatchObject({ resultArtifactSha256: artifactSha256 });
+      const operation = JSON.parse(textContent(await mcp.client.callTool({
         name: "remote_codex_get_operation",
         arguments: { operationId },
-      }));
-      const threads = textContent(await mcp.client.callTool({
+      })));
+      const threads = JSON.parse(textContent(await mcp.client.callTool({
         name: "remote_codex_list_threads",
         arguments: { targetNodeId: nodeId },
-      }));
-      const output = `${job}\n${operation}\n${threads}`;
-      for (const id of [taskId, nodeId, resourceId, groupId, runnerId, threadId, operationId, artifactId]) {
+      })));
+      const approvals = JSON.parse(textContent(await mcp.client.callTool({
+        name: "remote_codex_list_approvals",
+        arguments: { targetNodeId: nodeId },
+      })));
+      const output = JSON.stringify({ devices, job, operation, threads, approvals });
+      for (const id of [
+        controllerNodeId, nodeId, taskId, resourceId, groupId,
+        runnerId, threadId, parentThreadId, requestId, operationId, idempotencyKey,
+        artifactId, baseArtifactId, artifactSha256,
+      ]) {
         expect(output).toContain(id);
       }
+      expect(devices.controllerNodeId).toBe(controllerNodeId);
+      expect(devices.peers[0].nodeId).toBe(nodeId);
+      expect(devices.resources[0]).toMatchObject({
+        resourceId,
+        nodeId,
+        allowedGroupIds: [groupId],
+        defaultGroupId: groupId,
+        runnerIds: [runnerId],
+        statusRunnerId: runnerId,
+      });
+      expect(job).toMatchObject({
+        taskId,
+        groupId,
+        targetNodeId: nodeId,
+        resourceId,
+        idempotencyKey,
+        baseArtifactId,
+        resultArtifactId: artifactId,
+        resultArtifactSha256: artifactSha256,
+      });
+      expect(operation).toMatchObject({ operationId, targetNodeId: nodeId, idempotencyKey, sessionId: threadId });
+      expect(threads).toMatchObject({
+        targetNodeId: nodeId,
+        threads: [{ sessionId: threadId, parentThreadId }],
+      });
+      expect(approvals).toMatchObject({
+        targetNodeId: nodeId,
+        approvals: [{ requestId, sessionId: threadId }],
+      });
+      const nestedIdentifiers = job.result.identifiers as Record<string, string>;
+      for (const [key, value] of Object.entries({
+        taskId,
+        nodeId,
+        requesterNodeId,
+        ownerNodeId,
+        resourceId,
+        groupId,
+        runnerId,
+        threadId,
+        sessionId: threadId,
+        parentThreadId,
+        requestId,
+        operationId,
+        artifactId,
+        baseArtifactId,
+        resultArtifactId: artifactId,
+        idempotencyKey,
+      })) {
+        expect(nestedIdentifiers[key]).not.toBe(value);
+        expect(nestedIdentifiers[key]).toContain("<redacted-token>");
+      }
+      expect(job.result.jwt).toBe("<redacted-token>");
+      expect(job.result.authorization).toBe("<redacted>");
+      expect(job.result.cookie).toBe("<redacted>");
+      expect(job.result.apiKey).toBe("<redacted>");
       for (const secret of [
         "header-secret",
         "cookie-secret",
         "api-key-secret-value",
-        "eyJaaaaaaaa",
-        apiKeyInTypedId,
         "secret-cookie",
       ]) {
         expect(output).not.toContain(secret);

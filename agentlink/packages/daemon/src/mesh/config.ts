@@ -23,6 +23,12 @@ const MeshConfigSchema = z.object({
     members: z.array(MeshNodeIdSchema).min(1),
   })).min(1),
   requesters: z.array(MeshNodeIdSchema).optional(),
+  unattendedRuns: z.object({
+    groupIds: z.array(MeshGroupIdSchema).min(1).max(64),
+    requesterNodeIds: z.array(MeshNodeIdSchema).min(1).max(64),
+    resourceIds: z.array(MeshResourceIdSchema).min(1).max(64),
+    runnerIds: z.array(MeshRunnerIdSchema).min(1).max(64),
+  }).strict().optional(),
   legacyControl: z.boolean().default(false),
   remoteCodexControl: z.boolean().default(false),
   allowedRoots: z.array(z.string().refine(isAbsolute, "allowedRoots must be absolute")).optional(),
@@ -97,6 +103,12 @@ export function createMeshServiceForPeer(nodeId: string, peerNodeId: string, con
     artifactRoot: config.artifactRoot ?? join(homedir(), ".agentlink", "mesh-workspaces"),
     resources: config.resources,
     runners: config.runners as MeshRunnerSpec[] | undefined,
+    unattendedRuns: config.unattendedRuns ? {
+      groupIds: new Set(config.unattendedRuns.groupIds),
+      requesterNodeIds: new Set(config.unattendedRuns.requesterNodeIds),
+      resourceIds: new Set(config.unattendedRuns.resourceIds),
+      runnerIds: new Set(config.unattendedRuns.runnerIds),
+    } : undefined,
   };
   return new MeshService(options);
 }

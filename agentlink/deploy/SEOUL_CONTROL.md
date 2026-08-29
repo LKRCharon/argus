@@ -39,6 +39,35 @@ bun run packages/daemon/src/index.ts join PAIRING-CODE
 Keep the controller state directory private. It contains Seoul's identity and
 paired channel keys, but not target private keys.
 
+## Functional release preflight
+
+Every release tree must carry `.argus-functional-manifest.json`. Generate it
+from the clean Git checkout before packaging:
+
+```bash
+bun run release:manifest write --root /path/to/clean/agentlink
+```
+
+Before changing a `current` symlink or replacing a service directory, run the
+gate against the clean Git checkout, the candidate tree, and the currently
+active release:
+
+```bash
+bun run release:manifest preflight \
+  --git-root /path/to/clean/agentlink \
+  --candidate /path/to/candidate-release \
+  --active /path/to/current
+```
+
+The command fails closed when the Git functional tree is dirty, the candidate
+does not match that Git artifact, either release differs from its embedded
+manifest, or the active release has no valid manifest. Candidate-versus-active
+changes are reported as the planned release delta and do not fail by
+themselves. Reports contain at most 64 path/status/hash/size/executable entries and never
+source contents. The allowlist covers runtime source, package metadata, public
+assets, and deployment tooling; it excludes state, `mesh.json`, `.env` files,
+logs, identities, keys, `node_modules`, and generated app output.
+
 The installed service is `argus-control.service`, bound only to
 `127.0.0.1:8790`. The deployed L40 release keeps its identity and Mesh config
 outside versioned code:

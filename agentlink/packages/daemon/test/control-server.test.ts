@@ -11,9 +11,11 @@ import {
 } from "@agentlink/wire";
 import { ControlTaskJournal, type ControlTaskRecord } from "../src/control/journal";
 import { ControlTaskOutbox } from "../src/control/outbox";
-import type { CodexOperationRecord } from "../src/control/codex-operations";
+import { CodexOperationStore, type CodexOperationRecord } from "../src/control/codex-operations";
+import { MeshController } from "../src/control/controller";
 import {
   createControlRequestHandler,
+  startControlServer,
   type ControlController,
 } from "../src/control/server";
 
@@ -149,6 +151,96 @@ function fakeController(root = mkdtempSync(join(tmpdir(), "argus-control-"))): {
 }
 
 describe("Seoul control API", () => {
+  test("listens before initial remote reconciliation and reports explicit readiness", async () => {
+    const root = mkdtempSync(join(tmpdir(), "argus-control-startup-"));
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const controller = new MeshController({
+      nodeId: "node-seoul",
+      loadPeers: () => ({}),
+      journal: new ControlTaskJournal(join(root, "tasks.json")),
+      outbox: new ControlTaskOutbox(join(root, "outbox.json")),
+      codexOperationStore: new CodexOperationStore(join(root, "codex-operations.json")),
+    });
+    controller.connectAll = () => blocked;
+
+    let handler: ((request: Request) => Promise<Response>) | undefined;
+    let server: Awaited<ReturnType<typeof startControlServer>> | undefined;
+    const starting = startControlServer(controller, {
+      port: 18_790,
+      distDir: join(root, "missing-dist"),
+      serve: (options) => {
+        handler = options.fetch;
+        return { port: options.port, stop: () => {} };
+      },
+    });
+    try {
+      server = await Promise.race([
+        starting,
+        Bun.sleep(100).then(() => undefined),
+      ]);
+      expect(server).toBeDefined();
+      expect(handler).toBeDefined();
+      const response = await handler!(new Request("http://localhost/health"));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        ready: false,
+        readiness: {
+          state: "starting",
+          reconciliationInProgress: true,
+          lastReconciliationCompletedAt: null,
+          lastReconciliationError: null,
+        },
+      });
+
+      release();
+      for (let attempt = 0; attempt < 40 && controller.readiness().state !== "ready"; attempt += 1) {
+        await Bun.sleep(5);
+      }
+      expect(controller.readiness()).toMatchObject({
+        state: "ready",
+        reconciliationInProgress: false,
+        lastReconciliationError: null,
+      });
+    } finally {
+      release();
+      (server ?? await starting).stop();
+    }
+  });
+
+  test("surfaces background reconciliation failure without exposing its raw diagnostic", async () => {
+    const root = mkdtempSync(join(tmpdir(), "argus-control-degraded-"));
+    const controller = new MeshController({
+      nodeId: "node-seoul",
+      loadPeers: () => ({}),
+      journal: new ControlTaskJournal(join(root, "tasks.json")),
+      outbox: new ControlTaskOutbox(join(root, "outbox.json")),
+      codexOperationStore: new CodexOperationStore(join(root, "codex-operations.json")),
+    });
+    controller.connectAll = async () => {
+      throw new Error("private relay diagnostic /sensitive/local/state");
+    };
+    await controller.start();
+    for (let attempt = 0; attempt < 40 && controller.readiness().state === "starting"; attempt += 1) {
+      await Bun.sleep(5);
+    }
+
+    const handler = createControlRequestHandler({ controller });
+    const body = await (await handler(new Request("http://localhost/health"))).json();
+    expect(body).toMatchObject({
+      ok: true,
+      ready: false,
+      readiness: {
+        state: "degraded",
+        reconciliationInProgress: false,
+        lastReconciliationError: "controller reconciliation failed",
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("/sensitive/local/state");
+    controller.stop();
+  });
+
   test("returns a safe health snapshot without task secrets", async () => {
     const { controller } = fakeController();
     const handler = createControlRequestHandler({ controller });
@@ -411,6 +503,40 @@ describe("Seoul control API", () => {
     expect(cancelledResponse.status).toBe(202);
     expect(cancelled).toEqual(["task-cancel-1"]);
     expect(await cancelledResponse.json()).toMatchObject({ status: "cancelled" });
+  });
+
+  test("renders approval waiting only while approval is genuinely pending", async () => {
+    const { controller } = fakeController();
+    controller.journal.create({
+      taskId: "task-status-rendering",
+      groupId: "group-alpha",
+      targetNodeId: "node-l40",
+      resourceId: "repo:gpu",
+      operation: "run",
+      status: "running",
+      message: "等待目标资源所有者批准",
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const handler = createControlRequestHandler({ controller });
+    const running = await handler(new Request("http://localhost/api/tasks/task-status-rendering"));
+    expect(await running.json()).toMatchObject({
+      status: "running",
+      phase: "running",
+      approvalStatus: "not-required",
+      message: "任务正在目标设备执行",
+    });
+
+    controller.journal.update("task-status-rendering", {
+      status: "approval-required",
+      message: "等待目标资源所有者批准",
+    });
+    const pending = await handler(new Request("http://localhost/api/tasks/task-status-rendering"));
+    expect(await pending.json()).toMatchObject({
+      status: "approval-required",
+      approvalStatus: "pending",
+      message: "等待目标资源所有者批准",
+    });
   });
 
   test("wraps a task-bound result manifest in the MCP-compatible artifact envelope", async () => {

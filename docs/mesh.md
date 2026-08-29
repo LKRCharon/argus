@@ -65,6 +65,10 @@ and resource `root` must be absolute. Resources must be inside an allowed root;
 symlinks are not followed during previews. Keep the quarantine directory
 outside the resource tree.
 
+The example includes an `unattendedRuns` policy to show all required fields.
+Delete that object when each run must remain behind the target-local approval
+page.
+
 The local node fingerprint is printed by:
 
 ```bash
@@ -82,6 +86,16 @@ single-owner setup—not a safe multi-user mode.
 commands and Codex approval responses. It does not start transcript watchers,
 the Qoder hook server or ACP, and it does not enable generic session injection,
 cloud sessions, or other legacy bridge behavior.
+
+`unattendedRuns` is an optional target-local exception to the manual approval
+page. It contains four non-empty exact allowlists: `groupIds`,
+`requesterNodeIds`, `resourceIds`, and `runnerIds`. A run proceeds unattended
+only when every field matches, the requester and group are trusted, the runner
+is a local task runner bound to the allowlisted resource, and its scope obeys
+the runner's argument, input, and task-scoped artifact capabilities. The target
+still creates and verifies its normal one-shot grant and approval. Omit this
+object to require a local click for every unsigned run proposal; never use a
+broad placeholder ID as an allowlist entry.
 
 Durable Codex operations move forward through explicit states. `completed` and
 `failed` are immutable terminal states and ignore duplicate or conflicting late

@@ -287,6 +287,111 @@ describe.serial("MeshService", () => {
     expect(() => value.issueGrant(stdinRequest)).toThrow();
   });
 
+  test("matches unattended runs only across every exact trusted local allowlist", async () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-mesh-unattended-"));
+    const root = join(base, "workspace");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const common = {
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      groupMembers: new Map([["group-alpha", new Set(["node-a", "node-b"])]]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      quarantineRoot: join(base, "quarantine"),
+      auditSink: () => {},
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{
+        id: "workspace:fixture",
+        ownerNodeId: "node-b",
+        kind: "directory" as const,
+        displayName: "fixture",
+        root,
+      }],
+      runners: [{
+        id: "fixture:unattended",
+        resourceId: "workspace:fixture",
+        purpose: "task" as const,
+        executable: process.execPath,
+        fixedArgs: ["-e", "console.log(JSON.stringify({ resultSummary: 'unattended-ok' }))"],
+      }, {
+        id: "fixture:manual",
+        resourceId: "workspace:fixture",
+        purpose: "task" as const,
+        executable: process.execPath,
+        fixedArgs: ["-e", "console.log(JSON.stringify({ resultSummary: 'manual-only' }))"],
+      }],
+    };
+    const policy = {
+      groupIds: new Set(["group-alpha"]),
+      requesterNodeIds: new Set(["node-a"]),
+      resourceIds: new Set(["workspace:fixture"]),
+      runnerIds: new Set(["fixture:unattended"]),
+    };
+    const value = new MeshService({
+      ...common,
+      taskStore: new MeshTaskStore(join(base, "tasks.json")),
+      unattendedRuns: policy,
+    });
+    const request = {
+      groupId: "group-alpha",
+      taskId: "task-unattended",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      resourceId: "workspace:fixture",
+      operation: "run" as const,
+      scope: { runnerId: "fixture:unattended", args: [] },
+    };
+
+    expect(value.allowsUnattendedRun(request)).toBe(true);
+    expect(value.allowsUnattendedRun({ ...request, groupId: "group-other" })).toBe(false);
+    expect(value.allowsUnattendedRun({ ...request, requesterNodeId: "node-other" })).toBe(false);
+    expect(value.allowsUnattendedRun({ ...request, targetNodeId: "node-other" })).toBe(false);
+    expect(value.allowsUnattendedRun({ ...request, resourceId: "workspace:other" })).toBe(false);
+    expect(value.allowsUnattendedRun({
+      ...request,
+      scope: { runnerId: "fixture:manual", args: [] },
+    })).toBe(false);
+    expect(value.allowsUnattendedRun({
+      ...request,
+      scope: { runnerId: "fixture:unattended", args: ["remote-arg"] },
+    })).toBe(false);
+    expect(value.allowsUnattendedRun({
+      ...request,
+      scope: { runnerId: "fixture:unattended", args: [], input: "remote-input" },
+    })).toBe(false);
+    expect(value.allowsUnattendedRun({
+      ...request,
+      scope: { runnerId: "fixture:unattended", args: [], baseArtifactId: `sha256:${"a".repeat(64)}` },
+    })).toBe(false);
+
+    expect(value.proposeTask({ kind: "mesh-task-request", task: request })).toMatchObject({
+      status: "approval-required",
+    });
+    const grant = value.issueGrant(request);
+    const approval = value.issueApproval(grant, "exact unattended policy");
+    expect(await value.handleRequest({ kind: "mesh-task-request", task: request, grant, approval }))
+      .toMatchObject({ status: "completed", result: { resultSummary: "unattended-ok" } });
+    expect(value.taskStatus({
+      kind: "mesh-task-status-request",
+      requestId: "status-task-unattended",
+      requesterNodeId: "node-a",
+      targetNodeId: "node-b",
+      taskId: request.taskId,
+    })).toMatchObject({ status: "completed", message: "任务已完成" });
+
+    expect(() => new MeshService({
+      ...common,
+      taskStore: new MeshTaskStore(join(base, "untrusted-tasks.json")),
+      unattendedRuns: { ...policy, requesterNodeIds: new Set(["node-other"]) },
+    })).toThrow("无人值守 requester 不受信任");
+    expect(() => new MeshService({
+      ...common,
+      taskStore: new MeshTaskStore(join(base, "missing-runner-tasks.json")),
+      unattendedRuns: { ...policy, runnerIds: new Set(["fixture:missing"]) },
+    })).toThrow("无人值守 runner 未绑定 allowlist resource");
+  });
+
   test("runs an artifact job only in a task-scoped workspace and returns a content-addressed patch", async () => {
     const base = mkdtempSync(join(tmpdir(), "argus-artifact-service-"));
     const root = join(base, "existing-checkout");

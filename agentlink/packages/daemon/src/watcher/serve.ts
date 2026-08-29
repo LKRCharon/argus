@@ -7,7 +7,7 @@
  * 结构化 stdout：以 {"type": 开头的行供 eclam/Argus 解析，其余为人类可读日志。
  */
 
-import type { SecureChannel } from "@agentlink/wire";
+import type { MeshTaskRequestPayload, SecureChannel } from "@agentlink/wire";
 import {
   b64decode,
   fingerprint,
@@ -207,6 +207,39 @@ export async function serveWatch(
 
   let approvalInbox: MeshApprovalInbox | undefined;
   let approvalServer: ReturnType<typeof startHostApprovalServer> | undefined;
+  const startLocallyAuthorizedTask = (request: MeshTaskRequestPayload, summary: string): void => {
+    // The grant and approval still come from the target owner. An unattended
+    // match changes only the local trigger for this exact signed boundary.
+    void (async () => {
+      let locallyAuthorized = false;
+      try {
+        const grant = opts.mesh!.issueGrant(request.task);
+        const approval = opts.mesh!.issueApproval(grant, summary);
+        locallyAuthorized = true;
+        const result = await opts.mesh!.handleRequest({
+          ...request,
+          grant,
+          approval,
+        }, (progress) => enqueueControlSendAsync(progress));
+        await enqueueControlSendAsync(result);
+        try { approvalInbox?.remove(request.task.taskId); } catch {}
+      } catch {
+        if (!locallyAuthorized) {
+          try {
+            const result = opts.mesh!.denyProposal(request.task.taskId, "目标设备无法启动已批准的任务");
+            enqueueControlSend(result);
+            try { approvalInbox?.remove(request.task.taskId); } catch {}
+          } catch {
+            approvalInbox?.release(request.task.taskId);
+          }
+        } else {
+          // The target journal and controller reconciliation can recover a
+          // lost final frame. Never offer a second execution here.
+          try { approvalInbox?.remove(request.task.taskId); } catch {}
+        }
+      }
+    })();
+  };
   if (opts.mesh) {
     try {
       approvalInbox = opts.approvalInbox ?? new MeshApprovalInbox();
@@ -231,39 +264,13 @@ export async function serveWatch(
             return;
           }
 
-          // Return HTTP 202 immediately; a GPU job can run for hours. Progress
-          // and the final result continue over the encrypted device channel.
-          void (async () => {
-            let locallyAuthorized = false;
-            try {
-              const grant = opts.mesh!.issueGrant(claimed.task);
-              const approval = opts.mesh!.issueApproval(grant, "目标资源所有者在本机允许一次");
-              locallyAuthorized = true;
-              const result = await opts.mesh!.handleRequest({
-                kind: "mesh-task-request",
-                task: claimed.task,
-                ...(claimed.baseArtifact ? { baseArtifact: claimed.baseArtifact } : {}),
-                grant,
-                approval,
-              }, (progress) => enqueueControlSendAsync(progress));
-              await enqueueControlSendAsync(result);
-              try { approvalInbox?.remove(taskId); } catch {}
-            } catch {
-              if (!locallyAuthorized) {
-                try {
-                  const result = opts.mesh!.denyProposal(taskId, "目标设备无法启动已批准的任务");
-                  enqueueControlSend(result);
-                  try { approvalInbox?.remove(taskId); } catch {}
-                } catch {
-                  approvalInbox?.release(taskId);
-                }
-              } else {
-                // The durable target journal and controller reconciliation can
-                // recover a lost final frame. Do not offer a second execution.
-                try { approvalInbox?.remove(taskId); } catch {}
-              }
-            }
-          })();
+          // Return HTTP 202 immediately; a job can run for hours. Progress and
+          // the final result continue over the encrypted device channel.
+          startLocallyAuthorizedTask({
+            kind: "mesh-task-request",
+            task: claimed.task,
+            ...(claimed.baseArtifact ? { baseArtifact: claimed.baseArtifact } : {}),
+          }, "目标资源所有者在本机允许一次");
         },
       };
       approvalServer = startHostApprovalServer(serverOptions);
@@ -409,12 +416,13 @@ export async function serveWatch(
       // Always re-run start(): it is a no-op while connected, and after a socket
       // close (app restart, sleep) it reconnects. Returning the cached instance
       // blindly left every codex feature failing until the daemon restarted.
+      const srv = codexServer;
       try {
-        await codexServer.start();
-        return codexServer;
+        await srv.start();
+        return srv;
       } catch (e) {
-        codexServer.stop();
-        codexServer = null;
+        if (codexServer === srv) codexServer = null;
+        await srv.stop();
         throw e;
       }
     }
@@ -458,9 +466,15 @@ export async function serveWatch(
         ],
       });
     };
-    await srv.start();
     codexServer = srv;
-    return srv;
+    try {
+      await srv.start();
+      return srv;
+    } catch (error) {
+      if (codexServer === srv) codexServer = null;
+      await srv.stop();
+      throw error;
+    }
   };
 
   const codexWatcher = new TranscriptWatcher(onWatchEvent, join(homedir(), ".codex", "sessions"), findCodexFiles, normalizeCodexLine, "codex");
@@ -622,19 +636,37 @@ export async function serveWatch(
             if (!request.success) {
               await enqueueControlSendAsync({ kind: "mesh-error", code: "invalid-task", message: "Mesh 任务格式无效" });
             } else if (request.data.task.operation === "run"
-              && (!request.data.grant || !request.data.approval)
-              && approvalInbox) {
+              && (!request.data.grant || !request.data.approval)) {
               const proposal = opts.mesh.proposeTask(request.data);
               if (proposal.kind === "mesh-task-result") {
-                approvalInbox.remove(proposal.taskId);
+                approvalInbox?.remove(proposal.taskId);
                 await enqueueControlSendAsync(proposal);
-              } else {
+              } else if (proposal.status !== "approval-required") {
+                await enqueueControlSendAsync(proposal);
+              } else if (opts.mesh.allowsUnattendedRun(request.data.task)) {
+                try { approvalInbox?.remove(request.data.task.taskId); } catch {}
+                startLocallyAuthorizedTask(
+                  request.data,
+                  "目标资源所有者的精确无人值守策略已允许此任务",
+                );
+              } else if (approvalInbox) {
                 try {
                   approvalInbox.put(request.data);
                   await enqueueControlSendAsync(proposal);
                 } catch {
                   const denied = opts.mesh.denyProposal(request.data.task.taskId, "目标设备的本地审批队列不可用");
                   await enqueueControlSendAsync(denied);
+                }
+              } else {
+                try {
+                  const denied = opts.mesh.denyProposal(request.data.task.taskId, "目标设备的本地审批服务不可用");
+                  await enqueueControlSendAsync(denied);
+                } catch {
+                  await enqueueControlSendAsync({
+                    kind: "mesh-error",
+                    code: "approval-unavailable",
+                    message: "目标设备的本地审批服务不可用",
+                  });
                 }
               }
             } else {
@@ -941,7 +973,7 @@ export async function serveWatch(
     // otherwise be orphaned holding a model connection each.
     for (const acp of acpBySession.values()) acp.stop();
     acpBySession.clear();
-    codexServer?.stop();
+    if (codexServer) void codexServer.stop();
   };
 
   return { hookServer, watcher, codexWatcher, stop };

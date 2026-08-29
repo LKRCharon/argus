@@ -1006,20 +1006,14 @@ function safeUnknown(value: unknown, depth: number): unknown {
 function safeUnknownTracked(
   value: unknown,
   depth: number,
-  key?: string,
 ): { value: unknown; truncated: boolean } {
   if (value === null || typeof value === "boolean") return { value, truncated: false };
   if (typeof value === "number") return { value: Number.isFinite(value) ? value : null, truncated: false };
   if (typeof value === "string") {
-    const schema = key ? typedSchemaForKey(key) : undefined;
-    if (schema) {
-      const parsed = schema.safeParse(value);
-      if (!parsed.success) return { value: "<invalid-id>", truncated: false };
-      if (looksLikeExplicitSecret(parsed.data)) return { value: "<redacted>", truncated: false };
-      return { value: parsed.data, truncated: false };
-    }
     return {
-      value: safeString(value, MAX_TASK_RESULT_STRING_CHARS),
+      value: looksLikeExplicitSecret(value)
+        ? "<redacted-token>"
+        : safeString(value, MAX_TASK_RESULT_STRING_CHARS),
       truncated: value.length > MAX_TASK_RESULT_STRING_CHARS,
     };
   }
@@ -1045,7 +1039,7 @@ function safeUnknownTracked(
     if (sensitiveKey(safeKey)) {
       output[safeKey] = "<redacted>";
     } else {
-      const safe = safeUnknownTracked(item, depth + 1, safeKey);
+      const safe = safeUnknownTracked(item, depth + 1);
       output[safeKey] = safe.value;
       truncated ||= safe.truncated;
     }
@@ -1054,23 +1048,6 @@ function safeUnknownTracked(
     output._truncatedKeys = Object.keys(input).length - MAX_TASK_RESULT_ITEMS;
   }
   return { value: output, truncated };
-}
-
-function typedSchemaForKey(key: string): z.ZodType<string> | undefined {
-  const compact = key.toLowerCase().replace(/[-_]/g, "");
-  if (compact === "taskid") return MeshTaskIdSchema;
-  if (["nodeid", "targetnodeid", "requesternodeid", "ownernodeid"].includes(compact)) return MeshNodeIdSchema;
-  if (compact === "resourceid") return MeshResourceIdSchema;
-  if (compact === "groupid") return MeshGroupIdSchema;
-  if (compact === "runnerid") return MeshRunnerIdSchema;
-  if (["threadid", "sessionid", "parentthreadid"].includes(compact)) return MeshThreadIdSchema;
-  if (compact === "requestid") return MeshRequestIdSchema;
-  if (compact === "operationid") return MeshOperationIdSchema;
-  if (["artifactid", "baseartifactid", "resultartifactid"].includes(compact)) {
-    return z.string().regex(/^sha256:[a-f0-9]{64}$/);
-  }
-  if (compact === "idempotencykey") return MeshIdempotencyKeySchema;
-  return undefined;
 }
 
 function sensitiveKey(key: string): boolean {
@@ -1131,7 +1108,7 @@ function idField(
 ): string | null {
   const parsed = schema.safeParse(value?.[key]);
   if (!parsed.success) return null;
-  return looksLikeExplicitSecret(parsed.data) ? "<redacted>" : parsed.data;
+  return parsed.data;
 }
 
 function numberField(value: Record<string, unknown> | undefined, key: string): number | null {
@@ -1151,9 +1128,7 @@ function typedStringArray(value: unknown, limit: number, schema: z.ZodType<strin
     .slice(0, limit)
     .flatMap((item) => {
       const parsed = schema.safeParse(item);
-      return parsed.success
-        ? [looksLikeExplicitSecret(parsed.data) ? "<redacted>" : parsed.data]
-        : [];
+      return parsed.success ? [parsed.data] : [];
     });
 }
 
