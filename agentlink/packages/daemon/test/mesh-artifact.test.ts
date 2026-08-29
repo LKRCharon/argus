@@ -134,4 +134,29 @@ describe("Mesh structured artifacts", () => {
     expect(captured).toBeUndefined();
     expect(readFileSync(join(outside, "outside-secret.txt"), "utf8")).toBe("must-not-be-captured");
   });
+
+  test("atomically pins capture before the old identity-check-to-scan replacement window", () => {
+    const root = tempRoot();
+    const outside = join(tempRoot(), "outside-race");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "outside-secret.txt"), "must-never-be-read");
+    const readPaths: string[] = [];
+    let workspacePath = "";
+    const store = new MeshArtifactStore(root, {
+      beforeWorkspaceSnapshot: (workspace) => {
+        workspacePath = workspace;
+        renameSync(workspace, `${workspace}.owned`);
+        renameSync(outside, workspace);
+      },
+      beforeFileRead: (path) => readPaths.push(path),
+    });
+    const base = baseArtifact([artifactFile("safe.txt", "safe")]);
+    const workspace = store.materialize("task-artifact-root-race", base);
+
+    expect(() => store.captureResult("task-artifact-root-race", base, workspace.workspace))
+      .toThrow("snapshot identity changed");
+    expect(workspacePath).toBe(workspace.workspace);
+    expect(readPaths).toEqual([]);
+    expect(readFileSync(join(`${workspace.workspace}.owned`, "safe.txt"), "utf8")).toBe("safe");
+  });
 });

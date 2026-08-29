@@ -98,8 +98,8 @@ describe("Mesh security invariants", () => {
           artifactId,
           requestId,
           operationId,
-          resultSummary: "Authorization: Bearer SENTINEL_KMAC_TOKEN_123456 /Users/sentinel/private/repo/file.ts",
-          debugOutput: "secret=SENTINEL_KMAC_SECRET_123456",
+          resultSummary: "OPENAI_API_KEY=SENTINEL_KMAC_OPENAI_123456 AWS_SECRET_ACCESS_KEY:'SENTINEL_KMAC_AWS_123456' /Users/sentinel/private/repo/file.ts",
+          debugOutput: 'FOO_TOKEN="SENTINEL_KMAC_TOKEN_123456" FOO_SECRET:SENTINEL_KMAC_SECRET_123456',
         },
       },
     });

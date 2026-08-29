@@ -39,7 +39,7 @@ import {
   startHostApprovalServer,
   type HostApprovalServerOptions,
 } from "../mesh/approval-server";
-import { isBoundedRemoteCodexCommand, meshWatchCapabilities } from "../mesh/watch-capabilities";
+import { meshWatchCapabilities, validateBoundedRemoteCodexCommand } from "../mesh/watch-capabilities";
 
 interface ServeWatchOptions {
   hookPort?: number;
@@ -484,7 +484,7 @@ export async function serveWatch(
         continue;
       }
       try {
-        const payload = await chan.open<{
+        const openedPayload = await chan.open<{
           kind?: string;
           requestId?: string;
           controlRequestId?: string;
@@ -499,12 +499,23 @@ export async function serveWatch(
           grant?: unknown;
           approval?: unknown;
         }>(msg.data?.enc);
-        const parsedControlRequestId = MeshRequestIdSchema.safeParse(payload?.controlRequestId);
-        const controlRequestId = parsedControlRequestId.success ? parsedControlRequestId.data : undefined;
+        const remoteCodexCommand = validateBoundedRemoteCodexCommand(openedPayload);
+        const normalizedRemoteCodexCommand = remoteCodexCommand.status === "invalid"
+          ? undefined
+          : remoteCodexCommand.command;
+        const payload = normalizedRemoteCodexCommand
+          ? { ...openedPayload, ...normalizedRemoteCodexCommand }
+          : openedPayload;
+        const parsedLegacyControlRequestId = normalizedRemoteCodexCommand
+          ? undefined
+          : MeshRequestIdSchema.safeParse(payload?.controlRequestId);
+        const controlRequestId = normalizedRemoteCodexCommand?.controlRequestId
+          ?? (parsedLegacyControlRequestId?.success ? parsedLegacyControlRequestId.data : undefined);
         const controlReply = controlRequestId ? { controlRequestId } : {};
-        const deadlineAt = typeof payload?.deadlineAt === "number" && Number.isSafeInteger(payload.deadlineAt)
-          ? Math.min(payload.deadlineAt, Date.now() + 2 * 60_000)
-          : Date.now() + 30_000;
+        const deadlineAt = normalizedRemoteCodexCommand?.deadlineAt
+          ?? (typeof payload?.deadlineAt === "number" && Number.isSafeInteger(payload.deadlineAt)
+            ? Math.min(payload.deadlineAt, Date.now() + 2 * 60_000)
+            : Date.now() + 30_000);
 
         // Only log genuine phone->daemon commands. Relay buffering can echo a
         // daemon->phone kind (agent-event, session-list, …) back at us; those
@@ -519,15 +530,10 @@ export async function serveWatch(
           "mesh-resource-list-request", "mesh-resource-status-request",
           "mesh-task-status-request", "mesh-task-cancel-request", "mesh-artifact-request", "mesh-task-request",
         ]);
-        const CODEX_COMMANDS = new Set([
-          "codex-threads", "codex-resume", "codex-input", "codex-interrupt", "new-session",
-        ]);
         if (payload?.kind && PHONE_COMMANDS.has(payload.kind) && !MESH_COMMANDS.has(payload.kind)) {
           console.log(`[watch] 收到手机指令: ${payload.kind}`);
         }
-        if (controlRequestId && typeof payload?.kind === "string"
-          && (CODEX_COMMANDS.has(payload.kind) || isBoundedRemoteCodexCommand(payload))
-          && deadlineAt <= Date.now()) {
+        if (remoteCodexCommand.status === "expired") {
           await sendPayload({
             kind: "codex-error",
             note: "request expired in watcher queue",
@@ -538,7 +544,7 @@ export async function serveWatch(
           });
         } else if (meshModeEnabled && !legacyAgentBridgeEnabled && typeof payload?.kind === "string"
                     && PHONE_COMMANDS.has(payload.kind) && !MESH_COMMANDS.has(payload.kind)
-                    && !(capabilities.remoteCodexControl && isBoundedRemoteCodexCommand(payload))) {
+                    && !(capabilities.remoteCodexControl && remoteCodexCommand.status === "valid")) {
           await enqueueControlSendAsync({
             kind: "mesh-error",
             code: "legacy-control-disabled",

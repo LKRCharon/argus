@@ -7,6 +7,7 @@ export function sanitizeRunnerOutput(value: string, sensitivePaths: readonly str
   for (const path of paths) sanitized = sanitized.replaceAll(path, "<local-path>");
   return sanitized
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer <redacted>")
+    .replace(/(^|[^A-Za-z0-9_])([A-Z][A-Z0-9_]*(?:API_KEY|SECRET_ACCESS_KEY|ACCESS_TOKEN|REFRESH_TOKEN|TOKEN|SECRET|PASSWORD))\s*([:=])\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/g, "$1$2$3<redacted>")
     .replace(/\b(headers?|authorization|proxy-authorization|x-api-key|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|secret|cookie|set-cookie)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=<redacted>")
     .replace(/\b(?:sk|ghp|github_pat|glpat|xox[abprs])[-_][A-Za-z0-9._~+/=-]{8,}/gi, "<redacted-token>")
     .replace(/\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]{10,})?/g, "<redacted-token>")

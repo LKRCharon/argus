@@ -58,6 +58,13 @@ export interface MaterializedArtifactWorkspace {
   baseArtifactId: string;
 }
 
+export interface MeshArtifactStoreCaptureHooks {
+  /** Test-only synchronization point for deterministic replacement-race coverage. */
+  beforeWorkspaceSnapshot?: (workspace: string) => void;
+  /** Test-only observer proving rejected trees are never opened for content reads. */
+  beforeFileRead?: (path: string) => void;
+}
+
 export function validateBaseArtifactManifest(value: unknown): ValidatedBaseArtifact {
   const manifest = MeshBaseArtifactManifestSchema.parse(value);
   const contents = new Map<string, Buffer>();
@@ -112,7 +119,10 @@ export class MeshArtifactStore {
   private rootIdentity?: DirectoryIdentity;
   private readonly workspaceIdentities = new Map<string, OwnedWorkspaceIdentity>();
 
-  constructor(root = join(configDir(), "mesh-workspaces")) {
+  constructor(
+    root = join(configDir(), "mesh-workspaces"),
+    private readonly captureHooks: MeshArtifactStoreCaptureHooks = {},
+  ) {
     if (!isAbsolute(root)) throw new Error("artifact workspace root must be absolute");
     this.root = resolve(root);
   }
@@ -165,7 +175,25 @@ export class MeshArtifactStore {
     if (resolve(workspaceValue) !== expectedWorkspace) throw new Error("artifact workspace does not match task");
     assertContained(root, expectedWorkspace);
 
-    const current = scanWorkspace(expectedWorkspace);
+    this.captureHooks.beforeWorkspaceSnapshot?.(expectedWorkspace);
+    const snapshotWorkspace = join(taskDir, `.workspace-capture-${randomUUID()}`);
+    renameSync(expectedWorkspace, snapshotWorkspace);
+    // rename(2)/MoveFileEx pins the directory entry atomically. If a runner
+    // replaced the workspace before the rename, the moved inode differs and is
+    // rejected before readdir or readFile. A replacement after the rename can
+    // only occupy the old path, which capture never traverses.
+    assertDirectoryIdentity(root, ownedIdentity.root, "artifact workspace root");
+    assertDirectoryIdentity(taskDir, ownedIdentity.taskDir, "artifact task directory");
+    assertMovedDirectoryIdentity(snapshotWorkspace, ownedIdentity.workspace, "artifact workspace snapshot");
+    assertContained(taskDir, snapshotWorkspace);
+
+    // Portable Node/Bun APIs cannot revoke handles held by a detached same-UID
+    // descendant. Capture therefore relies on the runner lifecycle to quiesce
+    // descendants; a process that deliberately retains a handle could still
+    // mutate files inside this pinned tree while it is scanned. Such mutation
+    // fails validation when observed, but cannot redirect the root to an
+    // outside replacement directory.
+    const current = scanWorkspace(snapshotWorkspace, this.captureHooks.beforeFileRead);
     const original = new Map(base.files.map((file) => [file.path, file]));
     const changed = [...current.values()]
       .filter((file) => {
@@ -246,6 +274,18 @@ function assertDirectoryIdentity(path: string, expected: DirectoryIdentity, labe
   assertSameIdentity(current, expected, label);
 }
 
+function assertMovedDirectoryIdentity(path: string, expected: DirectoryIdentity, label: string): void {
+  let current: DirectoryIdentity;
+  try {
+    current = directoryIdentity(path);
+  } catch {
+    throw new Error(`${label} was replaced or is not an owned directory`);
+  }
+  if (current.device !== expected.device || current.inode !== expected.inode) {
+    throw new Error(`${label} identity changed`);
+  }
+}
+
 function assertSameIdentity(current: DirectoryIdentity, expected: DirectoryIdentity, label: string): void {
   if (current.canonicalPath !== expected.canonicalPath
     || current.device !== expected.device
@@ -261,7 +301,10 @@ function assertContained(root: string, candidate: string): void {
   }
 }
 
-function scanWorkspace(workspace: string): Map<string, MeshArtifactFile> {
+function scanWorkspace(
+  workspace: string,
+  beforeFileRead?: (path: string) => void,
+): Map<string, MeshArtifactFile> {
   const files = new Map<string, MeshArtifactFile>();
   const pending = [workspace];
   let totalBytes = 0;
@@ -283,6 +326,7 @@ function scanWorkspace(workspace: string): Map<string, MeshArtifactFile> {
       const path = relative(workspace, absolute).split(sep).join("/");
       MeshArtifactPathSchema.parse(path);
       if (files.has(path)) throw new Error("artifact contains a duplicate path");
+      beforeFileRead?.(absolute);
       const content = readFileSync(absolute);
       files.set(path, MeshArtifactFileSchema.parse({
         type: "file",
