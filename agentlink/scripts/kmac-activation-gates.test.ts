@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   MANUAL_RESTORE_ARGS,
   canonicalPathWithin,
@@ -282,11 +283,11 @@ describe("KMac activation gates", () => {
     expect(postAttempt).toContain('if atomic_link_switch "$CANDIDATE_RELEASE"; then :; else rollback 1; fi');
     expect(postAttempt).toContain("if atomic_mesh_replace; then :; else rollback 1; fi");
     expect(postAttempt).toContain('if /bin/launchctl kickstart -k "$DOMAIN/$LABEL"; then :; else rollback 1; fi');
-    expect(postAttempt).toContain("if verify_process; then :; else rollback 1; fi");
+    expect(postAttempt).toContain("if wait_for_watcher_process; then :; else rollback 1; fi");
     expect(postAttempt).toContain("else\n  rollback 1\nfi");
   });
 
-  test("keeps controller verification outside an ERR-trapped command substitution", () => {
+  test("keeps command substitutions free of trap changes", () => {
     const activation = readFileSync(join(import.meta.dir,
       "../deploy/activate-kmac-watcher.sh"), "utf8");
     const attemptStart = activation.indexOf("\nactivation_attempted=1\n");
@@ -296,16 +297,217 @@ describe("KMac activation gates", () => {
     expect(postAttempt).toContain('if controller_verify "$baseline_last_seen"; then');
     expect(postAttempt).toContain('reconnected_at="$controller_verify_seen"');
     expect(postAttempt).not.toContain("$(controller_verify");
-    expect(activation).toContain('snapshot="$(trap - ERR INT TERM; controller_snapshot 2>/dev/null)"');
+    expect(activation).toContain('snapshot="$(controller_snapshot 2>/dev/null || exit 1)"');
+    expect(activation).not.toContain("$(trap");
+    expect(activation).toContain(
+      "trap rollback ERR\ntrap 'rollback 130' INT\ntrap 'rollback 143' TERM",
+    );
     expect(activation).toContain('if /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=8');
     expect(activation).toContain('controller_verify_seen="$seen"');
+  });
+
+  test("uses deterministic rollback handlers and disables them on exit", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const rollbackStart = activation.indexOf("rollback() {");
+    const rollbackEnd = activation.indexOf("\n}\ntrap rollback ERR\n", rollbackStart);
+    const trapBlock = [
+      "trap rollback ERR",
+      "trap 'rollback 130' INT",
+      "trap 'rollback 143' TERM",
+    ].join("\n");
+    const successCleanup = activation.lastIndexOf("\ntrap - ERR INT TERM\n");
+
+    expect(rollbackStart).toBeGreaterThan(-1);
+    expect(rollbackEnd).toBeGreaterThan(rollbackStart);
+    expect(activation).toContain(`${trapBlock}\n`);
+    expect(activation).not.toContain("trap rollback ERR INT TERM");
+    expect(activation.slice(rollbackStart, rollbackEnd)).toContain(
+      "trap - ERR INT TERM",
+    );
+    expect(successCleanup).toBeGreaterThan(rollbackEnd);
+    expect(successCleanup).toBeLessThan(activation.indexOf("\nprintf ", successCleanup));
+  });
+
+  test("preserves ERR and signal exit statuses through real Bash traps", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const rollbackStart = activation.indexOf("rollback() {");
+    const rollbackEnd = activation.indexOf("\n}\ntrap rollback ERR\n", rollbackStart);
+    const rollback = activation.slice(rollbackStart, rollbackEnd + 2);
+
+    const run = (trigger: string) => spawnSync("/bin/bash", [
+      "-c",
+      [
+        "set -Ee",
+        "activation_attempted=0",
+        rollback,
+        "trap rollback ERR",
+        "trap 'rollback 130' INT",
+        "trap 'rollback 143' TERM",
+        trigger,
+      ].join("\n"),
+      "rollback-trap-regression",
+    ], { encoding: "utf8" });
+
+    expect(run("false").status).toBe(1);
+    expect(run("( /bin/sleep 0.01; /bin/kill -INT \"$$\" ) & wait \"$!\"").status).toBe(130);
+    expect(run("( /bin/sleep 0.01; /bin/kill -TERM \"$$\" ) & wait \"$!\"").status).toBe(143);
+  });
+
+  test("suppresses inherited ERR in the production sha256 helper and fails closed", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const helperStart = activation.indexOf("sha256_file() {");
+    const helperEnd = activation.indexOf("\n}\nfail_precondition", helperStart);
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    const helper = activation.slice(helperStart, helperEnd + 2);
+
+    const testRoot = mkdtempSync(join(tmpdir(), "argus-kmac-sha256-"));
+    const missingPath = join(testRoot, "missing", "mesh.json");
+    const trapLog = join(testRoot, "err-trap.log");
+    try {
+      expect(existsSync(missingPath)).toBe(false);
+      const result = spawnSync("/bin/bash", [
+        "-c",
+        [
+          "set -Ee",
+          "trap_log=\"$1\"",
+          "trap 'printf ERR >> \"$trap_log\"' ERR",
+          helper,
+          "hash=\"$(sha256_file \"$2\")\"",
+          "hash_status=$?",
+          "printf 'hash=%s\\n' \"$hash\"",
+          "printf 'hash_status=%s\\n' \"$hash_status\"",
+          "require_hash() { [[ -n \"$1\" ]]; }",
+          "if require_hash \"$hash\"; then",
+          "  printf 'caller_rejected_empty=0\\n'",
+          "  exit 1",
+          "fi",
+          "printf 'caller_rejected_empty=1\\n'",
+        ].join("\n"),
+        "sha256-helper-regression",
+        trapLog,
+        missingPath,
+      ], { encoding: "utf8" });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(
+        "hash=\nhash_status=0\ncaller_rejected_empty=1\n",
+      );
+      expect(result.stderr).toBe("");
+      expect(existsSync(trapLog)).toBe(false);
+    } finally {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("waits for launchd readiness with a bounded poll and one kickstart per phase", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const waitStart = activation.indexOf("wait_for_watcher_process() {");
+    const waitEnd = activation.indexOf("\n}", waitStart);
+    expect(waitStart).toBeGreaterThan(-1);
+    expect(waitEnd).toBeGreaterThan(waitStart);
+    const wait = activation.slice(waitStart, waitEnd + 2);
+
+    expect(activation).toContain("readonly WATCHER_READINESS_ATTEMPTS=10");
+    expect(activation).toContain("readonly WATCHER_READINESS_INTERVAL_SECONDS=1");
+    expect(wait).toContain(
+      "for ((attempt = 1; attempt <= WATCHER_READINESS_ATTEMPTS; attempt += 1)); do",
+    );
+    expect(wait).toContain("if verify_process; then");
+    expect(wait).toContain(
+      '/bin/sleep "$WATCHER_READINESS_INTERVAL_SECONDS" || return 1',
+    );
+    expect(wait).not.toContain("kickstart");
+
+    const kickstarts = activation.match(/\/bin\/launchctl kickstart -k "\$DOMAIN\/\$LABEL"/g) ?? [];
+    expect(kickstarts).toHaveLength(2);
+
+    const attemptStart = activation.indexOf("\nactivation_attempted=1\n");
+    const candidateKickstart = activation.indexOf(
+      'if /bin/launchctl kickstart -k "$DOMAIN/$LABEL"; then :; else rollback 1; fi',
+      attemptStart,
+    );
+    const candidateReadiness = activation.indexOf(
+      "if wait_for_watcher_process; then :; else rollback 1; fi",
+      candidateKickstart,
+    );
+    expect(candidateKickstart).toBeGreaterThan(attemptStart);
+    expect(candidateReadiness).toBeGreaterThan(candidateKickstart);
+    expect(activation).toContain("if wait_for_watcher_process; then");
+  });
+
+  test("exercises readiness retry and timeout bounds without touching launchd", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const waitStart = activation.indexOf("wait_for_watcher_process() {");
+    const waitEnd = activation.indexOf("\n}", waitStart);
+    const wait = activation.slice(waitStart, waitEnd + 2);
+    const result = spawnSync("/bin/bash", [
+      "-c",
+      [
+        "set -u",
+        "WATCHER_READINESS_ATTEMPTS=3",
+        "WATCHER_READINESS_INTERVAL_SECONDS=0",
+        "verify_calls=0",
+        "verify_process() { verify_calls=$((verify_calls + 1)); (( verify_calls == 3 )); }",
+        wait,
+        "if wait_for_watcher_process; then printf 'ready=%s\\n' \"$verify_calls\"; else exit 1; fi",
+        "verify_calls=0",
+        "verify_process() { verify_calls=$((verify_calls + 1)); return 1; }",
+        "if wait_for_watcher_process; then exit 1; else printf 'timeout=%s\\n' \"$verify_calls\"; fi",
+      ].join("\n"),
+    ], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("ready=3\ntimeout=3\n");
+  });
+
+  test("reports only fixed activation and rollback failure stages", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    for (const stage of [
+      "preflight",
+      "unknown",
+      "candidate_link_switch",
+      "candidate_mesh_replace",
+      "candidate_kickstart",
+      "candidate_link_verify",
+      "candidate_process_ready",
+      "candidate_controller_verify",
+    ]) {
+      expect(activation).toContain(`failure_stage="${stage}"`);
+    }
+    for (const stage of [
+      "none",
+      "rollback_mesh_restore",
+      "rollback_link_restore",
+      "rollback_kickstart",
+      "rollback_process_ready",
+      "rollback_link_verify",
+      "rollback_mesh_verify",
+      "rollback_process_verify",
+      "rollback_controller_reconnect",
+      "rollback_verification",
+      "rollback_unknown",
+    ]) {
+      expect(activation).toContain(`rollback_failure_stage="${stage}"`);
+    }
+    expect(activation).toContain(
+      "failure_stage=%s rollback_failure_stage=%s",
+    );
+    expect(activation).toContain(
+      "BLOCKED rollback_verification_failed old_release=%s pid=%s lastSeen=%s failure_stage=%s rollback_failure_stage=%s",
+    );
   });
 
   test("requires both restored artifacts and their proofs before reporting rollback", () => {
     const activation = readFileSync(join(import.meta.dir,
       "../deploy/activate-kmac-watcher.sh"), "utf8");
     const rollbackStart = activation.indexOf("rollback() {");
-    const rollbackEnd = activation.indexOf("\n}\ntrap rollback ERR INT TERM", rollbackStart);
+    const rollbackEnd = activation.indexOf("\n}\ntrap rollback ERR\n", rollbackStart);
     expect(rollbackStart).toBeGreaterThan(-1);
     expect(rollbackEnd).toBeGreaterThan(rollbackStart);
     const rollback = activation.slice(rollbackStart, rollbackEnd);

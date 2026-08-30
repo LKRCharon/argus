@@ -22,15 +22,51 @@ readonly PEER_NAME="${ARGUS_PEER_NAME:-k Mac}"
 readonly RESOURCE_ID="workspace:kmac-m4"
 readonly RUNNER_ID="kmac-status-v1"
 readonly GATES_MODULE="$SCRIPT_DIR/kmac-activation-gates.ts"
+readonly WATCHER_READINESS_ATTEMPTS=10
+readonly WATCHER_READINESS_INTERVAL_SECONDS=1
 
 activation_attempted=0
 baseline_last_seen=0
 backup_mesh=""
 backup_mesh_sha256=""
 controller_verify_seen=""
+failure_stage="preflight"
+rollback_failure_stage="none"
 
-sha256_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
-fail_precondition() { printf 'BLOCKED gate=%s\n' "$1" >&2; exit 65; }
+sha256_file() {
+  local output
+  output="$(/usr/bin/shasum -a 256 "$1" 2>/dev/null || true)"
+  printf '%s\n' "${output%% *}"
+}
+fail_precondition() { printf 'BLOCKED gate=%s failure_stage=preflight\n' "$1" >&2; exit 65; }
+
+record_failure_stage() {
+  case "${1:-}" in
+    candidate_link_switch) failure_stage="candidate_link_switch" ;;
+    candidate_mesh_replace) failure_stage="candidate_mesh_replace" ;;
+    candidate_kickstart) failure_stage="candidate_kickstart" ;;
+    candidate_link_verify) failure_stage="candidate_link_verify" ;;
+    candidate_process_ready) failure_stage="candidate_process_ready" ;;
+    candidate_controller_verify) failure_stage="candidate_controller_verify" ;;
+    *) failure_stage="unknown" ;;
+  esac
+}
+
+record_rollback_failure_stage() {
+  [[ "$rollback_failure_stage" == none ]] || return 0
+  case "${1:-}" in
+    mesh_restore) rollback_failure_stage="rollback_mesh_restore" ;;
+    link_restore) rollback_failure_stage="rollback_link_restore" ;;
+    kickstart) rollback_failure_stage="rollback_kickstart" ;;
+    process_ready) rollback_failure_stage="rollback_process_ready" ;;
+    link_verify) rollback_failure_stage="rollback_link_verify" ;;
+    mesh_verify) rollback_failure_stage="rollback_mesh_verify" ;;
+    process_verify) rollback_failure_stage="rollback_process_verify" ;;
+    controller_reconnect) rollback_failure_stage="rollback_controller_reconnect" ;;
+    verification) rollback_failure_stage="rollback_verification" ;;
+    *) rollback_failure_stage="rollback_unknown" ;;
+  esac
+}
 
 canonical_dir() {
   CDPATH= cd -P -- "$1" && pwd -P
@@ -86,7 +122,7 @@ launchctl_output() {
 
 watcher_running() {
   local output
-  output="$(trap - ERR INT TERM; launchctl_output || true)"
+  output="$(launchctl_output || true)"
   [[ "${#output}" -le 16384 ]] || return 1
   printf '%s\n' "$output" | /usr/bin/grep -Eq '^[[:space:]]*state[[:space:]]*=[[:space:]]*running[[:space:]]*$'
 }
@@ -98,16 +134,29 @@ watcher_pid() {
 verify_process() {
   local pid command
   watcher_running || return 1
-  pid="$(trap - ERR INT TERM; watcher_pid)" || return 1
+  pid="$(watcher_pid || true)"
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   /bin/kill -0 "$pid" 2>/dev/null || return 1
-  command="$(trap - ERR INT TERM; /bin/ps -p "$pid" -o command= 2>/dev/null || true)"
+  command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
   [[ "$command" == *"$BUN"* && "$command" == *"$CURRENT/packages/daemon/src/index.ts"* && "$command" == *" watch"* ]]
+}
+
+wait_for_watcher_process() {
+  local attempt
+  for ((attempt = 1; attempt <= WATCHER_READINESS_ATTEMPTS; attempt += 1)); do
+    if verify_process; then
+      return 0
+    fi
+    if (( attempt < WATCHER_READINESS_ATTEMPTS )); then
+      /bin/sleep "$WATCHER_READINESS_INTERVAL_SECONDS" || return 1
+    fi
+  done
+  return 1
 }
 
 verify_candidate_manifest() {
   local output
-  output="$("$BUN" run "$CANDIDATE_RELEASE/scripts/release-manifest.ts" verify --release "$CANDIDATE_RELEASE" 2>/dev/null)" || return 1
+  output="$("$BUN" run "$CANDIDATE_RELEASE/scripts/release-manifest.ts" verify --release "$CANDIDATE_RELEASE" 2>/dev/null || exit 1)" || return 1
   [[ "${#output}" -le 65536 ]] || return 1
   printf '%s' "$output" | env GATES_MODULE="$GATES_MODULE" EXPECTED_COMMIT="$REVIEWED_COMMIT" "$BUN" -e '
     const value = JSON.parse(await new Response(Bun.stdin.stream()).text());
@@ -121,7 +170,7 @@ verify_candidate_config() {
   mode="$(/usr/bin/stat -f '%Lp' "$CANDIDATE_CONFIG" 2>/dev/null || true)"
   [[ "$mode" == 600 ]] || return 1
   local actual_hash
-  actual_hash="$(sha256_file "$CANDIDATE_CONFIG")"
+  actual_hash="$(sha256_file "$CANDIDATE_CONFIG" || true)"
   env GATES_MODULE="$GATES_MODULE" ACTUAL_HASH="$actual_hash" EXPECTED_HASH="$EXPECTED_CANDIDATE_MESH_SHA256" "$BUN" -e '
     const { candidateMeshHashMatches } = await import(process.env.GATES_MODULE);
     if (!candidateMeshHashMatches(process.env.ACTUAL_HASH, process.env.EXPECTED_HASH)) process.exit(1);
@@ -176,7 +225,7 @@ controller_verify() {
   local minimum_seen="$1" attempt snapshot status seen
   controller_verify_seen=""
   for ((attempt = 1; attempt <= 30; attempt += 1)); do
-    if snapshot="$(trap - ERR INT TERM; controller_snapshot 2>/dev/null)"; then
+    if snapshot="$(controller_snapshot 2>/dev/null || exit 1)"; then
       status="${snapshot%% *}"; seen="${snapshot##* }"
       if [[ "$status" == online && "$seen" =~ ^[0-9]+$ ]] && (( seen > minimum_seen )); then
         if /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 seoul \
@@ -195,7 +244,7 @@ controller_verify() {
 controller_reconnect() {
   local minimum_seen="$1" attempt snapshot status seen
   for ((attempt = 1; attempt <= 30; attempt += 1)); do
-    if snapshot="$(trap - ERR INT TERM; controller_snapshot 2>/dev/null)"; then
+    if snapshot="$(controller_snapshot 2>/dev/null || exit 1)"; then
       status="${snapshot%% *}"; seen="${snapshot##* }"
       if [[ "$status" == online && "$seen" =~ ^[0-9]+$ ]] && (( seen > minimum_seen )); then
         printf '%s\n' "$seen"
@@ -209,11 +258,11 @@ controller_reconnect() {
 
 atomic_mesh_replace() {
   local temporary="$MESH_CONFIG.stage2.$$"
-  [[ "$(trap - ERR INT TERM; sha256_file "$CANDIDATE_CONFIG")" == "$EXPECTED_CANDIDATE_MESH_SHA256" ]] || return 1
+  [[ "$(sha256_file "$CANDIDATE_CONFIG" || true)" == "$EXPECTED_CANDIDATE_MESH_SHA256" ]] || return 1
   [[ ! -e "$temporary" && ! -L "$temporary" ]] || return 1
   /bin/cp -p "$CANDIDATE_CONFIG" "$temporary" || return 1
   /bin/chmod 0600 "$temporary" || { /bin/rm -f "$temporary" || true; return 1; }
-  if [[ "$(trap - ERR INT TERM; sha256_file "$temporary")" != "$EXPECTED_CANDIDATE_MESH_SHA256" ]]; then
+  if [[ "$(sha256_file "$temporary" || true)" != "$EXPECTED_CANDIDATE_MESH_SHA256" ]]; then
     /bin/rm -f "$temporary" || true
     return 1
   fi
@@ -250,39 +299,60 @@ atomic_link_switch() {
 
 rollback() {
   local rc=$? rollback_seen="" rollback_pid="" rollback_mesh_sha256="" rollback_current_target_canonical=""
-  local mesh_restored=0 link_restored=0 watcher_restarted=0
+  local mesh_restored=0 link_restored=0 watcher_restarted=0 watcher_ready=0
   if (( $# > 0 )); then rc="$1"; fi
   trap - ERR INT TERM
   set +e
   if (( activation_attempted )); then
     if atomic_mesh_restore; then mesh_restored=1; fi
     if atomic_link_switch "$OLD_RELEASE"; then link_restored=1; fi
+    (( mesh_restored )) || record_rollback_failure_stage mesh_restore
+    (( link_restored )) || record_rollback_failure_stage link_restore
     if (( mesh_restored && link_restored )); then
       if /bin/launchctl kickstart -k "$DOMAIN/$LABEL" >/dev/null 2>&1; then
         watcher_restarted=1
+        if wait_for_watcher_process; then
+          watcher_ready=1
+        else
+          record_rollback_failure_stage process_ready
+        fi
+      else
+        record_rollback_failure_stage kickstart
       fi
     fi
     rollback_current_target_canonical="$(canonical_current_target 2>/dev/null || true)"
     rollback_mesh_sha256="$(sha256_file "$MESH_CONFIG" 2>/dev/null || true)"
-    if (( watcher_restarted )) && verify_process; then
+    if (( watcher_restarted && watcher_ready )); then
       rollback_pid="$(watcher_pid 2>/dev/null || true)"
     fi
     rollback_seen="$(controller_reconnect "$baseline_last_seen" 2>/dev/null || true)"
+    [[ "$rollback_current_target_canonical" == "$old_release_canonical" ]] || record_rollback_failure_stage link_verify
+    [[ "$rollback_mesh_sha256" == "$EXPECTED_LIVE_MESH_SHA256" ]] || record_rollback_failure_stage mesh_verify
+    [[ "$rollback_pid" =~ ^[0-9]+$ ]] || record_rollback_failure_stage process_verify
+    if [[ "$rollback_seen" =~ ^[0-9]+$ ]] && (( rollback_seen > baseline_last_seen )); then :; else
+      record_rollback_failure_stage controller_reconnect
+    fi
     if (( mesh_restored && link_restored && watcher_restarted )) \
+      && (( watcher_ready )) \
       && [[ "$rollback_current_target_canonical" == "$old_release_canonical" ]] \
       && [[ "$rollback_mesh_sha256" == "$EXPECTED_LIVE_MESH_SHA256" ]] \
       && [[ "$rollback_pid" =~ ^[0-9]+$ ]] \
       && [[ "$rollback_seen" =~ ^[0-9]+$ ]] \
       && (( rollback_seen > baseline_last_seen )); then
-      printf 'ROLLED_BACK old_release=%s pid=%s lastSeen=%s backup_sha256=%s\n' "$OLD_RELEASE" "$rollback_pid" "$rollback_seen" "$backup_mesh_sha256"
+      printf 'ROLLED_BACK old_release=%s pid=%s lastSeen=%s backup_sha256=%s failure_stage=%s rollback_failure_stage=%s\n' \
+        "$OLD_RELEASE" "$rollback_pid" "$rollback_seen" "$backup_mesh_sha256" "$failure_stage" "$rollback_failure_stage"
     else
-      printf 'BLOCKED rollback_verification_failed old_release=%s pid=%s lastSeen=%s\n' "$OLD_RELEASE" "$rollback_pid" "$rollback_seen" >&2
+      [[ "$rollback_failure_stage" == none ]] && record_rollback_failure_stage verification
+      printf 'BLOCKED rollback_verification_failed old_release=%s pid=%s lastSeen=%s failure_stage=%s rollback_failure_stage=%s\n' \
+        "$OLD_RELEASE" "$rollback_pid" "$rollback_seen" "$failure_stage" "$rollback_failure_stage" >&2
       rc=70
     fi
   fi
   exit "$rc"
 }
-trap rollback ERR INT TERM
+trap rollback ERR
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 path_argument_is_persistent "$BASE" || fail_precondition base_path
 base_canonical="$(canonical_dir "$BASE" 2>/dev/null || true)"
@@ -333,7 +403,7 @@ verify_candidate_manifest || fail_precondition candidate_manifest
 verify_candidate_config || fail_precondition candidate_config
 watcher_running || fail_precondition watcher_running
 
-snapshot="$(trap - ERR INT TERM; controller_snapshot 2>/dev/null)" || fail_precondition controller_snapshot
+snapshot="$(controller_snapshot 2>/dev/null || exit 1)" || fail_precondition controller_snapshot
 baseline_last_seen="${snapshot##* }"
 [[ "$snapshot" == online\ * && "$baseline_last_seen" =~ ^[0-9]+$ ]] || fail_precondition controller_peer_online
 
@@ -345,23 +415,33 @@ path_is_under "$base_canonical/activation/backups" "$backup_canonical" || fail_p
 [[ "$(/usr/bin/stat -f '%Lp' "$BACKUP_ROOT" 2>/dev/null || true)" == 700 ]] || fail_precondition backup_directory_mode
 /bin/cp -p "$MESH_CONFIG" "$backup_mesh"
 /bin/chmod 0600 "$backup_mesh"
-backup_mesh_sha256="$(sha256_file "$backup_mesh")"
+backup_mesh_sha256="$(sha256_file "$backup_mesh" || true)"
 [[ "$backup_mesh_sha256" == "$EXPECTED_LIVE_MESH_SHA256" ]] || fail_precondition mesh_backup
 
 activation_attempted=1
+record_failure_stage candidate_link_switch
 if atomic_link_switch "$CANDIDATE_RELEASE"; then :; else rollback 1; fi
+record_failure_stage candidate_mesh_replace
 if atomic_mesh_replace; then :; else rollback 1; fi
+record_failure_stage candidate_kickstart
 if /bin/launchctl kickstart -k "$DOMAIN/$LABEL"; then :; else rollback 1; fi
 
-current_target_after_switch="$(trap - ERR INT TERM; canonical_current_target 2>/dev/null || true)"
+record_failure_stage candidate_link_verify
+current_target_after_switch="$(canonical_current_target 2>/dev/null || true)"
 if [[ "$current_target_after_switch" == "$candidate_release_canonical" ]]; then :; else rollback 1; fi
-if verify_process; then :; else rollback 1; fi
+record_failure_stage candidate_process_ready
+if wait_for_watcher_process; then :; else rollback 1; fi
+record_failure_stage candidate_controller_verify
 if controller_verify "$baseline_last_seen"; then
   reconnected_at="$controller_verify_seen"
 else
   rollback 1
 fi
 
+record_failure_stage candidate_process_ready
+ready_pid="$(watcher_pid 2>/dev/null || true)"
+[[ "$ready_pid" =~ ^[0-9]+$ ]] || rollback 1
+
 trap - ERR INT TERM
 printf 'READY_FOR_COMMANDER_CANARY old_release=%s candidate_release=%s pid=%s lastSeen=%s mesh_backup=%s mesh_backup_sha256=%s\n' \
-  "$OLD_RELEASE" "$CANDIDATE_RELEASE" "$(watcher_pid)" "$reconnected_at" "$backup_mesh" "$backup_mesh_sha256"
+  "$OLD_RELEASE" "$CANDIDATE_RELEASE" "$ready_pid" "$reconnected_at" "$backup_mesh" "$backup_mesh_sha256"
