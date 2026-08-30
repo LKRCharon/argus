@@ -55,6 +55,8 @@ interface ServeWatchOptions {
   approvalDistDir?: string;
   approvalHost?: string;
   approvalPort?: number;
+  /** Test seam for exercising the real watcher control path without a binary. */
+  codexServerFactory?: () => CodexAppServer;
 }
 
 export async function serveWatch(
@@ -430,7 +432,7 @@ export async function serveWatch(
         throw e;
       }
     }
-    const srv = new CodexAppServer();
+    const srv = opts.codexServerFactory?.() ?? new CodexAppServer();
     srv.onNotification = (method, params) => {
       const threadId = params?.threadId;
       // The turn id lives in `turn.id`, not `turnId` (test/fixtures/
@@ -501,6 +503,7 @@ export async function serveWatch(
         // approvals silently stopped working while events kept flowing.)
         continue;
       }
+      void (async () => {
       try {
         const openedPayload = await chan.open<{
           kind?: string;
@@ -821,7 +824,7 @@ export async function serveWatch(
             } catch (e) {
               if (controlRequestId) {
                 await sendPayload(codexErrorReply(e, controlReply, createdThreadId));
-                continue;
+                return;
               }
               r = { ok: false, note: `新建失败: ${e instanceof Error ? e.message : e}` };
             }
@@ -970,6 +973,7 @@ export async function serveWatch(
       } catch {
         // 解密失败，忽略
       }
+      })();
     }
   })();
 
