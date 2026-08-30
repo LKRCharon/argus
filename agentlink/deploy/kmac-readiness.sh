@@ -31,10 +31,11 @@ else
   ok REPOSITORY "$REPO_ROOT"
 fi
 
-path_probe="$(/usr/bin/env -i HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" SHELL=/bin/zsh /bin/zsh -c \
-  'printf "%s\n" "$(command -v codex 2>/dev/null || true)" "$(command -v gh 2>/dev/null || true)"')"
+path_probe="$(/usr/bin/env -i HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" SHELL=/bin/zsh PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/zsh -lc \
+  'printf "%s\n" "$(command -v codex 2>/dev/null || true)" "$(command -v gh 2>/dev/null || true)" "$(command -v bun 2>/dev/null || true)"')"
 path_codex="$(printf '%s\n' "$path_probe" | /usr/bin/sed -n '1p')"
 path_gh="$(printf '%s\n' "$path_probe" | /usr/bin/sed -n '2p')"
+path_bun="$(printf '%s\n' "$path_probe" | /usr/bin/sed -n '3p')"
 if [[ "$path_codex" == "$HOME/.local/bin/codex" ]]; then
   codex_version="$($path_codex --version 2>/dev/null | /usr/bin/head -1)"
   [[ -n "$codex_version" ]] && ok NONINTERACTIVE_CODEX "$codex_version" || fail NONINTERACTIVE_CODEX
@@ -42,13 +43,15 @@ else
   fail NONINTERACTIVE_CODEX
 fi
 [[ "$path_gh" == /opt/homebrew/bin/gh ]] && ok NONINTERACTIVE_GH "$path_gh" || fail NONINTERACTIVE_GH
+[[ "$path_bun" == /opt/homebrew/bin/bun ]] && ok NONINTERACTIVE_BUN "$path_bun" || fail NONINTERACTIVE_BUN
 
 if [[ -x /opt/homebrew/bin/gh ]]; then
-  if GH_PROMPT_DISABLED=1 /opt/homebrew/bin/gh api --silent user >/dev/null 2>&1; then
-    ok GH_KEYCHAIN_CONTEXT READY
+  if GH_PROMPT_DISABLED=1 /opt/homebrew/bin/gh auth status --hostname github.com >/dev/null 2>&1; then
+    ok GH_KEYCHAIN_CONTEXT AVAILABLE
   else
-    warn GH_KEYCHAIN_CONTEXT UNAVAILABLE_NO_CREDENTIAL_ACTION
+    warn GH_KEYCHAIN_CONTEXT UNAVAILABLE_CONTEXT_LIMITATION
   fi
+  ok GH_API_CAPABILITY WINDOWS_COMMANDER_DEFAULT
 else
   fail GH_BINARY
 fi

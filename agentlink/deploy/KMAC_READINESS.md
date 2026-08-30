@@ -19,6 +19,9 @@ The bootstrap is idempotent and makes only these user-owned changes:
 - installs `~/.local/bin/codex` from `deploy/codex-launcher.sh`;
 - appends a marked block to `~/.zshenv` for `~/.local/bin` and
   `/opt/homebrew/bin` in non-interactive zsh;
+- appends a separate marked block to `~/.zprofile`; macOS login shells run
+  `path_helper` after `.zshenv`, so both files are needed for
+  `ssh ... /bin/zsh -lc` to resolve `~/.local/bin/codex`;
 - appends the dedicated SSH host `github-argus-clash`, which reaches
   `ssh.github.com:443` through the local HTTP CONNECT proxy on
   `127.0.0.1:46640`;
@@ -38,10 +41,14 @@ later package-manager shim from changing the watcher binary. This remains a
 normal Codex CLI entry point; see the
 [official Codex CLI documentation](https://developers.openai.com/codex/cli/).
 
-GitHub CLI readiness is checked only with `gh api --silent user`. A
-Keychain-invisible session reports `GH_KEYCHAIN_CONTEXT=UNAVAILABLE_NO_CREDENTIAL_ACTION`.
-Do not compensate by exporting a token, reading credential files, or running a
-new login flow.
+GitHub CLI readiness is a capability check, not an account verdict. The
+readiness probe runs `gh auth status` with output suppressed; a
+Keychain-invisible SSH session reports
+`GH_KEYCHAIN_CONTEXT=UNAVAILABLE_CONTEXT_LIMITATION`, never “account invalid”.
+Git fetch and push always use the repository's GitHub SSH-over-Clash alias.
+GitHub API and PR work default to the Windows commander. Only a user-authorized
+single task may provide a short-lived `GH_TOKEN`; it is never persisted,
+printed, or inspected by these scripts.
 
 The repository-specific Git transport must read back as:
 
@@ -151,32 +158,119 @@ cannot be inferred from a mutable `current` path:
 ```bash
 export ARGUS_REPO_ROOT="$PWD"
 export ARGUS_REVIEWED_COMMIT="$(git rev-parse HEAD)"
+export AGENTLINK_INSTALL_ROOT="$HOME/Library/Application Support/AgentLink"
+export ARGUS_EXPECTED_OLD_RELEASE="$AGENTLINK_INSTALL_ROOT/releases/<expected-old-release>"
+export ARGUS_EXPECTED_LIVE_MESH_SHA256="<lowercase sha256 of live state/mesh.json>"
 export ARGUS_CANDIDATE_RELEASE="$HOME/Library/Application Support/AgentLink/releases/<release-id>"
 export ARGUS_CANDIDATE_CONFIG="$HOME/Library/Application Support/AgentLink/prepared/stage2-20260830/mesh.json"
+export ARGUS_EXPECTED_CANDIDATE_MESH_SHA256="<lowercase sha256 of candidate mesh.json>"
 ./agentlink/deploy/activate-kmac-watcher.sh
 ```
 
-It fails closed unless `current` is the reviewed old release, the live config
-has SHA-256
-`b44c335294c4df0aaff0e8c1b8be418859fddf364f0f0ebe8befb1766339943f`, the
-checkout is clean at `ARGUS_REVIEWED_COMMIT`, the candidate manifest and config
-validate against the candidate code, and the old watcher is actually running.
-It backs up the live config with a hash, atomically swaps the symlink and
+All release/config identity parameters above are explicit: no old-release or live-hash
+default is hidden in the script. It fails closed unless `current` is the
+expected old release, both hashes are lowercase SHA-256 and the candidate hash
+matches the complete candidate file before any backup or mutation, the checkout
+is clean at `ARGUS_REVIEWED_COMMIT`, and the candidate manifest reports both a
+valid tree and exactly that commit. Candidate release/config paths must be
+persistent absolute paths whose canonical targets stay inside
+`$AGENTLINK_INSTALL_ROOT/releases` and `$AGENTLINK_INSTALL_ROOT/prepared`; the
+current link, live config, backup directory, runtime, and controller inputs are
+also restricted to their fixed bounded locations or safe values. A temporary
+path, parent traversal, symlink escape, or live-config alias is rejected. The
+candidate hash is checked again while creating the atomic live-config
+replacement. The old watcher must also report the exact `state = running` line.
+
+The script backs up the live config with a hash, atomically swaps the symlink and
 config, restarts only `com.kairong.agentlink-watch`, and asks Seoul's fixed
 read-only controller endpoint to prove a newer `lastSeen`, online peer,
 `kmac-status-v1` binding, and ready workspace status. A post-switch failure
-restores both artifacts atomically, restarts the old watcher, and prints
-`ROLLED_BACK`; a gate failure before mutation prints `BLOCKED`.
+restores both artifacts atomically, restarts the old watcher, and checks only
+rollback reconnect health before printing `ROLLED_BACK`; a gate failure before
+mutation prints `BLOCKED`.
 
-The reverse tunnel is a separate passive handoff. Install and load the reviewed
-plist with:
+The control-plane sequence is deliberately ordered:
+
+1. Activate the reviewed watcher release and candidate Mesh config.
+2. Run the Argus operation canary and confirm that outbound Mesh status and
+   operations are usable as the alternate control plane.
+3. Only after that canary succeeds, install/load the passive reverse-tunnel
+   plist.
+4. Dispatch the destructive SSH handoff last. Never run the handoff script in
+   the commander's foreground SSH session.
+
+The reverse tunnel is a separate passive handoff. After the Mesh canary,
+install and load the reviewed plist with:
 
 ```bash
 ./agentlink/deploy/install-kmac-reverse-tunnel.sh
 ```
 
-This backs up an existing plist, installs mode `0600`, validates it with
-`plutil`, and loads only the dedicated label. It never signals or replaces an
-existing manual reverse SSH process; while port `22022` is occupied, launchd's
-child may retry. Recheck the unchanged manual PID and Seoul loopback SSH banner
-after loading.
+This creates or reuses the existing stage-two `0700` backup directory at
+`~/.argus-backups/argus-infra-stage2-20260830` (an explicitly supplied
+`$AGENTLINK_INSTALL_ROOT/activation/handoff/backups` is also accepted). If the
+target plist was absent, it writes the one-time
+`reverse-tunnel-plist.absent` marker (`state=target_absent`); if it existed, it
+keeps the one-time `reverse-tunnel-plist.before` backup. It installs mode
+`0600`, validates with `plutil`, and loads only the dedicated label. Its output is explicitly
+`PASSIVE_REVERSE_TUNNEL_STAGED` followed by
+`PASSIVE_REVERSE_TUNNEL_LOADED_NOT_PROVEN`; loaded does not mean the tunnel is
+healthy. It never signals or replaces an existing manual reverse SSH process;
+while port `22022` is occupied, launchd's child may retry.
+
+The destructive handoff is implemented as a detached dispatcher and must be
+run only in a commander-approved window. First obtain the exact hash of the
+installed target plist without printing its contents, then export only these
+fixed inputs:
+
+```bash
+export ARGUS_EXPECTED_MANUAL_SSH_PID=97171
+export ARGUS_EXPECTED_REVERSE_PLIST_SHA256="<lowercase sha256 of ~/Library/LaunchAgents/com.kairong.agentlink-seoul-reverse-tunnel.plist>"
+./agentlink/deploy/dispatch-kmac-reverse-tunnel.sh
+```
+
+The dispatcher accepts no positional command. It creates a result file under
+`$AGENTLINK_INSTALL_ROOT/activation/handoff/results/` with a `0700` parent,
+writes the sole initial `status=STARTED` atomically, waits at least three
+seconds in an independent one-shot worker, detaches all stdio from SSH, and
+prints only a bounded `dispatch_id`, result path, and child PID. The worker
+invokes the handoff with fixed argv. Both scripts are checked first as regular,
+non-symlink, executable files inside the deploy directory; the dispatcher
+proves and rechecks the exact worker command, then disarms its failure traps
+before printing `DISPATCHED`. Launch or early-start failure atomically changes
+the pending result to `BLOCKED` and only terminates that exact current worker
+command, and it explicitly refuses PID `97171`. If the detached worker's fixed handoff preflight fails, including its
+second check after the delay, it atomically changes a still-`STARTED` result to
+`BLOCKED detail=worker_handoff_preflight`; it does not replace an existing
+terminal result. There is no `eval`, shell command string, or inherited
+credential environment.
+
+The remaining theoretical races are unavoidable in shell: an exact `ps`/
+socket identity check cannot be atomic with a later `kill`, and a status check
+cannot be atomic with the following filesystem rename. Immediate revalidation,
+including a second candidate-config hash during replacement, canonical bounded
+paths, and same-directory atomic replacement narrow those windows, but do not
+eliminate them.
+
+The commander must record the printed result path, let the dispatcher return,
+then reconnect through the Mesh canary/available control route and poll that
+file. Do not invoke `handoff-kmac-reverse-tunnel.sh` in the foreground. The
+handoff first checks the exact numeric PID, its fixed `ssh -R
+127.0.0.1:22022:127.0.0.1:22 seoul` command/socket identity, and the Seoul
+banner. Before `stop_manual`, it also requires the target to be mode `0600`,
+`plutil`-valid, to match `ARGUS_EXPECTED_REVERSE_PLIST_SHA256` byte-for-byte,
+and to have the exact label loaded. Failure boots out only that LaunchAgent;
+rollback restores `reverse-tunnel-plist.before`, or removes the target when
+the absent marker is present. A restored previous plist is deliberately kept
+unloaded because its former loaded state cannot be proved; the result records
+`previous_plist_state=unloaded_not_proven`. Manual SSH restoration and the
+Seoul `22022` SSH banner must pass before the final `ROLLED_BACK` state is
+written. Any unrecoverable verification failure is `BLOCKED`.
+
+The result file is atomically replaced for each state and contains only bounded
+status, dispatch id, timestamps, numeric PIDs, and fixed reason tokens. This
+stage-three implementation turn does not run the dispatcher, stop PID `97171`,
+or modify the live watcher/tunnel.
+
+Android remains `NEED_ANDROID_LICENSE`: do not accept licenses or install
+platforms, build-tools, emulator images, Studio, APKs, or phone software.

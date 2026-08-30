@@ -11,6 +11,7 @@ PREPARED_ROOT="$AGENTLINK_BASE/prepared/$BACKUP_TAG"
 LAUNCHER_SOURCE="$SCRIPT_DIR/codex-launcher.sh"
 LAUNCHER_TARGET="$HOME/.local/bin/codex"
 ZSHENV="$HOME/.zshenv"
+ZPROFILE="$HOME/.zprofile"
 SSH_CONFIG="$HOME/.ssh/config"
 REVERSE_PLIST_SOURCE="$SCRIPT_DIR/com.kairong.agentlink-seoul-reverse-tunnel.plist"
 REVERSE_PLIST_TARGET="$PREPARED_ROOT/com.kairong.agentlink-seoul-reverse-tunnel.plist"
@@ -45,19 +46,20 @@ backup_once() {
 }
 
 append_zsh_path_block() {
-  local begin='# >>> Argus non-interactive PATH >>>'
-  local end='# <<< Argus non-interactive PATH <<<'
+  local target=$1
+  local begin=$2
+  local end=$3
   local temporary
-  if /usr/bin/grep -Fq "$begin" "$ZSHENV" 2>/dev/null; then
-    /usr/bin/grep -Fq "$end" "$ZSHENV" || {
-      echo "partial Argus PATH block in $ZSHENV" >&2
+  if /usr/bin/grep -Fq "$begin" "$target" 2>/dev/null; then
+    /usr/bin/grep -Fq "$end" "$target" || {
+      echo "partial Argus PATH block in $target" >&2
       exit 65
     }
     return
   fi
   temporary="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/argus-zshenv.XXXXXX")"
-  if [[ -e "$ZSHENV" ]]; then
-    /bin/cat "$ZSHENV" > "$temporary"
+  if [[ -e "$target" ]]; then
+    /bin/cat "$target" > "$temporary"
     printf '\n' >> "$temporary"
   fi
   printf '%s\n' \
@@ -73,7 +75,7 @@ append_zsh_path_block() {
     'export PATH' \
     "$end" >> "$temporary"
   /bin/chmod 0644 "$temporary"
-  /bin/mv -f "$temporary" "$ZSHENV"
+  /bin/mv -f "$temporary" "$target"
 }
 
 append_github_ssh_block() {
@@ -131,13 +133,15 @@ fi
 git_config="$git_common_dir/config"
 
 backup_once "$ZSHENV" zshenv.before
+backup_once "$ZPROFILE" zprofile.before
 backup_once "$SSH_CONFIG" ssh-config.before
 backup_once "$LAUNCHER_TARGET" codex-launcher.before
 backup_once "$git_config" git-config.before
 backup_once "$REVERSE_PLIST_TARGET" reverse-tunnel-plist.before
 
 /usr/bin/install -m 0755 "$LAUNCHER_SOURCE" "$LAUNCHER_TARGET"
-append_zsh_path_block
+append_zsh_path_block "$ZSHENV" '# >>> Argus non-interactive PATH >>>' '# <<< Argus non-interactive PATH <<<'
+append_zsh_path_block "$ZPROFILE" '# >>> Argus login PATH >>>' '# <<< Argus login PATH <<<'
 append_github_ssh_block
 /usr/bin/install -m 0600 "$REVERSE_PLIST_SOURCE" "$REVERSE_PLIST_TARGET"
 
@@ -149,6 +153,7 @@ GIT_TERMINAL_PROMPT=0 /usr/bin/git -C "$REPO_ROOT" fetch --prune origin
 
 printf 'INSTALLED codex_launcher=%s sha256=%s\n' "$LAUNCHER_TARGET" "$(sha256_file "$LAUNCHER_TARGET")"
 printf 'UPDATED zshenv=%s sha256=%s\n' "$ZSHENV" "$(sha256_file "$ZSHENV")"
+printf 'UPDATED zprofile=%s sha256=%s\n' "$ZPROFILE" "$(sha256_file "$ZPROFILE")"
 printf 'UPDATED ssh_config=%s sha256=%s\n' "$SSH_CONFIG" "$(sha256_file "$SSH_CONFIG")"
 printf 'UPDATED git_config=%s sha256=%s\n' "$git_config" "$(sha256_file "$git_config")"
 printf 'STAGED reverse_tunnel_plist=%s sha256=%s loaded=no\n' \
