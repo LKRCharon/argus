@@ -189,9 +189,18 @@ describe("ReconnectSupervisor", () => {
     });
   }
 
-  test("does not notify catalog observers after ready status reentrantly stops", async () => {
+  test("makes ready-status reentrant stop calls share completed cleanup", async () => {
     const candidate = fakeUpstream("candidate");
     const catalogs: string[] = [];
+    let releaseCatalog!: () => void;
+    let catalogStarted!: () => void;
+    const catalogGate = new Promise<void>(resolve => { releaseCatalog = resolve; });
+    const catalogStart = new Promise<void>(resolve => { catalogStarted = resolve; });
+    let firstStop!: Promise<void>;
+    let nestedStop!: Promise<void>;
+    let resolveStopStarted!: () => void;
+    const stopStarted = new Promise<void>(resolve => { resolveStopStarted = resolve; });
+    let readyObserved = false;
     let supervisor!: ReconnectSupervisor<string>;
     supervisor = new ReconnectSupervisor({
       connect: async () => candidate,
@@ -199,14 +208,32 @@ describe("ReconnectSupervisor", () => {
       baseBackoffMs: 1,
       maxBackoffMs: 1,
       sleep: async () => {},
-      onStatusChanged: status => {
-        if (status.state === "ready") void supervisor.stop();
-      },
       onCatalogChanged: catalog => catalogs.push(catalog),
+      onStatusChanged: status => {
+        if (status.state === "ready") {
+          readyObserved = true;
+          firstStop = supervisor.stop();
+          resolveStopStarted();
+        }
+        if (status.state === "stopped") nestedStop = supervisor.close();
+      },
     });
+    candidate.loadCatalog = async () => {
+      catalogStarted();
+      await catalogGate;
+      return "candidate";
+    };
     supervisor.start();
-    await supervisor.stop();
+    await catalogStart;
+    releaseCatalog();
+    await stopStarted;
+    await firstStop;
+    expect(firstStop).toBe(supervisor.stop());
+    expect(nestedStop).toBe(firstStop);
+    expect(readyObserved).toBe(true);
     expect(catalogs).toEqual([]);
+    expect(candidate.unsubscribeCount()).toBe(1);
+    expect(candidate.closeCount()).toBe(1);
     expect(supervisor.currentStatus.state).toBe("stopped");
   });
 

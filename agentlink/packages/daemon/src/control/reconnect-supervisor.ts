@@ -128,6 +128,11 @@ export class ReconnectSupervisor<Catalog> {
 
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
+
+    let resolveStop!: () => void;
+    this.stopPromise = new Promise<void>(resolve => {
+      resolveStop = resolve;
+    });
     this.stopped = true;
     this.runController?.abort();
     this.publish({
@@ -138,9 +143,17 @@ export class ReconnectSupervisor<Catalog> {
       stage: "stopped",
     });
     const loop = this.loop;
-    this.stopPromise = (async () => {
-      await loop;
-      await this.closeActive();
+    void (async () => {
+      try {
+        await loop;
+      } catch {
+        // Shutdown must still close the active generation after an unexpected loop failure.
+      }
+      try {
+        await this.closeActive();
+      } finally {
+        resolveStop();
+      }
     })();
     return this.stopPromise;
   }
