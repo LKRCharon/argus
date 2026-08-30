@@ -268,4 +268,56 @@ describe("KMac activation gates", () => {
     expect(readiness).toContain("/bin/zsh -lc");
     expect(readiness).toContain("NONINTERACTIVE_BUN");
   });
+
+  test("routes every post-switch failure through the top-level rollback", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const attemptStart = activation.indexOf("\nactivation_attempted=1\n");
+    const successTrap = activation.indexOf("\ntrap - ERR INT TERM\n", attemptStart);
+    expect(attemptStart).toBeGreaterThan(-1);
+    expect(successTrap).toBeGreaterThan(attemptStart);
+    const postAttempt = activation.slice(attemptStart, successTrap);
+
+    expect(postAttempt).not.toMatch(/\bexit\b/);
+    expect(postAttempt).toContain('if atomic_link_switch "$CANDIDATE_RELEASE"; then :; else rollback 1; fi');
+    expect(postAttempt).toContain("if atomic_mesh_replace; then :; else rollback 1; fi");
+    expect(postAttempt).toContain('if /bin/launchctl kickstart -k "$DOMAIN/$LABEL"; then :; else rollback 1; fi');
+    expect(postAttempt).toContain("if verify_process; then :; else rollback 1; fi");
+    expect(postAttempt).toContain("else\n  rollback 1\nfi");
+  });
+
+  test("keeps controller verification outside an ERR-trapped command substitution", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const attemptStart = activation.indexOf("\nactivation_attempted=1\n");
+    const successTrap = activation.indexOf("\ntrap - ERR INT TERM\n", attemptStart);
+    const postAttempt = activation.slice(attemptStart, successTrap);
+
+    expect(postAttempt).toContain('if controller_verify "$baseline_last_seen"; then');
+    expect(postAttempt).toContain('reconnected_at="$controller_verify_seen"');
+    expect(postAttempt).not.toContain("$(controller_verify");
+    expect(activation).toContain('snapshot="$(trap - ERR INT TERM; controller_snapshot 2>/dev/null)"');
+    expect(activation).toContain('if /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=8');
+    expect(activation).toContain('controller_verify_seen="$seen"');
+  });
+
+  test("requires both restored artifacts and their proofs before reporting rollback", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const rollbackStart = activation.indexOf("rollback() {");
+    const rollbackEnd = activation.indexOf("\n}\ntrap rollback ERR INT TERM", rollbackStart);
+    expect(rollbackStart).toBeGreaterThan(-1);
+    expect(rollbackEnd).toBeGreaterThan(rollbackStart);
+    const rollback = activation.slice(rollbackStart, rollbackEnd);
+
+    expect(rollback).toContain('if atomic_mesh_restore; then mesh_restored=1; fi');
+    expect(rollback).toContain('if atomic_link_switch "$OLD_RELEASE"; then link_restored=1; fi');
+    expect(rollback).toContain("if (( mesh_restored && link_restored && watcher_restarted ))");
+    expect(rollback).toContain('rollback_current_target_canonical="$(canonical_current_target 2>/dev/null || true)"');
+    expect(rollback).toContain('rollback_mesh_sha256="$(sha256_file "$MESH_CONFIG" 2>/dev/null || true)"');
+    expect(rollback).toContain('[[ "$rollback_current_target_canonical" == "$old_release_canonical" ]]');
+    expect(rollback).toContain('[[ "$rollback_mesh_sha256" == "$EXPECTED_LIVE_MESH_SHA256" ]]');
+    expect(rollback).toContain('&& (( rollback_seen > baseline_last_seen ));');
+    expect(rollback).toContain("BLOCKED rollback_verification_failed");
+  });
 });
