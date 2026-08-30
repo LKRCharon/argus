@@ -1,20 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import {
+  __defaultReconnectSleep,
   ReconnectSupervisor,
   type Handshake,
   type ReconnectUpstream,
 } from "../src/control/reconnect-supervisor";
 
-const handshake: Handshake = {
-  name: "agent",
-  version: "1",
-  protocolVersion: "1",
-};
+const handshake: Handshake = { name: "agent", version: "1", protocolVersion: "1" };
 
 const flush = async () => {
   await Promise.resolve();
   await Promise.resolve();
   await Bun.sleep(0);
+};
+
+type FakeOptions = {
+  close?: () => void | Promise<void>;
+  loadCatalog?: () => Promise<string>;
+  closeOnRegistration?: boolean;
+  throwOnRegistration?: boolean;
 };
 
 type FakeUpstream = ReconnectUpstream<string> & {
@@ -23,18 +27,11 @@ type FakeUpstream = ReconnectUpstream<string> & {
   unsubscribeCount: () => number;
 };
 
-function fakeUpstream(
-  catalog: string,
-  options: {
-    close?: () => void | Promise<void>;
-    loadCatalog?: () => Promise<string>;
-    closeOnRegistration?: boolean;
-  } = {},
-): FakeUpstream {
+function fakeUpstream(catalog: string, options: FakeOptions = {}): FakeUpstream {
   let onClose: (() => void) | undefined;
   let closes = 0;
   let unsubscribes = 0;
-  const value: FakeUpstream = {
+  return {
     handshake,
     loadCatalog: options.loadCatalog ?? (async () => catalog),
     close: async () => {
@@ -42,6 +39,7 @@ function fakeUpstream(
       await options.close?.();
     },
     onClose: callback => {
+      if (options.throwOnRegistration) throw new Error("registration failed");
       onClose = callback;
       if (options.closeOnRegistration) callback();
       let unsubscribed = false;
@@ -56,7 +54,6 @@ function fakeUpstream(
     closeCount: () => closes,
     unsubscribeCount: () => unsubscribes,
   };
-  return value;
 }
 
 async function readySupervisor(
@@ -77,11 +74,12 @@ async function readySupervisor(
 }
 
 describe("ReconnectSupervisor", () => {
-  test("coalesces starts and publishes a fully loaded generation atomically", async () => {
+  test("publishes a loaded generation atomically", async () => {
     const upstream = fakeUpstream("new");
     let connects = 0;
     const observations: string[] = [];
-    const supervisor = new ReconnectSupervisor<string>({
+    let supervisor!: ReconnectSupervisor<string>;
+    supervisor = new ReconnectSupervisor({
       connect: async () => {
         connects++;
         return upstream;
@@ -91,59 +89,43 @@ describe("ReconnectSupervisor", () => {
       maxBackoffMs: 100,
       sleep: async () => {},
       onStatusChanged: status => {
-        if (status.state === "ready") {
-          observations.push(`status:${supervisor.currentCatalog}:${supervisor.currentStatus.state}`);
-        }
+        if (status.state === "ready") observations.push(`status:${supervisor.currentCatalog}:${status.generation}`);
       },
-      onCatalogChanged: catalog => {
-        observations.push(`catalog:${catalog}:${supervisor.currentStatus.state}`);
-      },
+      onCatalogChanged: catalog => observations.push(`catalog:${catalog}:${supervisor.currentStatus.state}`),
     });
-
     supervisor.start();
     supervisor.start();
     await flush();
-
     expect(connects).toBe(1);
-    expect(observations).toEqual(["status:new:ready", "catalog:new:ready"]);
+    expect(observations).toEqual(["status:new:1", "catalog:new:ready"]);
     await supervisor.stop();
   });
 
-  test("returns immediately while unavailable and never replays an operation", async () => {
-    const upstream = fakeUpstream("catalog");
+  test("returns bounded unavailable results without queueing or replaying", async () => {
     const supervisor = new ReconnectSupervisor<string>({
-      connect: async () => upstream,
+      connect: async () => fakeUpstream("catalog"),
       validateHandshake: () => true,
       baseBackoffMs: 1,
       maxBackoffMs: 2,
       sleep: async () => {},
     });
     let calls = 0;
-    expect(supervisor.withReadyUpstream("send", () => { calls++; })).toEqual({
-      ok: false,
-      errorCode: "not_ready",
-    });
-
+    expect(supervisor.withReadyUpstream("send", () => { calls++; })).toEqual({ ok: false, errorCode: "not_ready" });
     supervisor.start();
     await flush();
     expect(calls).toBe(0);
     await supervisor.stop();
-    expect(supervisor.withReadyUpstream("send", () => { calls++; })).toEqual({
-      ok: false,
-      errorCode: "stopped",
-    });
+    expect(supervisor.withReadyUpstream("send", () => { calls++; })).toEqual({ ok: false, errorCode: "stopped" });
     expect(calls).toBe(0);
   });
 
-  test("duplicate callback invocations are independent and exceptions are contained", async () => {
-    const upstream = fakeUpstream("catalog");
-    const supervisor = await readySupervisor(upstream);
+  test("allows duplicate callback invocations and contains callback exceptions", async () => {
+    const supervisor = await readySupervisor(fakeUpstream("catalog"));
     let calls = 0;
     const callback = () => {
       calls++;
       throw new Error("consumer failure");
     };
-
     expect(supervisor.withReadyUpstream("send", callback)).toEqual({ ok: true, generation: 1 });
     expect(supervisor.withReadyUpstream("send", callback)).toEqual({ ok: true, generation: 1 });
     expect(calls).toBe(2);
@@ -164,7 +146,6 @@ describe("ReconnectSupervisor", () => {
       active.close();
       first.emitClose();
     });
-
     expect(result).toEqual({ ok: true, generation: 1 });
     expect(calls).toBe(1);
     await flush();
@@ -172,46 +153,82 @@ describe("ReconnectSupervisor", () => {
     await supervisor.stop();
   });
 
-  test("registers synchronous close safely and follows one reconnect path", async () => {
-    const first = fakeUpstream("first", { closeOnRegistration: true });
-    const second = fakeUpstream("second");
-    let connects = 0;
-    let sleeps = 0;
-    const supervisor = new ReconnectSupervisor<string>({
-      connect: async () => (++connects === 1 ? first : second),
+  for (const [name, options] of [
+    ["synchronous close", { closeOnRegistration: true }],
+    ["registration failure", { throwOnRegistration: true }],
+  ] as const) {
+    test(`rejects a candidate with ${name} without publishing it`, async () => {
+      const stable = fakeUpstream("stable");
+      const candidate = fakeUpstream("candidate", options);
+      let connects = 0;
+      let closedStatus!: () => void;
+      const closed = new Promise<void>(resolve => { closedStatus = resolve; });
+      const catalogs: string[] = [];
+      const statuses: string[] = [];
+      const supervisor = await readySupervisor(stable, {
+        connect: async () => (++connects === 1 ? stable : candidate),
+        sleep: async () => {},
+        onStatusChanged: status => {
+          statuses.push(`${status.state}:${status.generation}:${status.stage}`);
+          if (connects > 1 && status.state === "backoff") {
+            closedStatus();
+            void supervisor.stop();
+          }
+        },
+        onCatalogChanged: catalog => catalogs.push(catalog),
+      });
+      stable.emitClose();
+      await closed;
+      await supervisor.stop();
+      expect(supervisor.currentCatalog).toBe("stable");
+      expect(supervisor.currentStatus.generation).toBe(1);
+      expect(catalogs).toEqual(["stable"]);
+      expect(statuses).not.toContain("ready:2:ready");
+      expect(candidate.closeCount()).toBe(1);
+      expect(candidate.unsubscribeCount()).toBe(options.closeOnRegistration ? 1 : 0);
+    });
+  }
+
+  test("does not notify catalog observers after ready status reentrantly stops", async () => {
+    const candidate = fakeUpstream("candidate");
+    const catalogs: string[] = [];
+    let supervisor!: ReconnectSupervisor<string>;
+    supervisor = new ReconnectSupervisor({
+      connect: async () => candidate,
       validateHandshake: () => true,
-      baseBackoffMs: 10,
-      maxBackoffMs: 20,
-      random: () => 1,
-      sleep: async () => { sleeps++; },
+      baseBackoffMs: 1,
+      maxBackoffMs: 1,
+      sleep: async () => {},
+      onStatusChanged: status => {
+        if (status.state === "ready") void supervisor.stop();
+      },
+      onCatalogChanged: catalog => catalogs.push(catalog),
     });
     supervisor.start();
-    await flush();
-    expect(connects).toBe(2);
-    expect(sleeps).toBe(1);
-    expect(supervisor.currentCatalog).toBe("second");
     await supervisor.stop();
+    expect(catalogs).toEqual([]);
+    expect(supervisor.currentStatus.state).toBe("stopped");
   });
 
-  test("remote close waits for backoff and duplicate notifications schedule once", async () => {
+  test("remote close waits for one backoff despite repeated notifications", async () => {
     const first = fakeUpstream("first");
     const second = fakeUpstream("second");
     let connects = 0;
     let releaseSleep!: () => void;
-    let sleepStarted!: () => void;
+    let sleepEntered!: () => void;
     const sleepGate = new Promise<void>(resolve => { releaseSleep = resolve; });
     const supervisor = await readySupervisor(first, {
       connect: async () => (++connects === 1 ? first : second),
       random: () => 1,
       sleep: async () => {
-        sleepStarted();
+        sleepEntered();
         await sleepGate;
       },
     });
-    const started = new Promise<void>(resolve => { sleepStarted = resolve; });
+    const entered = new Promise<void>(resolve => { sleepEntered = resolve; });
     first.emitClose();
     first.emitClose();
-    await started;
+    await entered;
     expect(connects).toBe(1);
     releaseSleep();
     await flush();
@@ -219,64 +236,32 @@ describe("ReconnectSupervisor", () => {
     await supervisor.stop();
   });
 
-  test("cleans close, unsubscribe, and abort paths exactly once", async () => {
-    let aborts = 0;
-    const upstream = fakeUpstream("catalog", {
-      close: async () => {},
-    });
-    const supervisor = await readySupervisor(upstream, {
-      sleep: async (_milliseconds, signal) => {
-        signal.addEventListener("abort", () => { aborts++; }, { once: true });
-        if (signal.aborted) return;
-        await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
-      },
-    });
-    upstream.emitClose();
-    upstream.emitClose();
+  test("stop and close share one promise and await delayed cleanup", async () => {
+    let releaseClose!: () => void;
+    const closeGate = new Promise<void>(resolve => { releaseClose = resolve; });
+    const upstream = fakeUpstream("catalog", { close: async () => await closeGate });
+    const supervisor = await readySupervisor(upstream);
+    const first = supervisor.stop();
+    const second = supervisor.stop();
+    const alias = supervisor.close();
+    expect(second).toBe(first);
+    expect(alias).toBe(first);
+    let resolved = false;
+    void second.then(() => { resolved = true; });
     await flush();
-    await supervisor.stop();
-    expect(upstream.closeCount()).toBe(1);
+    expect(resolved).toBe(false);
     expect(upstream.unsubscribeCount()).toBe(1);
-    expect(aborts).toBe(1);
+    releaseClose();
+    await first;
+    expect(resolved).toBe(true);
+    expect(upstream.closeCount()).toBe(1);
   });
 
-  test("preserves the last known-good catalog through reconnect and catalog failure", async () => {
-    const first = fakeUpstream("stable");
-    let connects = 0;
-    let sleeps = 0;
-    const errors: string[] = [];
-    let catalogFailure!: () => void;
-    const catalogFailureSeen = new Promise<void>(resolve => { catalogFailure = resolve; });
-    const supervisor = await readySupervisor(first, {
-      connect: async () => {
-        connects++;
-        if (connects === 1) return first;
-        return fakeUpstream("discarded", {
-          loadCatalog: async () => { throw new Error("raw failure must stay hidden"); },
-        });
-      },
-      sleep: async (_milliseconds, signal) => {
-        sleeps++;
-        if (sleeps === 1) return;
-        await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
-      },
-      onStatusChanged: status => {
-        if (status.errorCode) {
-          errors.push(status.errorCode);
-          if (status.errorCode === "catalog_load_failed") catalogFailure();
-        }
-      },
-    });
-    expect(supervisor.currentCatalog).toBe("stable");
-    first.emitClose();
-    await catalogFailureSeen;
-    expect(supervisor.currentCatalog).toBe("stable");
-    expect(errors).toContain("catalog_load_failed");
-    await supervisor.stop();
-  });
-
-  test("bounds jitter and exponential backoff", async () => {
+  test("records exact bounded exponential delays and retry times", async () => {
     const delays: number[] = [];
+    const retryTimes: number[] = [];
+    const releases: Array<() => void> = [];
+    const entered: Array<Promise<void>> = [];
     let connects = 0;
     const supervisor = new ReconnectSupervisor<string>({
       connect: async () => {
@@ -286,68 +271,109 @@ describe("ReconnectSupervisor", () => {
       validateHandshake: () => true,
       baseBackoffMs: 10,
       maxBackoffMs: 25,
-      random: () => 2,
+      random: () => 1,
       now: () => 100,
       sleep: async (milliseconds, signal) => {
         delays.push(milliseconds);
-        if (connects >= 3) supervisor.stop();
-        signal.throwIfAborted();
+        const gate = new Promise<void>(resolve => releases.push(resolve));
+        entered.push(gate);
+        await Promise.race([gate, new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }))]);
+      },
+      onStatusChanged: status => {
+        if (status.state === "backoff") retryTimes.push(status.nextRetryAt!);
       },
     });
     supervisor.start();
+    await flush();
+    expect(delays).toEqual([10]);
+    releases.shift()!();
+    await flush();
+    expect(delays).toEqual([10, 20]);
+    releases.shift()!();
+    await flush();
+    expect(delays).toEqual([10, 20, 25]);
+    expect(retryTimes).toEqual([110, 120, 125]);
     await supervisor.stop();
-    expect(delays.every(delay => delay >= 0 && delay <= 25)).toBe(true);
+    expect(connects).toBe(3);
   });
 
-  test("stop during an active backoff cancels sleep and prevents connect", async () => {
+  test("terminates with a fixed error when custom sleep fails", async () => {
     let connects = 0;
-    let sleepStarted!: () => void;
-    let aborted = 0;
-    const started = new Promise<void>(resolve => { sleepStarted = resolve; });
+    const statuses: string[] = [];
     const supervisor = new ReconnectSupervisor<string>({
       connect: async () => {
         connects++;
         throw new Error("offline");
       },
       validateHandshake: () => true,
-      baseBackoffMs: 100,
-      maxBackoffMs: 100,
-      random: () => 1,
-      sleep: async (_milliseconds, signal) => {
-        sleepStarted();
-        await new Promise<void>(resolve => signal.addEventListener("abort", () => {
-          aborted++;
-          resolve();
-        }, { once: true }));
-      },
+      baseBackoffMs: 1,
+      maxBackoffMs: 2,
+      sleep: async () => { throw new Error("raw sleep failure"); },
+      onStatusChanged: status => statuses.push(`${status.state}:${status.errorCode ?? "none"}`),
     });
     supervisor.start();
-    await started;
-    await supervisor.stop();
-    expect(supervisor.currentStatus.state).toBe("stopped");
+    await flush();
     expect(connects).toBe(1);
-    expect(aborted).toBe(1);
+    expect(supervisor.currentStatus).toMatchObject({ state: "backoff", retryable: false, errorCode: "sleep_failed" });
+    expect(statuses).not.toContain("backoff:raw sleep failure");
+    await supervisor.stop();
   });
 
-  test("incompatible handshake is terminal and exposes only a fixed error code", async () => {
-    const upstream = fakeUpstream("discarded");
-    let closeCount = 0;
-    upstream.close = () => { closeCount++; };
+  test("validates each handshake once and treats false or throw as terminal", async () => {
+    const candidate = fakeUpstream("discarded");
+    let validations = 0;
     const supervisor = new ReconnectSupervisor<string>({
-      connect: async () => upstream,
-      validateHandshake: () => false,
+      connect: async () => candidate,
+      validateHandshake: () => {
+        validations++;
+        throw new Error("invalid");
+      },
       baseBackoffMs: 1,
       maxBackoffMs: 2,
     });
     supervisor.start();
     await flush();
-    expect(supervisor.currentStatus).toMatchObject({
-      state: "incompatible",
-      retryable: false,
-      errorCode: "handshake_invalid",
-    });
-    expect(supervisor.currentStatus.stage).toBe("handshake");
-    expect(closeCount).toBe(1);
+    expect(validations).toBe(1);
+    expect(supervisor.currentStatus).toMatchObject({ state: "incompatible", errorCode: "handshake_invalid" });
     await supervisor.stop();
+  });
+
+  test("default sleep removes its listener after resolution and abort", async () => {
+    const makeSignal = () => {
+      let aborted = false;
+      const listeners = new Set<() => void>();
+      let addCount = 0;
+      let removeCount = 0;
+      return {
+        get aborted() { return aborted; },
+        get addCount() { return addCount; },
+        get removeCount() { return removeCount; },
+        addEventListener(_type: string, listener: () => void) {
+          addCount++;
+          listeners.add(listener);
+        },
+        removeEventListener(_type: string, listener: () => void) {
+          removeCount++;
+          listeners.delete(listener);
+        },
+        abort() {
+          aborted = true;
+          for (const listener of listeners) listener();
+        },
+      } as unknown as AbortSignal & { addCount: number; removeCount: number; abort: () => void };
+    };
+    const resolvedSignal = makeSignal();
+    await __defaultReconnectSleep(0, resolvedSignal);
+    expect(resolvedSignal.addCount).toBe(1);
+    expect(resolvedSignal.removeCount).toBe(1);
+    resolvedSignal.abort();
+    expect(resolvedSignal.removeCount).toBe(1);
+
+    const abortedSignal = makeSignal();
+    const pending = __defaultReconnectSleep(100, abortedSignal);
+    abortedSignal.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(abortedSignal.addCount).toBe(1);
+    expect(abortedSignal.removeCount).toBe(1);
   });
 });

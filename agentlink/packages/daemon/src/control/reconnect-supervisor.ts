@@ -1,7 +1,23 @@
-export type ReconnectState = "idle" | "connecting" | "ready" | "backoff" | "incompatible" | "stopped";
+export type ReconnectState =
+  | "idle"
+  | "connecting"
+  | "ready"
+  | "backoff"
+  | "incompatible"
+  | "stopped";
 
-export type Handshake = { name: string; version: string; protocolVersion: string };
-export type ReconnectErrorCode = "connect_failed" | "handshake_invalid" | "catalog_load_failed";
+export type Handshake = {
+  name: string;
+  version: string;
+  protocolVersion: string;
+};
+
+export type ReconnectErrorCode =
+  | "connect_failed"
+  | "handshake_invalid"
+  | "catalog_load_failed"
+  | "sleep_failed";
+
 export type ReconnectStatus = {
   state: ReconnectState;
   attempt: number;
@@ -12,15 +28,18 @@ export type ReconnectStatus = {
   nextRetryAt?: number;
   handshake?: Handshake;
 };
+
 export type ReadyUpstreamResult =
   | { ok: true; generation: number }
   | { ok: false; errorCode: "not_ready" | "stopped" };
+
 export type ReconnectUpstream<Catalog> = {
   handshake: Handshake;
   loadCatalog(signal: AbortSignal): Promise<Catalog>;
   close(): void | Promise<void>;
   onClose(callback: () => void): () => void;
 };
+
 export type ReconnectSupervisorOptions<Catalog> = {
   connect(signal: AbortSignal): ReconnectUpstream<Catalog> | Promise<ReconnectUpstream<Catalog>>;
   validateHandshake(handshake: Handshake): boolean;
@@ -34,16 +53,25 @@ export type ReconnectSupervisorOptions<Catalog> = {
 };
 
 const defaultSleep = (milliseconds: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
-  if (signal.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
-  const timer = setTimeout(done, milliseconds);
+  if (signal.aborted) {
+    reject(new DOMException("Aborted", "AbortError"));
+    return;
+  }
+  const timer = setTimeout(onTimer, milliseconds);
   const onAbort = () => {
     clearTimeout(timer);
     signal.removeEventListener("abort", onAbort);
     reject(new DOMException("Aborted", "AbortError"));
   };
-  function done() { signal.removeEventListener("abort", onAbort); resolve(); }
+  function onTimer() {
+    signal.removeEventListener("abort", onAbort);
+    resolve();
+  }
   signal.addEventListener("abort", onAbort, { once: true });
 });
+
+// Internal export keeps the platform sleep primitive directly testable.
+export const __defaultReconnectSleep = defaultSleep;
 
 type Generation<Catalog> = {
   upstream: ReconnectUpstream<Catalog>;
@@ -58,8 +86,15 @@ export class ReconnectSupervisor<Catalog> {
   private state: ReconnectState = "idle";
   private attempt = 0;
   private generation = 0;
-  private status: ReconnectStatus = { state: "idle", attempt: 0, generation: 0, retryable: true, stage: "idle" };
+  private status: ReconnectStatus = {
+    state: "idle",
+    attempt: 0,
+    generation: 0,
+    retryable: true,
+    stage: "idle",
+  };
   private loop: Promise<void> | undefined;
+  private stopPromise: Promise<void> | undefined;
   private stopped = false;
   private runController: AbortController | undefined;
   private activeGeneration: Generation<Catalog> | undefined;
@@ -67,25 +102,57 @@ export class ReconnectSupervisor<Catalog> {
   private readonly closedUpstreams = new WeakSet<object>();
 
   constructor(options: ReconnectSupervisorOptions<Catalog>) {
-    this.options = { ...options, random: options.random ?? Math.random, now: options.now ?? Date.now, sleep: options.sleep ?? defaultSleep };
+    this.options = {
+      ...options,
+      random: options.random ?? Math.random,
+      now: options.now ?? Date.now,
+      sleep: options.sleep ?? defaultSleep,
+    };
   }
-  get currentStatus(): ReconnectStatus { return { ...this.status }; }
-  get currentCatalog(): Catalog | undefined { return this.catalog; }
+
+  get currentStatus(): ReconnectStatus {
+    return { ...this.status };
+  }
+
+  get currentCatalog(): Catalog | undefined {
+    return this.catalog;
+  }
+
   start(): void {
     if (this.stopped || this.loop) return;
-    this.loop = this.run().finally(() => { this.loop = undefined; });
+    const runPromise = Promise.resolve().then(() => this.run());
+    this.loop = runPromise.finally(() => {
+      this.loop = undefined;
+    });
   }
+
   stop(): Promise<void> {
-    if (this.stopped) return this.loop ?? Promise.resolve();
+    if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
     this.runController?.abort();
-    this.publish({ state: "stopped", attempt: this.attempt, generation: this.generation, retryable: false, stage: "stopped" });
+    this.publish({
+      state: "stopped",
+      attempt: this.attempt,
+      generation: this.generation,
+      retryable: false,
+      stage: "stopped",
+    });
     const loop = this.loop;
-    return (async () => { await loop; await this.closeActive(); })();
+    this.stopPromise = (async () => {
+      await loop;
+      await this.closeActive();
+    })();
+    return this.stopPromise;
   }
-  close(): Promise<void> { return this.stop(); }
 
-  withReadyUpstream(stage: string, callback: (upstream: ReconnectUpstream<Catalog>) => void): ReadyUpstreamResult {
+  close(): Promise<void> {
+    return this.stop();
+  }
+
+  withReadyUpstream(
+    stage: string,
+    callback: (upstream: ReconnectUpstream<Catalog>) => void,
+  ): ReadyUpstreamResult {
     void stage;
     const generation = this.activeGeneration;
     if (!generation || generation.closed || this.state !== "ready") {
@@ -102,114 +169,219 @@ export class ReconnectSupervisor<Catalog> {
       let stage = "connect";
       let upstream: ReconnectUpstream<Catalog> | undefined;
       try {
-        this.publish({ state: "connecting", attempt: this.attempt, generation: this.generation, retryable: true, stage });
+        this.publish({
+          state: "connecting",
+          attempt: this.attempt,
+          generation: this.generation,
+          retryable: true,
+          stage,
+        });
         upstream = await this.options.connect(signal);
-        if (signal.aborted || this.stopped) { await this.closeOnce(upstream); break; }
-        stage = "handshake";
-        this.publish({ state: "connecting", attempt: this.attempt, generation: this.generation, retryable: true, stage, handshake: upstream.handshake });
-        let compatible = false;
-        try { compatible = this.options.validateHandshake(upstream.handshake); } catch { compatible = false; }
-        if (!compatible) {
+        if (signal.aborted || this.stopped) {
           await this.closeOnce(upstream);
-          this.publish({ state: "incompatible", attempt: this.attempt, generation: this.generation, retryable: false, stage, errorCode: "handshake_invalid", handshake: upstream.handshake });
           break;
         }
-        stage = "catalog";
-        const catalog = await upstream.loadCatalog(signal);
-        if (signal.aborted || this.stopped) { await this.closeOnce(upstream); break; }
 
-        const current: Generation<Catalog> = { upstream, number: this.generation + 1, closed: false };
-        this.activeGeneration = current;
-        this.generation = current.number;
-        this.attempt = 0;
-        this.catalog = catalog;
+        stage = "handshake";
+        this.publish({
+          state: "connecting",
+          attempt: this.attempt,
+          generation: this.generation,
+          retryable: true,
+          stage,
+          handshake: upstream.handshake,
+        });
+        let validHandshake = false;
+        try {
+          validHandshake = this.options.validateHandshake(upstream.handshake);
+        } catch {
+          validHandshake = false;
+        }
+        if (!validHandshake) {
+          await this.closeOnce(upstream);
+          this.publish({
+            state: "incompatible",
+            attempt: this.attempt,
+            generation: this.generation,
+            retryable: false,
+            stage,
+            errorCode: "handshake_invalid",
+          });
+          break;
+        }
+
+        stage = "catalog";
+        const candidateCatalog = await upstream.loadCatalog(signal);
+        if (signal.aborted || this.stopped) {
+          await this.closeOnce(upstream);
+          break;
+        }
+
+        const candidate: Generation<Catalog> = {
+          upstream,
+          number: this.generation + 1,
+          closed: false,
+        };
         let closeNotified = false;
         let releaseGenerationWait: (() => void) | undefined;
         const notifyClose = () => {
-          if (closeNotified || current.closed) return;
+          if (closeNotified || candidate.closed) return;
           closeNotified = true;
-          current.closed = true;
-          if (this.activeGeneration === current) this.activeGeneration = undefined;
+          candidate.closed = true;
+          if (this.activeGeneration === candidate) this.activeGeneration = undefined;
           releaseGenerationWait?.();
         };
-        current.unsubscribe = upstream.onClose(notifyClose);
-        if (current.closed || signal.aborted || this.stopped) {
-          await this.endGeneration(current);
-          if (this.stopped) break;
-          await this.backoff("closed");
+
+        try {
+          candidate.unsubscribe = upstream.onClose(notifyClose);
+        } catch {
+          await this.closeOnce(upstream);
+          if (this.stopped || signal.aborted) break;
+          if (!(await this.backoff("catalog", "catalog_load_failed"))) break;
           continue;
         }
 
-        // State is committed before observers run, so catalog and status are coherent.
-        this.publish({ state: "ready", attempt: 0, generation: current.number, retryable: true, stage: "ready", handshake: upstream.handshake });
-        this.safeCall(this.options.onCatalogChanged, catalog);
+        if (candidate.closed || signal.aborted || this.stopped) {
+          await this.endGeneration(candidate);
+          if (this.stopped) break;
+          if (!(await this.backoff("closed"))) break;
+          continue;
+        }
+
+        // Commit catalog, active generation, generation, and attempt together.
+        this.activeGeneration = candidate;
+        this.generation = candidate.number;
+        this.attempt = 0;
+        this.catalog = candidateCatalog;
+        this.publish({
+          state: "ready",
+          attempt: 0,
+          generation: candidate.number,
+          retryable: true,
+          stage: "ready",
+          handshake: upstream.handshake,
+        });
+
+        // A ready observer may synchronously stop or invalidate this generation.
+        if (
+          this.stopped ||
+          candidate.closed ||
+          this.activeGeneration !== candidate ||
+          this.state !== "ready"
+        ) {
+          await this.endGeneration(candidate);
+          if (this.stopped) break;
+          if (!(await this.backoff("closed"))) break;
+          continue;
+        }
+        this.safeCall(this.options.onCatalogChanged, candidateCatalog);
+
         let onGenerationAbort: (() => void) | undefined;
         await new Promise<void>(resolve => {
-          if (this.stopped || current.closed || signal.aborted) return resolve();
+          if (this.stopped || candidate.closed || signal.aborted) {
+            resolve();
+            return;
+          }
           releaseGenerationWait = resolve;
           onGenerationAbort = resolve;
           signal.addEventListener("abort", onGenerationAbort, { once: true });
         });
         if (onGenerationAbort) signal.removeEventListener("abort", onGenerationAbort);
         releaseGenerationWait = undefined;
-        await this.endGeneration(current);
+        await this.endGeneration(candidate);
         if (this.stopped) break;
-        await this.backoff("closed");
+        if (!(await this.backoff("closed"))) break;
       } catch {
         if (upstream) await this.closeOnce(upstream);
         if (this.stopped || signal.aborted) break;
-        const errorCode = this.errorCode(upstream, stage);
-        if (errorCode === "handshake_invalid") {
-          this.publish({ state: "incompatible", attempt: this.attempt, generation: this.generation, retryable: false, stage: "handshake", errorCode });
-          break;
-        }
-        await this.backoff(stage === "catalog" ? "catalog" : "backoff", errorCode);
-      } finally { this.runController = undefined; }
+        if (!(await this.backoff(stage === "catalog" ? "catalog" : "backoff", stage === "catalog" ? "catalog_load_failed" : "connect_failed"))) break;
+      } finally {
+        this.runController = undefined;
+      }
     }
   }
 
-  private async backoff(stage: string, errorCode?: ReconnectErrorCode): Promise<void> {
+  private async backoff(stage: string, errorCode?: ReconnectErrorCode): Promise<boolean> {
     this.attempt++;
-    const exponential = Math.min(this.options.maxBackoffMs, this.options.baseBackoffMs * 2 ** Math.max(0, this.attempt - 1));
+    const exponential = Math.min(
+      this.options.maxBackoffMs,
+      this.options.baseBackoffMs * 2 ** Math.max(0, this.attempt - 1),
+    );
     let jitter = 0;
-    try { jitter = this.options.random(); } catch { jitter = 0; }
+    try {
+      jitter = this.options.random();
+    } catch {
+      jitter = 0;
+    }
     jitter = Math.max(0, Math.min(1, Number.isFinite(jitter) ? jitter : 0));
     const delay = Math.min(this.options.maxBackoffMs, exponential * jitter);
-    this.publish({ state: "backoff", attempt: this.attempt, generation: this.generation, retryable: true, stage, errorCode, nextRetryAt: this.options.now() + delay });
+    this.publish({
+      state: "backoff",
+      attempt: this.attempt,
+      generation: this.generation,
+      retryable: true,
+      stage,
+      errorCode,
+      nextRetryAt: this.options.now() + delay,
+    });
     const signal = this.runController?.signal;
-    if (!signal) return;
-    try { await this.options.sleep(delay, signal); } catch { /* stop aborts the configured sleep */ }
+    if (!signal) return true;
+    try {
+      await this.options.sleep(delay, signal);
+      return true;
+    } catch {
+      if (this.stopped || signal.aborted) return true;
+      this.publish({
+        state: "backoff",
+        attempt: this.attempt,
+        generation: this.generation,
+        retryable: false,
+        stage: "backoff",
+        errorCode: "sleep_failed",
+      });
+      return false;
+    }
   }
 
-  private errorCode(upstream: ReconnectUpstream<Catalog> | undefined, stage: string): ReconnectErrorCode {
-    if (upstream) {
-      try { if (!this.options.validateHandshake(upstream.handshake)) return "handshake_invalid"; } catch { return "handshake_invalid"; }
-    }
-    return stage === "catalog" ? "catalog_load_failed" : "connect_failed";
-  }
   private publish(status: ReconnectStatus): void {
     this.status = status;
     this.state = status.state;
     this.safeCall(this.options.onStatusChanged, { ...status });
   }
+
   private safeCall<T>(callback: ((value: T) => void) | undefined, value: T): void {
-    try { callback?.(value); } catch { /* consumer failures do not affect supervision */ }
+    try {
+      callback?.(value);
+    } catch {
+      // Observer and operation failures must not affect supervision.
+    }
   }
+
   private async endGeneration(generation: Generation<Catalog>): Promise<void> {
     generation.closed = true;
     if (this.activeGeneration === generation) this.activeGeneration = undefined;
     const unsubscribe = generation.unsubscribe;
     generation.unsubscribe = undefined;
-    try { unsubscribe?.(); } catch { /* cleanup failures are deliberately hidden */ }
+    try {
+      unsubscribe?.();
+    } catch {
+      // Cleanup failures are deliberately hidden.
+    }
     await this.closeOnce(generation.upstream);
   }
+
   private async closeActive(): Promise<void> {
     const generation = this.activeGeneration;
     if (generation) await this.endGeneration(generation);
   }
+
   private async closeOnce(upstream: ReconnectUpstream<Catalog>): Promise<void> {
     if (this.closedUpstreams.has(upstream)) return;
     this.closedUpstreams.add(upstream);
-    try { await upstream.close(); } catch { /* shutdown errors are deliberately hidden */ }
+    try {
+      await upstream.close();
+    } catch {
+      // Shutdown errors are deliberately hidden.
+    }
   }
 }
