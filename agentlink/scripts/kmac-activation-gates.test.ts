@@ -338,7 +338,6 @@ describe("KMac activation gates", () => {
     expect(handoff).toContain("launchctl bootout");
     expect(handoff).toContain("reverse-tunnel-plist.absent");
     expect(handoff).toContain("unloaded_not_proven");
-    expect(handoff).toContain("TCP[[:space:]]+127\\.0\\.0\\.1:[0-9]+->127\\.0\\.0\\.1:22");
     expect(handoff.indexOf("reverse_plist_sha256_mismatch")).toBeLessThan(
       handoff.indexOf("handoff_attempted=1\nstop_manual"),
     );
@@ -353,7 +352,7 @@ describe("KMac activation gates", () => {
     expect(handoff).toContain('current_status" == status=STARTED');
   });
 
-  test("matches macOS lsof ESTABLISHED sockets with portable literal parentheses", () => {
+  test("identifies the manual tunnel without a forwarded client socket", () => {
     const handoff = readFileSync(join(import.meta.dir,
       "../deploy/handoff-kmac-reverse-tunnel.sh"), "utf8");
     const identityStart = handoff.indexOf("manual_identity_for_pid() {");
@@ -361,19 +360,44 @@ describe("KMac activation gates", () => {
     expect(identityStart).toBeGreaterThan(-1);
     expect(identityEnd).toBeGreaterThan(identityStart);
     const identity = handoff.slice(identityStart, identityEnd + 2);
-    const socketPattern = identity.match(/\/usr\/bin\/grep -Eq '([^']+)'/)?.[1] ?? "";
+    expect(identity).toContain('local pid="$1" command');
+    expect(identity).toContain('/bin/kill -0 "$pid" 2>/dev/null');
+    expect(identity).toContain('command="$(manual_command "$pid")"');
+    expect(identity).toContain('[[ "$command" == "$EXPECTED_MANUAL_COMMAND" ]]');
+    expect(identity).not.toContain("lsof");
+    expect(identity).not.toContain("ESTABLISHED");
 
-    expect(socketPattern).toBe(
-      "TCP[[:space:]]+127\\.0\\.0\\.1:[0-9]+->127\\.0\\.0\\.1:22[[:space:]]+[(]ESTABLISHED[)]$",
-    );
-    expect(socketPattern).not.toContain("\\(ESTABLISHED\\)$");
-
-    const result = spawnSync("/usr/bin/grep", ["-Eq", socketPattern], {
-      input: "  TCP 127.0.0.1:54321->127.0.0.1:22 (ESTABLISHED)\n",
+    const result = spawnSync("/bin/bash", [
+      "-c",
+      [
+        "set -u",
+        'EXPECTED_MANUAL_COMMAND="fixed-manual-command"',
+        'manual_command() { printf "%s\\n" "$EXPECTED_MANUAL_COMMAND"; }',
+        identity,
+        'manual_identity_for_pid "$$"',
+      ].join("\n"),
+      "manual-identity-regression",
+    ], {
       encoding: "utf8",
     });
     expect(result.status).toBe(0);
     expect(result.error).toBeUndefined();
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+
+    const identityCheck = handoff.indexOf(
+      'manual_identity_for_pid "$EXPECTED_MANUAL_PID" || fail_precondition manual_tunnel_identity',
+    );
+    const healthCheck = handoff.indexOf(
+      'seoul_tunnel_health || fail_precondition seoul_tunnel_health',
+      identityCheck,
+    );
+    const handoffAttempt = handoff.indexOf("\nhandoff_attempted=1\n", healthCheck);
+    const stopManual = handoff.indexOf("\nstop_manual\n", handoffAttempt);
+    expect(identityCheck).toBeGreaterThan(-1);
+    expect(healthCheck).toBeGreaterThan(identityCheck);
+    expect(handoffAttempt).toBeGreaterThan(healthCheck);
+    expect(stopManual).toBeGreaterThan(handoffAttempt);
   });
 
   test("dispatches only the fixed detached handoff worker", () => {
