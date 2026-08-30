@@ -40,8 +40,11 @@ export type ReconnectUpstream<Catalog> = {
   onClose(callback: () => void): () => void;
 };
 
-export type ReconnectSupervisorOptions<Catalog> = {
-  connect(signal: AbortSignal): ReconnectUpstream<Catalog> | Promise<ReconnectUpstream<Catalog>>;
+export type ReconnectSupervisorOptions<
+  Catalog,
+  Upstream extends ReconnectUpstream<Catalog> = ReconnectUpstream<Catalog>,
+> = {
+  connect(signal: AbortSignal): Upstream | Promise<Upstream>;
   validateHandshake(handshake: Handshake): boolean;
   baseBackoffMs: number;
   maxBackoffMs: number;
@@ -73,16 +76,24 @@ const defaultSleep = (milliseconds: number, signal: AbortSignal) => new Promise<
 // Internal export keeps the platform sleep primitive directly testable.
 export const __defaultReconnectSleep = defaultSleep;
 
-type Generation<Catalog> = {
-  upstream: ReconnectUpstream<Catalog>;
+type Generation<Catalog, Upstream extends ReconnectUpstream<Catalog>> = {
+  upstream: Upstream;
   number: number;
   closed: boolean;
   unsubscribe?: () => void;
 };
 
-export class ReconnectSupervisor<Catalog> {
-  private readonly options: Required<Omit<ReconnectSupervisorOptions<Catalog>, "connect" | "validateHandshake" | "onCatalogChanged" | "onStatusChanged">> &
-    Pick<ReconnectSupervisorOptions<Catalog>, "connect" | "validateHandshake" | "onCatalogChanged" | "onStatusChanged">;
+type ResolvedReconnectSupervisorOptions<
+  Catalog,
+  Upstream extends ReconnectUpstream<Catalog>,
+> = Omit<ReconnectSupervisorOptions<Catalog, Upstream>, "random" | "now" | "sleep"> & {
+  random: () => number;
+  now: () => number;
+  sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+};
+
+export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Catalog> = ReconnectUpstream<Catalog>> {
+  private readonly options: ResolvedReconnectSupervisorOptions<Catalog, Upstream>;
   private state: ReconnectState = "idle";
   private attempt = 0;
   private generation = 0;
@@ -97,11 +108,11 @@ export class ReconnectSupervisor<Catalog> {
   private stopPromise: Promise<void> | undefined;
   private stopped = false;
   private runController: AbortController | undefined;
-  private activeGeneration: Generation<Catalog> | undefined;
+  private activeGeneration: Generation<Catalog, Upstream> | undefined;
   private catalog: Catalog | undefined;
   private readonly closedUpstreams = new WeakSet<object>();
 
-  constructor(options: ReconnectSupervisorOptions<Catalog>) {
+  constructor(options: ReconnectSupervisorOptions<Catalog, Upstream>) {
     this.options = {
       ...options,
       random: options.random ?? Math.random,
@@ -164,7 +175,7 @@ export class ReconnectSupervisor<Catalog> {
 
   withReadyUpstream(
     stage: string,
-    callback: (upstream: ReconnectUpstream<Catalog>) => void,
+    callback: (upstream: Upstream) => void,
   ): ReadyUpstreamResult {
     void stage;
     const generation = this.activeGeneration;
@@ -180,7 +191,7 @@ export class ReconnectSupervisor<Catalog> {
       this.runController = new AbortController();
       const signal = this.runController.signal;
       let stage = "connect";
-      let upstream: ReconnectUpstream<Catalog> | undefined;
+      let upstream: Upstream | undefined;
       try {
         this.publish({
           state: "connecting",
@@ -230,7 +241,7 @@ export class ReconnectSupervisor<Catalog> {
           break;
         }
 
-        const candidate: Generation<Catalog> = {
+        const candidate: Generation<Catalog, Upstream> = {
           upstream,
           number: this.generation + 1,
           closed: false,
@@ -370,7 +381,7 @@ export class ReconnectSupervisor<Catalog> {
     }
   }
 
-  private async endGeneration(generation: Generation<Catalog>): Promise<void> {
+  private async endGeneration(generation: Generation<Catalog, Upstream>): Promise<void> {
     generation.closed = true;
     if (this.activeGeneration === generation) this.activeGeneration = undefined;
     const unsubscribe = generation.unsubscribe;
@@ -388,7 +399,7 @@ export class ReconnectSupervisor<Catalog> {
     if (generation) await this.endGeneration(generation);
   }
 
-  private async closeOnce(upstream: ReconnectUpstream<Catalog>): Promise<void> {
+  private async closeOnce(upstream: Upstream): Promise<void> {
     if (this.closedUpstreams.has(upstream)) return;
     this.closedUpstreams.add(upstream);
     try {

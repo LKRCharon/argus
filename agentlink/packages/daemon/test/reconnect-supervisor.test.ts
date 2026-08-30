@@ -14,6 +14,29 @@ const flush = async () => {
   await Bun.sleep(0);
 };
 
+function deferredSleep() {
+  const pending: Array<() => void> = [];
+  return {
+    sleep: async (_milliseconds: number, signal: AbortSignal) => {
+      if (signal.aborted) return;
+      await new Promise<void>(resolve => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener("abort", finish);
+          const index = pending.indexOf(finish);
+          if (index >= 0) pending.splice(index, 1);
+          resolve();
+        };
+        pending.push(finish);
+        signal.addEventListener("abort", finish, { once: true });
+      });
+    },
+    release: () => pending.shift()?.(),
+  };
+}
+
 type FakeOptions = {
   close?: () => void | Promise<void>;
   loadCatalog?: () => Promise<string>;
@@ -60,12 +83,13 @@ async function readySupervisor(
   upstream: FakeUpstream,
   overrides: Partial<ConstructorParameters<typeof ReconnectSupervisor<string>>[0]> = {},
 ) {
+  const backoff = deferredSleep();
   const supervisor = new ReconnectSupervisor<string>({
     connect: async () => upstream,
     validateHandshake: () => true,
     baseBackoffMs: 10,
     maxBackoffMs: 100,
-    sleep: async () => {},
+    sleep: backoff.sleep,
     ...overrides,
   });
   supervisor.start();
@@ -87,7 +111,7 @@ describe("ReconnectSupervisor", () => {
       validateHandshake: () => true,
       baseBackoffMs: 10,
       maxBackoffMs: 100,
-      sleep: async () => {},
+      sleep: deferredSleep().sleep,
       onStatusChanged: status => {
         if (status.state === "ready") observations.push(`status:${supervisor.currentCatalog}:${status.generation}`);
       },
@@ -107,7 +131,7 @@ describe("ReconnectSupervisor", () => {
       validateHandshake: () => true,
       baseBackoffMs: 1,
       maxBackoffMs: 2,
-      sleep: async () => {},
+      sleep: deferredSleep().sleep,
     });
     let calls = 0;
     expect(supervisor.withReadyUpstream("send", () => { calls++; })).toEqual({ ok: false, errorCode: "not_ready" });
@@ -138,7 +162,7 @@ describe("ReconnectSupervisor", () => {
     let connects = 0;
     const supervisor = await readySupervisor(first, {
       connect: async () => (++connects === 1 ? first : second),
-      sleep: async () => {},
+      sleep: deferredSleep().sleep,
     });
     let calls = 0;
     const result = supervisor.withReadyUpstream("send", active => {
@@ -165,9 +189,10 @@ describe("ReconnectSupervisor", () => {
       const closed = new Promise<void>(resolve => { closedStatus = resolve; });
       const catalogs: string[] = [];
       const statuses: string[] = [];
+      const backoff = deferredSleep();
       const supervisor = await readySupervisor(stable, {
         connect: async () => (++connects === 1 ? stable : candidate),
-        sleep: async () => {},
+        sleep: backoff.sleep,
         onStatusChanged: status => {
           statuses.push(`${status.state}:${status.generation}:${status.stage}`);
           if (connects > 1 && status.state === "backoff") {
@@ -178,6 +203,8 @@ describe("ReconnectSupervisor", () => {
         onCatalogChanged: catalog => catalogs.push(catalog),
       });
       stable.emitClose();
+      await flush();
+      backoff.release();
       await closed;
       await supervisor.stop();
       expect(supervisor.currentCatalog).toBe("stable");
@@ -207,7 +234,7 @@ describe("ReconnectSupervisor", () => {
       validateHandshake: () => true,
       baseBackoffMs: 1,
       maxBackoffMs: 1,
-      sleep: async () => {},
+      sleep: deferredSleep().sleep,
       onCatalogChanged: catalog => catalogs.push(catalog),
       onStatusChanged: status => {
         if (status.state === "ready") {

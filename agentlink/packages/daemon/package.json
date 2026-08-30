@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
-    "mcp": "bun run src/control/mcp.ts"
+    "mcp": "bun run src/control/mcp.ts",
+    "mcp:proxy": "bun run src/control/mcp-proxy.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

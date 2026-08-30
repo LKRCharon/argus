@@ -12,6 +12,7 @@
     "daemon": "bun run packages/daemon/src/index.ts",
     "control": "bun run packages/daemon/src/index.ts control",
     "mcp": "bun run --filter @agentlink/daemon mcp",
+    "mcp:proxy": "bun run --filter @agentlink/daemon mcp:proxy",
     "dev": "bun run --filter @agentlink/app dev",
     "build:app": "bun run --filter @agentlink/app build",
     "release:manifest": "bun run scripts/release-manifest.ts",
