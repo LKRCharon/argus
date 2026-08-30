@@ -277,11 +277,14 @@ target signing material. Use an SSH local forward to view it remotely:
 ssh -N -L 8790:127.0.0.1:8790 seoul
 ```
 
-Seoul port `22022` is intentionally not listening and is not part of the Mesh
-health contract. Do not configure a reverse SSH listener, change `sshd`, alter a
-firewall, or install keys as part of normal source or result delivery. Enabling
-such a bootstrap path requires separate explicit authorization; its absence does
-not degrade the paired AgentLink path.
+Seoul port `22022` is not part of the Mesh health contract. A separately
+authorized break-glass tunnel may bind `127.0.0.1:22022` on Seoul and forward
+to KMac SSH, but normal source and result delivery still use paired AgentLink.
+Health for that tunnel is checked independently at the KMac SSH endpoint, the
+forward process and Seoul loopback listener, and an end-to-end SSH banner
+readback. Do not change `sshd`, firewall rules, accounts, keys, or tunnel
+processes as part of Mesh operation, and never place the KMac login private key
+on Seoul.
 
 The current Seoul deployment is available at `/mesh` through an SSH local
 forward. It keeps the HTTP listener private and has been verified against an

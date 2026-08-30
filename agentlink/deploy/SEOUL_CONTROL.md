@@ -162,11 +162,16 @@ outer timeout.
 ## KMac connectivity
 
 The supported KMac path is its outbound, paired AgentLink connection to the
-relay. Seoul port `22022` is currently not listening and must be reported as
-disabled in health checks. Normal task input and result retrieval do not depend
-on reverse SSH, SCP, rsync, or a shared checkout.
+relay. Normal task input and result retrieval do not depend on reverse SSH,
+SCP, rsync, or a shared checkout.
 
-Do not modify `sshd`, firewall rules, accounts, or keys to enable `22022` as part
-of Mesh operation. A separate bootstrap tunnel can be considered only after
-explicit authorization and its own security review; it is not a fallback for a
-failed AgentLink peer.
+As of 2026-08-30, a separately authorized break-glass tunnel binds only Seoul
+`127.0.0.1:22022` and forwards to KMac `127.0.0.1:22`. It is not a Mesh health
+dependency. Its three fixed checks are the KMac SSH banner, the local forward
+process plus Seoul loopback listener, and the KMac banner read back through
+Seoul. See [`KMAC_READINESS.md`](KMAC_READINESS.md).
+
+Windows may use Seoul as a ProxyCommand hop to that loopback port, but the
+end-to-end KMac login still uses the Windows-held key. Never copy a KMac or
+Windows private key to Seoul. Do not modify `sshd`, firewall rules, accounts,
+keys, or the running tunnel as part of normal Mesh operation.

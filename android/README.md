@@ -16,10 +16,19 @@ endpoint, or release-signing material.
 Use JDK 17 and an Android SDK with API 35 installed:
 
 ```bash
-export JAVA_HOME=/path/to/jdk-17
-export ANDROID_HOME=/path/to/android-sdk
+./scripts/bootstrap-sdk.sh
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export ANDROID_HOME="$HOME/Library/Android/sdk"
 ./gradlew assembleDebug
 ```
+
+The bootstrap enforces at least 12 GiB free space, installs only Homebrew's
+Android command-line tools when needed, and requests only `platform-tools`,
+`platforms;android-35`, and `build-tools;35.0.0`. It never installs Android
+Studio, an emulator, or a system image. It also never accepts a license: when
+the SDK root has no prior acceptance, it exits with `NEED_ANDROID_LICENSE`
+before requesting SDK packages. Use `./scripts/bootstrap-sdk.sh --check` for a
+read-only probe.
 
 Install a locally built debug APK without clearing pairing data:
 
