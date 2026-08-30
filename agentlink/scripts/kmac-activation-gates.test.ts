@@ -353,6 +353,29 @@ describe("KMac activation gates", () => {
     expect(handoff).toContain('current_status" == status=STARTED');
   });
 
+  test("matches macOS lsof ESTABLISHED sockets with portable literal parentheses", () => {
+    const handoff = readFileSync(join(import.meta.dir,
+      "../deploy/handoff-kmac-reverse-tunnel.sh"), "utf8");
+    const identityStart = handoff.indexOf("manual_identity_for_pid() {");
+    const identityEnd = handoff.indexOf("\n}\n\nlaunchd_running_pid()", identityStart);
+    expect(identityStart).toBeGreaterThan(-1);
+    expect(identityEnd).toBeGreaterThan(identityStart);
+    const identity = handoff.slice(identityStart, identityEnd + 2);
+    const socketPattern = identity.match(/\/usr\/bin\/grep -Eq '([^']+)'/)?.[1] ?? "";
+
+    expect(socketPattern).toBe(
+      "TCP[[:space:]]+127\\.0\\.0\\.1:[0-9]+->127\\.0\\.0\\.1:22[[:space:]]+[(]ESTABLISHED[)]$",
+    );
+    expect(socketPattern).not.toContain("\\(ESTABLISHED\\)$");
+
+    const result = spawnSync("/usr/bin/grep", ["-Eq", socketPattern], {
+      input: "  TCP 127.0.0.1:54321->127.0.0.1:22 (ESTABLISHED)\n",
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(result.error).toBeUndefined();
+  });
+
   test("dispatches only the fixed detached handoff worker", () => {
     const dispatcher = readFileSync(join(import.meta.dir,
       "../deploy/dispatch-kmac-reverse-tunnel.sh"), "utf8");

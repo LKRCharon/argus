@@ -143,7 +143,7 @@ manual_identity_for_pid() {
   [[ "$command" == "$EXPECTED_MANUAL_COMMAND" ]] || return 1
   sockets="$(/usr/sbin/lsof -nP -a -p "$pid" -iTCP 2>/dev/null | /usr/bin/head -c 16384 || true)"
   [[ "${#sockets}" -le 16384 ]] || return 1
-  printf '%s\n' "$sockets" | /usr/bin/grep -Eq 'TCP[[:space:]]+127\.0\.0\.1:[0-9]+->127\.0\.0\.1:22[[:space:]]+\(ESTABLISHED\)$'
+  printf '%s\n' "$sockets" | /usr/bin/grep -Eq 'TCP[[:space:]]+127\.0\.0\.1:[0-9]+->127\.0\.0\.1:22[[:space:]]+[(]ESTABLISHED[)]$'
 }
 
 launchd_running_pid() {
