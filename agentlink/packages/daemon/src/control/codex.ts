@@ -61,7 +61,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_EVENTS_PER_PEER = 500;
 const DEFAULT_MAX_APPROVALS_PER_PEER = 100;
 const MAX_REMOTE_ERROR_CHARS = 512;
-const DURABLE_START_RESPONSE_MARGIN_MS = 250;
+const DURABLE_START_RESPONSE_GRACE_MS = 1_000;
 
 export class CodexGatewayError extends Error {
   constructor(
@@ -244,9 +244,11 @@ export class CodexPeerGateway {
     const deadlineAt = options.deadlineAt ?? Date.now() + this.requestTimeoutMs;
     const deadlineRemaining = deadlineAt - Date.now();
     const requestBudget = options.durableStart
-      ? Math.max(1, deadlineRemaining - DURABLE_START_RESPONSE_MARGIN_MS)
+      ? Math.max(1, deadlineRemaining + DURABLE_START_RESPONSE_GRACE_MS)
       : this.requestTimeoutMs;
-    const remaining = Math.min(requestBudget, deadlineRemaining);
+    const remaining = options.durableStart
+      ? requestBudget
+      : Math.min(requestBudget, deadlineRemaining);
     if (remaining <= 0) {
       throw new CodexGatewayError("controller deadline elapsed before dispatch", "controller", true, true);
     }

@@ -196,15 +196,15 @@ describe("CodexPeerGateway", () => {
     }
   });
 
-  test("uses the durable deadline only for new-session requests", async () => {
+  test("keeps a bounded response grace after the durable deadline", async () => {
     const durable = new CodexPeerGateway(async () => undefined, { requestTimeoutMs: 30_000 });
     const durableStartedAt = Date.now();
     await expect(durable.startThread("mac-node", "start", undefined, {
       deadlineAt: durableStartedAt + 350,
       controlRequestId: "codex:durable-deadline",
     })).rejects.toMatchObject({ stage: "watcher", timedOut: true });
-    expect(Date.now() - durableStartedAt).toBeGreaterThanOrEqual(50);
-    expect(Date.now() - durableStartedAt).toBeLessThan(350);
+    expect(Date.now() - durableStartedAt).toBeGreaterThanOrEqual(1_000);
+    expect(Date.now() - durableStartedAt).toBeLessThan(1_500);
 
     const ordinary = new CodexPeerGateway(async () => undefined, { requestTimeoutMs: 60 });
     const ordinaryStartedAt = Date.now();

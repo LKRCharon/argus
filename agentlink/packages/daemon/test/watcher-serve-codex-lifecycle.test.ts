@@ -32,7 +32,19 @@ class FakeConn {
   }
 }
 
-function fakeServer(state: { turns: number; stopped: boolean; concurrent: number; maxConcurrent: number }, startThreadDelay = 60): CodexAppServer {
+function fakeServer(
+  state: {
+    turns: number;
+    stopped: boolean;
+    concurrent: number;
+    maxConcurrent: number;
+    startThreads?: number;
+    methodOrder?: string[];
+    rejectStartThread?: boolean;
+  },
+  startThreadDelay = 60,
+  resumeDelay = 0,
+): CodexAppServer {
   const server = {
     async start() {},
     async stop() { state.stopped = true; },
@@ -41,9 +53,14 @@ function fakeServer(state: { turns: number; stopped: boolean; concurrent: number
       timeoutMs: number,
       onLateThread?: (threadId: string) => void,
     ): Promise<string> {
+      state.startThreads = (state.startThreads ?? 0) + 1;
       state.concurrent += 1;
       state.maxConcurrent = Math.max(state.maxConcurrent, state.concurrent);
       try {
+        if (state.rejectStartThread) {
+          await Bun.sleep(startThreadDelay);
+          throw new Error("thread/start rejected after stop");
+        }
         if (startThreadDelay > timeoutMs) {
           await Bun.sleep(timeoutMs);
           setTimeout(() => onLateThread?.("late-thread"), 10);
@@ -55,11 +72,17 @@ function fakeServer(state: { turns: number; stopped: boolean; concurrent: number
         state.concurrent -= 1;
       }
     },
-    async startTurn(): Promise<string> {
+    async startTurn(_threadId: string, text: string): Promise<string> {
       state.turns += 1;
+      state.methodOrder?.push(`startTurn:${text}`);
       return "unexpected-turn";
     },
-    async resume(): Promise<{ canAcceptDirectInput: boolean }> {
+    async steerTurn(_threadId: string, _turnId: string, text: string): Promise<void> {
+      state.methodOrder?.push(`steerTurn:${text}`);
+    },
+    async resume(threadId: string): Promise<{ canAcceptDirectInput: boolean }> {
+      state.methodOrder?.push(`resume:${threadId}`);
+      if (resumeDelay > 0) await Bun.sleep(resumeDelay);
       return { canAcceptDirectInput: true };
     },
     async listThreads(): Promise<unknown[]> {
@@ -175,11 +198,11 @@ test("serveWatch returns a correlated new-session acknowledgement with its threa
   controls.stop();
 });
 
-test("serveWatch keeps non-start Codex commands ordered", async () => {
+test("serveWatch keeps same-session resume, start, and steer commands ordered", async () => {
   const conn = new FakeConn();
   const chan = new SecureChannel(new Uint8Array(32).fill(7));
-  const state = { turns: 0, stopped: false, concurrent: 0, maxConcurrent: 0 };
-  const server = fakeServer(state, 20);
+  const state = { turns: 0, stopped: false, concurrent: 0, maxConcurrent: 0, methodOrder: [] as string[] };
+  const server = fakeServer(state, 20, 40);
   const controls = await serveWatch(conn as unknown as WsConn, chan, {
     meshStrict: true,
     meshRemoteCodexControl: true,
@@ -195,6 +218,7 @@ test("serveWatch keeps non-start Codex commands ordered", async () => {
     }) } });
   };
   await request("codex:input-1", "first");
+  await Bun.sleep(5);
   await request("codex:input-2", "second");
   const acks = new Set<string>();
   await waitFor(conn.sent, async (frame) => {
@@ -202,8 +226,38 @@ test("serveWatch keeps non-start Codex commands ordered", async () => {
     if (payload.kind === "input-ack" && payload.controlRequestId) acks.add(String(payload.controlRequestId));
     return acks.size === 2;
   });
-  expect([...acks]).toEqual(["codex:input-1", "codex:input-2"]);
-  expect(state.turns).toBe(2);
+  expect([...acks].sort()).toEqual(["codex:input-1", "codex:input-2"]);
+  expect(state.turns).toBe(1);
+  expect(state.methodOrder).toEqual([
+    "resume:thread-ordered",
+    "startTurn:first",
+    "resume:thread-ordered",
+    "steerTurn:second",
+  ]);
+  controls.stop();
+});
+
+test("serveWatch preserves the legacy acknowledgement when Codex start is overloaded", async () => {
+  const conn = new FakeConn();
+  const chan = new SecureChannel(new Uint8Array(32).fill(5));
+  const state = { turns: 0, stopped: false, concurrent: 0, maxConcurrent: 0 };
+  const controls = await serveWatch(conn as unknown as WsConn, chan, {
+    meshStrict: true,
+    meshLegacyControl: true,
+    meshRemoteCodexControl: true,
+    disableHookServer: true,
+    codexServerFactory: () => fakeServer(state, 80),
+  });
+  for (let index = 1; index <= 3; index += 1) {
+    conn.push({ op: "chan-data", data: { enc: await chan.seal({
+      kind: "new-session", agent: "codex", text: `legacy-${index}`, deadlineAt: Date.now() + 500,
+    }) } });
+  }
+  const ack = await waitFor(conn.sent, async (frame) => {
+    const payload = await chan.open<Record<string, unknown>>(frame.data.enc);
+    return payload.kind === "input-ack" && payload.note === "新建失败: Codex new-session capacity is full";
+  });
+  expect(await chan.open(ack.data.enc)).toMatchObject({ kind: "input-ack", status: "queued", sessionId: "" });
   controls.stop();
 });
 
@@ -240,4 +294,34 @@ test("serveWatch bounds background Codex starts and handles stop without rejecti
   controls.stop();
   await Bun.sleep(120);
   expect(state.stopped).toBe(true);
+});
+
+test("serveWatch observes a rejected background start after stop", async () => {
+  const conn = new FakeConn();
+  const chan = new SecureChannel(new Uint8Array(32).fill(4));
+  const state = {
+    turns: 0, stopped: false, concurrent: 0, maxConcurrent: 0,
+    startThreads: 0, rejectStartThread: true,
+  };
+  const controls = await serveWatch(conn as unknown as WsConn, chan, {
+    meshStrict: true,
+    meshRemoteCodexControl: true,
+    codexServerFactory: () => fakeServer(state, 20),
+  });
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    conn.push({ op: "chan-data", data: { enc: await chan.seal({
+      kind: "new-session", agent: "codex", text: "reject-me", controlRequestId: "codex:reject-after-stop",
+      deadlineAt: Date.now() + 500,
+    }) } });
+    await waitFor([state], (value) => (value.startThreads ?? 0) === 1);
+    controls.stop();
+    await Bun.sleep(60);
+    expect(unhandled).toEqual([]);
+    expect(state.stopped).toBe(true);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
 });

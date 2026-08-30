@@ -57,6 +57,8 @@ interface ServeWatchOptions {
   approvalPort?: number;
   /** Test seam for exercising the real watcher control path without a binary. */
   codexServerFactory?: () => CodexAppServer;
+  /** Test seam for control-path tests that do not need the legacy HTTP hook. */
+  disableHookServer?: boolean;
 }
 
 export async function serveWatch(
@@ -142,7 +144,7 @@ export async function serveWatch(
       summary: req.summary,
       options: req.options,
     });
-  }, undefined, (sessionId, ok, note) => {
+  }, opts.hookPort, (sessionId, ok, note) => {
     // Argus finished (or failed) an injection: correct the provisional ack so
     // the phone stops showing "typing…" and learns why nothing happened.
     if (!pendingInjections.delete(sessionId)) return;
@@ -154,7 +156,7 @@ export async function serveWatch(
     });
   });
 
-  if (legacyAgentBridgeEnabled) {
+  if (legacyAgentBridgeEnabled && !opts.disableHookServer) {
     const secret = HookServer.getOrCreateSecret();
     hookServer.start(secret);
     emit({ type: "hook_server", port: opts.hookPort ?? 9876, secret });
@@ -812,17 +814,22 @@ export async function serveWatch(
               return;
             }
             if (backgroundCodexStarts.size >= CODEX_START_MAX_CONCURRENCY) {
-              if (controlRequestId) {
-                await sendPayload({
-                  kind: "codex-error",
-                  code: "codex-start-overloaded",
-                  note: "Codex new-session capacity is full",
-                  timedOut: false,
-                  timedOutStage: "watcher",
-                  retryable: true,
-                  ...controlReply,
-                });
-              }
+              await sendPayload(controlRequestId
+                ? {
+                    kind: "codex-error",
+                    code: "codex-start-overloaded",
+                    note: "Codex new-session capacity is full",
+                    timedOut: false,
+                    timedOutStage: "watcher",
+                    retryable: true,
+                    ...controlReply,
+                  }
+                : {
+                    kind: "input-ack",
+                    sessionId: payload.sessionId ?? "",
+                    status: "queued",
+                    note: "新建失败: Codex new-session capacity is full",
+                  });
               return;
             }
             const backgroundStart = (async () => {
@@ -879,12 +886,17 @@ export async function serveWatch(
             })();
             backgroundCodexStarts.add(backgroundStart);
             void backgroundStart
-              .catch(async (error) => {
+              .catch((error) => {
                 if (!stopped && controlRequestId) {
-                  await sendPayload(codexErrorReply(error, controlReply));
+                  void sendPayload(codexErrorReply(error, controlReply)).catch((sendError) => {
+                    console.log(`[watch] Codex error response failed: ${sendError instanceof Error ? sendError.message : sendError}`);
+                  });
                 }
               })
-              .finally(() => backgroundCodexStarts.delete(backgroundStart));
+              .then(() => backgroundCodexStarts.delete(backgroundStart), (error) => {
+                console.log(`[watch] Codex background start handling failed: ${error instanceof Error ? error.message : error}`);
+                backgroundCodexStarts.delete(backgroundStart);
+              });
             return;
           } else {
             // ACP by default (visible progress + answerable approvals);
