@@ -699,6 +699,7 @@ function summarizeResource(value: unknown): Record<string, unknown> {
             connectionStatus: textField(workspace, "connectionStatus", 32),
             watcherAvailable: workspace.watcherAvailable === true,
             codexAppServerAvailable: workspace.codexAppServerAvailable === true,
+            remoteCodexControl: workspace.remoteCodexControl === true,
             activeJobs: numberField(workspace, "activeJobs"),
             workspaceRevision: workspaceRevisionField(workspace.workspaceRevision),
             lastSuccess: textField(workspace, "lastSuccess", 128),

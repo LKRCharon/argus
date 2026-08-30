@@ -25,6 +25,22 @@ ok() {
   printf '%s=%s\n' "$1" "$2"
 }
 
+mesh_remote_codex_control_state() {
+  local config="$1"
+  CONFIG="$config" /opt/homebrew/bin/bun -e '
+    try {
+      const value = await Bun.file(process.env.CONFIG).json();
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        console.log("invalid");
+      } else {
+        console.log(value.remoteCodexControl === true ? "enabled" : "disabled");
+      }
+    } catch {
+      console.log("invalid");
+    }
+  ' 2>/dev/null || true
+}
+
 if [[ ! -d "$REPO_ROOT" ]] || ! /usr/bin/git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   fail REPOSITORY
 else
@@ -119,15 +135,29 @@ if [[ -f "$live_mesh" ]]; then
   live_status="$(CONFIG="$live_mesh" /opt/homebrew/bin/bun -e \
     'const c=await Bun.file(process.env.CONFIG).json(); const r=(c.resources??[]).find((x)=>x.id==="workspace:kmac-m4"); console.log(r?.statusRunnerId??"missing");' 2>/dev/null || true)"
   ok LIVE_STATUS_RUNNER "$live_status"
+  live_remote_codex_control="$(mesh_remote_codex_control_state "$live_mesh")"
+  case "$live_remote_codex_control" in
+    enabled) ok LIVE_REMOTE_CODEX_CONTROL ENABLED ;;
+    disabled) warn LIVE_REMOTE_CODEX_CONTROL DISABLED ;;
+    *) fail LIVE_REMOTE_CODEX_CONTROL ;;
+  esac
 else
   fail LIVE_STATUS_RUNNER
+  fail LIVE_REMOTE_CODEX_CONTROL
 fi
 if [[ -f "$prepared_mesh" ]]; then
   prepared_status="$(CONFIG="$prepared_mesh" /opt/homebrew/bin/bun -e \
     'const c=await Bun.file(process.env.CONFIG).json(); const resource=(c.resources??[]).find((x)=>x.id==="workspace:kmac-m4"); const runner=(c.runners??[]).find((x)=>x.id==="kmac-status-v1"); const valid=resource?.statusRunnerId==="kmac-status-v1"&&runner?.purpose==="status"&&runner?.approvalRequired===false&&runner?.allowDynamicArgs===false&&runner?.allowInput===false; console.log(valid?"ready":"invalid");' 2>/dev/null || true)"
   [[ "$prepared_status" == ready ]] && ok PREPARED_STATUS_RUNNER READY_NOT_ACTIVE || fail PREPARED_STATUS_RUNNER
+  prepared_remote_codex_control="$(mesh_remote_codex_control_state "$prepared_mesh")"
+  case "$prepared_remote_codex_control" in
+    enabled) ok PREPARED_REMOTE_CODEX_CONTROL ENABLED ;;
+    disabled) warn PREPARED_REMOTE_CODEX_CONTROL DISABLED ;;
+    *) fail PREPARED_REMOTE_CODEX_CONTROL ;;
+  esac
 else
   warn PREPARED_STATUS_RUNNER NOT_PREPARED
+  warn PREPARED_REMOTE_CODEX_CONTROL NOT_PREPARED
 fi
 
 if [[ -x /opt/homebrew/opt/openjdk@17/bin/java ]]; then

@@ -20,6 +20,7 @@ export interface KmacStatusRunnerOptions {
   stateDir: string;
   codexLauncher: string;
   relayPort?: number;
+  enableRemoteCodexControl?: boolean;
 }
 
 function requireAbsolute(value: string, label: string): void {
@@ -73,6 +74,7 @@ export function withKmacStatusRunner(
         "connectionStatus",
         "watcherAvailable",
         "codexAppServerAvailable",
+        "remoteCodexControl",
         "activeJobs",
         "workspaceRevision",
         "lastSuccess",
@@ -87,6 +89,7 @@ export function withKmacStatusRunner(
 
   return parseMeshConfig({
     ...config,
+    ...(options.enableRemoteCodexControl === true ? { remoteCodexControl: true } : {}),
     resources: config.resources.map((entry) => entry.id === RESOURCE_ID
       ? { ...entry, statusRunnerId: RUNNER_ID }
       : entry),
@@ -118,6 +121,7 @@ function main(args: string[]): void {
     statusScript: flag(args, "--status-script"),
     stateDir: flag(args, "--state-dir"),
     codexLauncher: flag(args, "--codex-launcher"),
+    enableRemoteCodexControl: args.includes("--enable-remote-codex-control"),
   });
   const serialized = `${JSON.stringify(prepared, null, 2)}\n`;
   const temporary = `${output}.${randomUUID()}.tmp`;
@@ -128,6 +132,7 @@ function main(args: string[]): void {
     ok: true,
     resourceId: RESOURCE_ID,
     statusRunnerId: RUNNER_ID,
+    remoteCodexControl: prepared.remoteCodexControl,
     inputSha256: sha256(source),
     outputSha256: sha256(serialized),
   })}\n`);

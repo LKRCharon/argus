@@ -254,6 +254,8 @@ export const MeshWorkspaceStatusSchema = z.object({
   connectionStatus: z.enum(["online", "offline", "degraded"]),
   watcherAvailable: z.boolean(),
   codexAppServerAvailable: z.boolean(),
+  /** Missing on older status runners; absence is fail-closed. */
+  remoteCodexControl: z.boolean().default(false),
   activeJobs: z.number().int().nonnegative().max(10_000),
   workspaceRevision: z.string().max(256).nullable(),
   lastSuccess: MeshTimestampSchema.nullable(),

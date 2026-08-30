@@ -41,6 +41,9 @@ describe("KMac Mesh config preparation", () => {
       workspaceCapabilities: ["read-only-status"],
     });
     expect(prepared.runners?.[0]?.fixedArgs).toEqual([options.statusScript]);
+    expect(prepared.runners?.[0]?.resultSchema).toMatchObject({
+      required: expect.arrayContaining(["remoteCodexControl"]),
+    });
   });
 
   test("is idempotent and preserves existing policy", () => {
@@ -50,5 +53,17 @@ describe("KMac Mesh config preparation", () => {
     expect(twice.groups).toEqual(base.groups);
     expect(twice.requesters).toEqual(base.requesters);
     expect(twice.remoteCodexControl).toBe(true);
+  });
+
+  test("preserves a disabled Codex policy in the generated candidate", () => {
+    const disabled = parseMeshConfig({ ...base, remoteCodexControl: false });
+    const prepared = withKmacStatusRunner(disabled, options);
+    expect(prepared.remoteCodexControl).toBe(false);
+
+    const optedIn = withKmacStatusRunner(disabled, {
+      ...options,
+      enableRemoteCodexControl: true,
+    });
+    expect(optedIn.remoteCodexControl).toBe(true);
   });
 });

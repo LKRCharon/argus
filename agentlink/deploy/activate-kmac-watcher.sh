@@ -12,6 +12,7 @@ readonly CANDIDATE_CONFIG="${ARGUS_CANDIDATE_CONFIG:?ARGUS_CANDIDATE_CONFIG is r
 readonly REVIEWED_COMMIT="${ARGUS_REVIEWED_COMMIT:?ARGUS_REVIEWED_COMMIT is required}"
 readonly EXPECTED_LIVE_MESH_SHA256="${ARGUS_EXPECTED_LIVE_MESH_SHA256:?ARGUS_EXPECTED_LIVE_MESH_SHA256 is required}"
 readonly EXPECTED_CANDIDATE_MESH_SHA256="${ARGUS_EXPECTED_CANDIDATE_MESH_SHA256:?ARGUS_EXPECTED_CANDIDATE_MESH_SHA256 is required}"
+readonly REQUIRE_REMOTE_CODEX_CONTROL="${ARGUS_REQUIRE_REMOTE_CODEX_CONTROL:?ARGUS_REQUIRE_REMOTE_CODEX_CONTROL is required}"
 readonly REPO_ROOT="${ARGUS_REPO_ROOT:-$(CDPATH= cd -P -- "$SCRIPT_DIR/../.." && pwd -P)}"
 readonly BUN="${ARGUS_RUNTIME_BUN:-$BASE/runtime/bun-1.3.14/bin/bun}"
 readonly LABEL="com.kairong.agentlink-watch"
@@ -175,7 +176,7 @@ verify_candidate_config() {
     const { candidateMeshHashMatches } = await import(process.env.GATES_MODULE);
     if (!candidateMeshHashMatches(process.env.ACTUAL_HASH, process.env.EXPECTED_HASH)) process.exit(1);
   ' >/dev/null || return 1
-  CONFIG="$CANDIDATE_CONFIG" RELEASE="$CANDIDATE_RELEASE" \
+  CONFIG="$CANDIDATE_CONFIG" RELEASE="$CANDIDATE_RELEASE" GATES_MODULE="$GATES_MODULE" \
     EXPECTED_RUNTIME_BUN="$BUN" \
     EXPECTED_STATE_DIR="$base_canonical/state" \
     EXPECTED_CODEX_BIN="$HOME/.local/bin/codex" \
@@ -183,6 +184,7 @@ verify_candidate_config() {
     "$BUN" -e '
     const config = JSON.parse(await Bun.file(process.env.CONFIG).text());
     const { parseMeshConfig } = await import(`${process.env.RELEASE}/packages/daemon/src/mesh/config.ts`);
+    const { remoteCodexControlIsEnabled } = await import(process.env.GATES_MODULE);
     const parsed = parseMeshConfig(config);
     const resource = parsed.resources.find((entry) => entry.id === "workspace:kmac-m4");
     const runner = parsed.runners?.find((entry) => entry.id === "kmac-status-v1");
@@ -212,6 +214,7 @@ verify_candidate_config() {
       || runner.workspaceCapabilities[0] !== "read-only-status"
       || runner?.exposeDebugOutput !== false
       || !envMatches
+      || !remoteCodexControlIsEnabled(parsed)
       || runner?.fixedArgs?.[0] !== `${process.env.RELEASE}/deploy/kmac-workspace-status.ts`) process.exit(1);
   ' >/dev/null
 }
@@ -229,7 +232,7 @@ controller_verify() {
       status="${snapshot%% *}"; seen="${snapshot##* }"
       if [[ "$status" == online && "$seen" =~ ^[0-9]+$ ]] && (( seen > minimum_seen )); then
         if /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 seoul \
-            "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/refresh\",{method:\"POST\"}); if(!r.ok) process.exit(1); const o=await r.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); const resource=p?.resources?.find((x)=>x.id===\"$RESOURCE_ID\"); const status=p?.resourceStatuses?.[\"$RESOURCE_ID\"]; if(p?.status!==\"online\" || !Number.isInteger(p.lastSeen) || p.lastSeen<=${minimum_seen} || resource?.statusRunnerId!==\"$RUNNER_ID\" || status?.state!==\"ready\" || status?.workspace?.workspaceRevision!==\"$REVIEWED_COMMIT\") process.exit(1); process.stdout.write(\"ok\\n\")'" \
+            "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/refresh\",{method:\"POST\"}); if(!r.ok) process.exit(1); const o=await r.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); const resource=p?.resources?.find((x)=>x.id===\"$RESOURCE_ID\"); const status=p?.resourceStatuses?.[\"$RESOURCE_ID\"]; if(p?.status!==\"online\" || !Number.isInteger(p.lastSeen) || p.lastSeen<=${minimum_seen} || resource?.statusRunnerId!==\"$RUNNER_ID\" || status?.state!==\"ready\" || status?.workspace?.workspaceRevision!==\"$REVIEWED_COMMIT\" || status?.workspace?.remoteCodexControl!==true) process.exit(1); process.stdout.write(\"ok\\n\")'" \
             >/dev/null 2>/dev/null; then
           controller_verify_seen="$seen"
           return 0
@@ -388,6 +391,7 @@ path_is_under "$base_canonical/prepared" "$candidate_config_canonical" || fail_p
 [[ "$candidate_config_canonical" != "$live_mesh_canonical" ]] || fail_precondition candidate_live_path
 [[ "$EXPECTED_LIVE_MESH_SHA256" =~ ^[a-f0-9]{64}$ ]] || fail_precondition expected_live_mesh_sha256
 [[ "$EXPECTED_CANDIDATE_MESH_SHA256" =~ ^[a-f0-9]{64}$ ]] || fail_precondition expected_candidate_mesh_sha256
+[[ "$REQUIRE_REMOTE_CODEX_CONTROL" == true ]] || fail_precondition remote_codex_control_opt_in
 [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40,64}$ ]] || fail_precondition reviewed_commit
 controller_inputs_are_safe || fail_precondition controller_inputs
 [[ -d "$REPO_ROOT" ]] || fail_precondition repository
@@ -444,5 +448,5 @@ ready_pid="$(watcher_pid 2>/dev/null || true)"
 [[ "$ready_pid" =~ ^[0-9]+$ ]] || rollback 1
 
 trap - ERR INT TERM
-printf 'READY_FOR_COMMANDER_CANARY old_release=%s candidate_release=%s pid=%s lastSeen=%s mesh_backup=%s mesh_backup_sha256=%s\n' \
+printf 'READY_FOR_COMMANDER_CANARY remoteCodexControl=true old_release=%s candidate_release=%s pid=%s lastSeen=%s mesh_backup=%s mesh_backup_sha256=%s\n' \
   "$OLD_RELEASE" "$CANDIDATE_RELEASE" "$ready_pid" "$reconnected_at" "$backup_mesh" "$backup_mesh_sha256"

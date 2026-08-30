@@ -4,6 +4,9 @@ import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  parseMeshConfig,
+} from "../packages/daemon/src/mesh/config";
+import {
   MeshWorkspaceStatusSchema,
   type MeshDeadlineStage,
   type MeshWorkspaceStatus,
@@ -23,6 +26,7 @@ interface StatusInputs {
   watcherAvailable: boolean;
   relayAvailable: boolean;
   codexAppServerAvailable: boolean;
+  remoteCodexControl: boolean;
   activeJobs: number;
   taskJournalValid: boolean;
   workspaceRevision: string | null;
@@ -65,6 +69,7 @@ export function deriveWorkspaceStatus(inputs: StatusInputs): MeshWorkspaceStatus
       : inputs.relayAvailable ? "online" : "degraded",
     watcherAvailable: inputs.watcherAvailable,
     codexAppServerAvailable: inputs.codexAppServerAvailable,
+    remoteCodexControl: inputs.remoteCodexControl,
     activeJobs: inputs.activeJobs,
     workspaceRevision: inputs.workspaceRevision,
     lastSuccess: lastErrorStage === null ? inputs.checkedAt : null,
@@ -154,6 +159,15 @@ function activeJobs(stateDir: string): { count: number; valid: boolean } {
   }
 }
 
+/** Read only the policy bit; malformed or missing config is disabled. */
+export function readRemoteCodexControl(stateDir: string): boolean {
+  try {
+    return parseMeshConfig(JSON.parse(readFileSync(join(stateDir, "mesh.json"), "utf8"))).remoteCodexControl;
+  } catch {
+    return false;
+  }
+}
+
 function relayIsAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = createConnection({ host: "127.0.0.1", port });
@@ -178,15 +192,15 @@ function configuredPort(): number {
 
 export async function collectWorkspaceStatus(): Promise<MeshWorkspaceStatus> {
   const checkedAt = new Date().toISOString();
-  const jobs = activeJobs(
-    process.env.ARGUS_STATUS_STATE_DIR ?? join(homedir(), ".agentlink"),
-  );
+  const stateDir = process.env.ARGUS_STATUS_STATE_DIR ?? join(homedir(), ".agentlink");
+  const jobs = activeJobs(stateDir);
   return deriveWorkspaceStatus({
     watcherAvailable: watcherIsRunning(
       process.env.ARGUS_STATUS_WATCH_LABEL ?? "com.kairong.agentlink-watch",
     ),
     relayAvailable: await relayIsAvailable(configuredPort()),
     codexAppServerAvailable: codexIsAvailable(),
+    remoteCodexControl: readRemoteCodexControl(stateDir),
     activeJobs: jobs.count,
     taskJournalValid: jobs.valid,
     workspaceRevision: workspaceRevision(),
@@ -204,6 +218,7 @@ if (import.meta.main) {
         watcherAvailable: false,
         relayAvailable: false,
         codexAppServerAvailable: false,
+        remoteCodexControl: false,
         activeJobs: 0,
         taskJournalValid: false,
         workspaceRevision: null,

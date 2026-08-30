@@ -11,6 +11,7 @@ import {
   handoffResultPathWithin,
   manifestMatchesReviewedCommit,
   normalizedPath,
+  remoteCodexControlIsEnabled,
   reversePlistHashMatches,
 } from "../deploy/kmac-activation-gates";
 
@@ -72,6 +73,25 @@ describe("KMac activation gates", () => {
     expect(candidateMeshHashMatches("short", expected)).toBe(false);
     expect(reversePlistHashMatches(expected, expected)).toBe(true);
     expect(reversePlistHashMatches("A".repeat(64), expected)).toBe(false);
+  });
+
+  test("requires explicit remote Codex opt-in in the candidate and activation", () => {
+    expect(remoteCodexControlIsEnabled({ remoteCodexControl: true })).toBe(true);
+    expect(remoteCodexControlIsEnabled({ remoteCodexControl: false })).toBe(false);
+    expect(remoteCodexControlIsEnabled({})).toBe(false);
+    expect(remoteCodexControlIsEnabled(null)).toBe(false);
+
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    expect(activation).toContain(
+      'readonly REQUIRE_REMOTE_CODEX_CONTROL="${ARGUS_REQUIRE_REMOTE_CODEX_CONTROL:?ARGUS_REQUIRE_REMOTE_CODEX_CONTROL is required}"',
+    );
+    expect(activation).toContain(
+      '[[ "$REQUIRE_REMOTE_CODEX_CONTROL" == true ]] || fail_precondition remote_codex_control_opt_in',
+    );
+    expect(activation).toContain("!remoteCodexControlIsEnabled(parsed)");
+    expect(activation).toContain("status?.workspace?.remoteCodexControl!==true");
+    expect(activation).toContain("READY_FOR_COMMANDER_CANARY remoteCodexControl=true");
   });
 
   test("atomically replaces current without following its destination symlink", () => {

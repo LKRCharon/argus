@@ -88,6 +88,31 @@ describe("durable remote Codex operations", () => {
     )).toThrow("idempotencyKey");
   });
 
+  test("marks a policy-disabled remote start failed without a watcher timeout", async () => {
+    const { controller } = controllerFixture();
+    controller.codex.startThread = async () => {
+      throw new CodexGatewayError(
+        "remote Codex control is disabled by Mesh policy",
+        "watcher",
+        false,
+        false,
+      );
+    };
+    const operation = controller.startCodexThreadOperation(
+      "node-kmac",
+      "perform task",
+      "codex-policy-disabled",
+    );
+    await nextTurn();
+    const failed = controller.getCodexOperation(operation.operationId);
+    expect(failed).toMatchObject({
+      status: "failed",
+      retryable: false,
+      message: "remote Codex control is disabled by Mesh policy",
+    });
+    expect(failed?.timedOutStage).toBeUndefined();
+  });
+
   test("reconciles a timed_out operation through the documented late-success path", async () => {
     const { controller } = controllerFixture();
     controller.codex.startThread = async () => {

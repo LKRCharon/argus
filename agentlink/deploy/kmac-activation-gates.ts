@@ -17,6 +17,13 @@ export interface FixedFileMetadata {
   executable: boolean;
 }
 
+export function remoteCodexControlIsEnabled(value: unknown): boolean {
+  return value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (value as { remoteCodexControl?: unknown }).remoteCodexControl === true;
+}
+
 export function candidateMeshHashMatches(actual: string, expected: string): boolean {
   return SHA256.test(expected) && SHA256.test(actual) && actual === expected;
 }

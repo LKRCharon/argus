@@ -3,6 +3,7 @@ import { parseMeshConfig } from "../src/mesh/config";
 import {
   isBoundedRemoteCodexCommand,
   meshWatchCapabilities,
+  remoteCodexPolicyDisabledReply,
   validateBoundedRemoteCodexCommand,
 } from "../src/mesh/watch-capabilities";
 
@@ -62,5 +63,25 @@ describe("strict Mesh watch capabilities", () => {
     for (const kind of ["list-sessions", "user-input", "remote-control", "cloud-session"]) {
       expect(validateBoundedRemoteCodexCommand({ ...bounded, kind }, now).status).toBe("invalid");
     }
+  });
+
+  test("builds an immediate correlated failure for a valid command when policy is disabled", () => {
+    const validation = validateBoundedRemoteCodexCommand({
+      kind: "codex-threads",
+      controlRequestId: "codex:request-1",
+      deadlineAt: 1_001_000,
+    }, 1_000_000);
+    expect(validation.status).toBe("valid");
+    if (validation.status !== "valid") return;
+
+    expect(remoteCodexPolicyDisabledReply(validation.command)).toEqual({
+      kind: "codex-error",
+      code: "remote-codex-control-disabled",
+      note: "remote Codex control is disabled by Mesh policy",
+      timedOut: false,
+      timedOutStage: "watcher",
+      retryable: false,
+      controlRequestId: "codex:request-1",
+    });
   });
 });

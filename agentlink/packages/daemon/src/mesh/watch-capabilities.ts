@@ -6,6 +6,7 @@ export interface MeshWatchCapabilities {
 }
 
 export const MAX_REMOTE_CODEX_DEADLINE_MS = 2 * 60_000;
+export const REMOTE_CODEX_POLICY_DISABLED_MESSAGE = "remote Codex control is disabled by Mesh policy";
 
 interface RemoteCodexCommandPayload {
   kind?: string;
@@ -76,4 +77,23 @@ export function validateBoundedRemoteCodexCommand(
 
 export function isBoundedRemoteCodexCommand(payload: RemoteCodexCommandPayload, now = Date.now()): boolean {
   return validateBoundedRemoteCodexCommand(payload, now).status === "valid";
+}
+
+/**
+ * Correlated, fail-closed response for a valid command refused by local policy.
+ * Keep this separate from the legacy Mesh error so controllers can finish the
+ * exact Codex operation instead of waiting for its watcher deadline.
+ */
+export function remoteCodexPolicyDisabledReply(
+  command: Pick<NormalizedRemoteCodexCommand, "controlRequestId">,
+): Record<string, unknown> {
+  return {
+    kind: "codex-error",
+    code: "remote-codex-control-disabled",
+    note: REMOTE_CODEX_POLICY_DISABLED_MESSAGE,
+    timedOut: false,
+    timedOutStage: "watcher",
+    retryable: false,
+    controlRequestId: command.controlRequestId,
+  };
 }

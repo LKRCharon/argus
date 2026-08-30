@@ -94,7 +94,7 @@ Current main already validates the typed workspace status. The fixed
 
 ```text
 connectionStatus, watcherAvailable, codexAppServerAvailable, activeJobs,
-workspaceRevision, lastSuccess, lastErrorStage, checkedAt
+remoteCodexControl, workspaceRevision, lastSuccess, lastErrorStage, checkedAt
 ```
 
 It accepts no arguments or stdin. It reads the durable task journal with a
@@ -135,13 +135,15 @@ bun run agentlink/deploy/prepare-kmac-mesh-config.ts -- \
   --runtime-bun "$agentlink_base/runtime/bun-1.3.14/bin/bun" \
   --status-script "$release_dir/deploy/kmac-workspace-status.ts" \
   --state-dir "$agentlink_base/state" \
-  --codex-launcher "$HOME/.local/bin/codex"
+  --codex-launcher "$HOME/.local/bin/codex" \
+  --enable-remote-codex-control
 ```
 
 The preparer binds `workspace:kmac-m4` to `kmac-status-v1` with
 `purpose: "status"`, local approval disabled, dynamic arguments and stdin
-disabled, and only the `read-only-status` capability. Existing policy is
-preserved; no new task runner or shell surface is created.
+disabled, and only the `read-only-status` capability. The final flag is an
+explicit candidate-only opt-in; omitting it preserves `remoteCodexControl:
+false`. No new task runner or shell surface is created.
 
 Stage one stops here. Do not replace `state/mesh.json`, switch `current`, run
 `launchctl kickstart`, or stop the old watcher. Activation must switch the
@@ -164,6 +166,7 @@ export ARGUS_EXPECTED_LIVE_MESH_SHA256="<lowercase sha256 of live state/mesh.jso
 export ARGUS_CANDIDATE_RELEASE="$HOME/Library/Application Support/AgentLink/releases/<release-id>"
 export ARGUS_CANDIDATE_CONFIG="$HOME/Library/Application Support/AgentLink/prepared/stage2-20260830/mesh.json"
 export ARGUS_EXPECTED_CANDIDATE_MESH_SHA256="<lowercase sha256 of candidate mesh.json>"
+export ARGUS_REQUIRE_REMOTE_CODEX_CONTROL=true
 ./agentlink/deploy/activate-kmac-watcher.sh
 ```
 
@@ -184,7 +187,10 @@ replacement. The old watcher must also report the exact `state = running` line.
 The script backs up the live config with a hash, atomically swaps the symlink and
 config, restarts only `com.kairong.agentlink-watch`, and asks Seoul's fixed
 read-only controller endpoint to prove a newer `lastSeen`, online peer,
-`kmac-status-v1` binding, and ready workspace status. A post-switch failure
+`kmac-status-v1` binding, ready workspace status, and
+`remoteCodexControl: true`. It also requires the explicit
+`ARGUS_REQUIRE_REMOTE_CODEX_CONTROL=true` activation input before any mutation.
+A post-switch failure
 restores both artifacts atomically, restarts the old watcher, and checks only
 rollback reconnect health before printing `ROLLED_BACK`; a gate failure before
 mutation prints `BLOCKED`.

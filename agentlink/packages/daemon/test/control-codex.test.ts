@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { CodexGatewayError, CodexPeerGateway } from "../src/control/codex";
+import { remoteCodexPolicyDisabledReply } from "../src/mesh/watch-capabilities";
 
 describe("CodexPeerGateway", () => {
   test("correlates thread requests to the authenticated target peer", async () => {
@@ -192,6 +193,29 @@ describe("CodexPeerGateway", () => {
       throw new Error("expected peer failure");
     } catch (error) {
       expect(error).toMatchObject({ stage: "peer", timedOut: false, retryable: true });
+    }
+  });
+
+  test("turns a correlated policy rejection into a non-timeout watcher failure", async () => {
+    let sent: Record<string, unknown> | undefined;
+    const gateway = new CodexPeerGateway(async (_target, payload) => { sent = payload; }, {
+      requestTimeoutMs: 1_000,
+    });
+    const pending = gateway.listThreads("mac-node", Date.now() + 1_000);
+    await Promise.resolve();
+    const reply = remoteCodexPolicyDisabledReply({
+      controlRequestId: String(sent?.controlRequestId),
+    });
+    expect(gateway.handlePayload("mac-node", reply)).toBe(true);
+    try {
+      await pending;
+      throw new Error("expected policy rejection");
+    } catch (error) {
+      expect(error).toMatchObject({
+        stage: "watcher",
+        timedOut: false,
+        retryable: false,
+      });
     }
   });
 });

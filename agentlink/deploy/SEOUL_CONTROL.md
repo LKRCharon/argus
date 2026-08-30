@@ -105,9 +105,10 @@ For `workspace:kmac-m4`, configure a dedicated fixed status runner such as
 `kmac-status-v1` with `purpose: "status"`, `approvalRequired: false`, no dynamic
 arguments or stdin, and only the `read-only-status` workspace capability. Its
 JSON result contains only connection state, watcher/Codex app-server
-availability, active job count, workspace revision, last success/error stage,
-and check time. Executable paths, fixed arguments, environment, and arbitrary
-commands remain target-local and are not published by discovery.
+availability, the explicit `remoteCodexControl` policy bit, active job count,
+workspace revision, last success/error stage, and check time. Executable paths,
+fixed arguments, environment, and arbitrary commands remain target-local and
+are not published by discovery.
 
 Resource discovery publishes `allowedGroupIds`, `defaultGroupId` only when a
 single trusted group is available, `allowedOperations`, and safe runner metadata.

@@ -39,7 +39,11 @@ import {
   startHostApprovalServer,
   type HostApprovalServerOptions,
 } from "../mesh/approval-server";
-import { meshWatchCapabilities, validateBoundedRemoteCodexCommand } from "../mesh/watch-capabilities";
+import {
+  meshWatchCapabilities,
+  remoteCodexPolicyDisabledReply,
+  validateBoundedRemoteCodexCommand,
+} from "../mesh/watch-capabilities";
 
 interface ServeWatchOptions {
   hookPort?: number;
@@ -556,6 +560,11 @@ export async function serveWatch(
             retryable: true,
             ...controlReply,
           });
+        } else if (meshModeEnabled && !legacyAgentBridgeEnabled
+                   && remoteCodexCommand.status === "valid"
+                   && !capabilities.remoteCodexControl) {
+          console.log(`[mesh] remote Codex command rejected: policy disabled (${remoteCodexCommand.command.kind})`);
+          await enqueueControlSendAsync(remoteCodexPolicyDisabledReply(remoteCodexCommand.command));
         } else if (meshModeEnabled && !legacyAgentBridgeEnabled && typeof payload?.kind === "string"
                     && PHONE_COMMANDS.has(payload.kind) && !MESH_COMMANDS.has(payload.kind)
                     && !(capabilities.remoteCodexControl && remoteCodexCommand.status === "valid")) {
@@ -1005,14 +1014,23 @@ function codexErrorReply(
   controlReply: { controlRequestId?: string },
   sessionId?: string,
 ): Record<string, unknown> {
-  const note = `${error instanceof Error ? error.message : error}`.slice(0, 512);
-  const timedOut = /超时|timeout|deadline/i.test(note);
+  const diagnostic = `${error instanceof Error ? error.message : error}`;
+  const timedOut = /超时|timeout|deadline/i.test(diagnostic);
+  const startupFailed = /未找到 codex|子进程|启动|初始化|未连接/i.test(diagnostic);
+  const code = timedOut
+    ? "codex-app-server-timeout"
+    : startupFailed ? "codex-app-server-startup-failed" : "codex-app-server-request-failed";
+  const note = timedOut
+    ? "Codex app-server request timed out"
+    : startupFailed ? "Codex app-server startup failed" : "Codex app-server request failed";
+  console.log(`[watch] Codex control failed: ${code}`);
   return {
     kind: "codex-error",
+    code,
     note,
     timedOut,
     timedOutStage: "app-server",
-    retryable: timedOut || /连接|connect|unavailable/i.test(note),
+    retryable: timedOut || /连接|connect|unavailable|启动/i.test(diagnostic),
     ...(sessionId ? { sessionId } : {}),
     ...controlReply,
   };

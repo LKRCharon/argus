@@ -127,6 +127,7 @@ describe.serial("MeshService", () => {
       connectionStatus: "online",
       watcherAvailable: true,
       codexAppServerAvailable: true,
+      remoteCodexControl: true,
       activeJobs: 0,
       workspaceRevision: "revision-123",
       lastSuccess: checkedAt,
