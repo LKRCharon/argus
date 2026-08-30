@@ -255,6 +255,59 @@ describe("Seoul control API", () => {
     });
   });
 
+  test("projects overview tasks and bounds the sensitive discovery response", async () => {
+    const { controller } = fakeController();
+    controller.journal.create({
+      taskId: "task-large-overview",
+      requesterNodeId: "node-seoul",
+      groupId: "group-alpha",
+      targetNodeId: "node-l40",
+      resourceId: "repo:gpu",
+      operation: "run",
+      status: "completed",
+      decision: "allow",
+      requestDigest: "a".repeat(64),
+      idempotencyKey: "idempotency-secret",
+      idempotencyDigest: "b".repeat(64),
+      message: "internal message",
+      result: {
+        prompt: "P".repeat(200_000),
+        result: "R".repeat(200_000),
+        debugOutput: "D".repeat(200_000),
+        credentials: { token: "credential-secret" },
+        relayUrl: "wss://relay-secret.example",
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const handler = createControlRequestHandler({ controller });
+    const overviewResponse = await handler(new Request("http://localhost/api/overview"));
+    const overview = await overviewResponse.json() as Record<string, unknown>;
+    const task = (overview.tasks as Array<Record<string, unknown>>)[0];
+    expect(task).toEqual({
+      taskId: "task-large-overview",
+      groupId: "group-alpha",
+      targetNodeId: "node-l40",
+      resourceId: "repo:gpu",
+      operation: "run",
+      status: "completed",
+      decision: "allow",
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    expect(JSON.stringify(overview)).not.toContain("credential-secret");
+    expect(JSON.stringify(overview)).not.toContain("P".repeat(100));
+    expect(JSON.stringify(overview)).not.toContain("aaaaaaaa");
+
+    const discoveryResponse = await handler(new Request("http://localhost/api/discovery"));
+    const discovery = await discoveryResponse.json() as Record<string, unknown>;
+    expect(discovery).toMatchObject({ taskCount: 1, taskStatusCounts: { completed: 1 } });
+    expect(discovery).not.toHaveProperty("tasks");
+    expect(JSON.stringify(discovery)).not.toContain("credential-secret");
+    expect(JSON.stringify(discovery)).not.toContain("relay-secret");
+    expect(JSON.stringify(discovery)).not.toContain("aaaaaaaa");
+  });
+
   test("rejects non-loopback hosts and cross-origin mutations", async () => {
     const { controller, cancelled } = fakeController();
     const handler = createControlRequestHandler({ controller });

@@ -60,7 +60,6 @@ describe("Seoul Codex MCP gateway", () => {
       captured = new Request(input, init);
       return Response.json({
         controllerNodeId: "node-seoul",
-        relayUrl: "wss://relay.example/secret",
         generatedAt: 123,
         peers: [{
           fingerprint: "node-l40",
@@ -124,7 +123,8 @@ describe("Seoul Codex MCP gateway", () => {
             },
           },
         }],
-        tasks: [{ status: "running", grant: "do-not-return" }],
+        taskCount: 1,
+        taskStatusCounts: { running: 1 },
       });
     };
     const mcp = await connectMcp(fetchImpl);
@@ -156,7 +156,7 @@ describe("Seoul Codex MCP gateway", () => {
       const text = textContent(result);
       const summary = JSON.parse(text) as Record<string, unknown>;
       expect(captured?.method).toBe("GET");
-      expect(captured ? new URL(captured.url).pathname : "").toBe("/api/overview");
+      expect(captured ? new URL(captured.url).pathname : "").toBe("/api/discovery");
       expect(captured?.headers.get("authorization")).toBeNull();
       expect(summary).toMatchObject({
         controllerNodeId: "node-seoul",
@@ -572,7 +572,7 @@ describe("Seoul Codex MCP gateway", () => {
     const baseArtifactId = `sha256:${"b".repeat(64)}`;
     const fetchImpl: ControlFetch = async (input) => {
       const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
-      if (path === "/api/overview") {
+      if (path === "/api/discovery") {
         return Response.json({
           controllerNodeId,
           generatedAt: 1,
@@ -597,7 +597,8 @@ describe("Seoul Codex MCP gateway", () => {
             statusRunnerId: runnerId,
             runners: [{ runnerId, title: "runner", purpose: "task", approvalRequired: true }],
           }],
-          tasks: [],
+          taskCount: 0,
+          taskStatusCounts: {},
         });
       }
       if (path.startsWith("/api/tasks/")) {

@@ -31,6 +31,8 @@ import {
 import { validateBaseArtifactManifest } from "../mesh/artifact-store";
 
 const MAX_CONTROL_REQUEST_BYTES = 12 * 1024 * 1024;
+const MAX_DISCOVERY_PEERS = 32;
+const MAX_DISCOVERY_RESOURCES = 64;
 const CodexTextSchema = z.string().max(64 * 1024)
   .refine((value) => value.trim().length > 0, "text must not be blank");
 const DeadlineMsSchema = z.coerce.number().int().min(1_000).max(2 * 60_000);
@@ -171,7 +173,8 @@ export async function startControlServer(
 async function handleApi(request: Request, url: URL, controller: ControlController): Promise<Response> {
   try {
     const path = url.pathname;
-    if (request.method === "GET" && path === "/api/overview") return json(controller.overview());
+    if (request.method === "GET" && path === "/api/overview") return json(overviewView(controller.overview()));
+    if (request.method === "GET" && path === "/api/discovery") return json(discoveryView(controller.overview()));
     if (request.method === "GET" && path === "/api/tasks") {
       const query = TaskListQuerySchema.parse(Object.fromEntries(url.searchParams));
       const page = controller.journal.listVisible(controller.nodeId, query);
@@ -479,6 +482,86 @@ function submissionView(record: ControlTaskRecord): Record<string, unknown> {
     ...jobView(record),
     idempotencyKey: record.idempotencyKey ?? null,
     pollAfterMs: ["completed", "denied", "failed", "cancelled"].includes(record.status) ? 0 : 1_000,
+  };
+}
+
+function overviewView(overview: ControllerOverview): Record<string, unknown> {
+  return {
+    controllerNodeId: overview.controllerNodeId,
+    generatedAt: overview.generatedAt,
+    peers: overview.peers,
+    resources: overview.resources,
+    tasks: overview.tasks.map(taskRowView),
+  };
+}
+
+function taskRowView(record: ControlTaskRecord): Record<string, unknown> {
+  return {
+    taskId: record.taskId,
+    groupId: record.groupId,
+    targetNodeId: record.targetNodeId,
+    resourceId: record.resourceId,
+    operation: record.operation,
+    status: record.status,
+    ...(record.decision ? { decision: record.decision } : {}),
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function discoveryView(overview: ControllerOverview): Record<string, unknown> {
+  const tasks = overview.tasks;
+  const taskStatusCounts: Record<string, number> = Object.create(null) as Record<string, number>;
+  for (const task of tasks) taskStatusCounts[task.status] = (taskStatusCounts[task.status] ?? 0) + 1;
+  return {
+    controllerNodeId: overview.controllerNodeId,
+    generatedAt: overview.generatedAt,
+    peers: overview.peers.slice(0, MAX_DISCOVERY_PEERS).map((peer) => ({
+      fingerprint: peer.fingerprint,
+      deviceName: peer.deviceName,
+      platform: peer.platform,
+      status: peer.status,
+      lastSeen: peer.lastSeen,
+      resourceCount: peer.resources.length,
+    })),
+    resources: overview.resources.slice(0, MAX_DISCOVERY_RESOURCES).map((resource) => ({
+      id: resource.id,
+      nodeId: resource.nodeId,
+      deviceName: resource.deviceName,
+      kind: resource.kind,
+      displayName: resource.displayName,
+      capabilities: resource.capabilities,
+      allowedOperations: resource.allowedOperations,
+      allowedGroupIds: resource.allowedGroupIds,
+      defaultGroupId: resource.defaultGroupId,
+      runnerIds: resource.runnerIds,
+      statusRunnerId: resource.statusRunnerId,
+      ...(resource.status ? { status: discoveryResourceStatus(resource.status) } : {}),
+    })),
+    taskCount: tasks.length,
+    taskStatusCounts,
+  };
+}
+
+function discoveryResourceStatus(status: NonNullable<ControllerOverview["resources"][number]["status"]>): Record<string, unknown> {
+  return {
+    state: status.state,
+    summary: status.summary,
+    observedAt: status.observedAt,
+    ...(status.gpu ? { gpu: { devices: status.gpu.devices.slice(0, 32) } } : {}),
+    ...(status.workspace ? {
+      workspace: {
+        connectionStatus: status.workspace.connectionStatus,
+        watcherAvailable: status.workspace.watcherAvailable,
+        codexAppServerAvailable: status.workspace.codexAppServerAvailable,
+        remoteCodexControl: status.workspace.remoteCodexControl,
+        activeJobs: status.workspace.activeJobs,
+        workspaceRevision: status.workspace.workspaceRevision,
+        lastSuccess: status.workspace.lastSuccess,
+        lastErrorStage: status.workspace.lastErrorStage,
+        checkedAt: status.workspace.checkedAt,
+      },
+    } : {}),
   };
 }
 

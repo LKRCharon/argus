@@ -62,7 +62,7 @@ export interface ControllerOverview {
   relayUrl: string;
   generatedAt: number;
   peers: ControllerPeerSnapshot[];
-  resources: Array<MeshResource & { nodeId: string; deviceName: string }>;
+  resources: Array<MeshResource & { nodeId: string; deviceName: string; status?: MeshResourceStatus }>;
   tasks: ControlTaskRecord[];
 }
 

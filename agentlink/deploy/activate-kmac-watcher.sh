@@ -221,7 +221,7 @@ verify_candidate_config() {
 
 controller_snapshot() {
   /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 seoul \
-    "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/overview\"); if(!r.ok) process.exit(1); const o=await r.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); if(!p || (p.status!==\"online\" && p.status!==\"connecting\") || !Number.isInteger(p.lastSeen)) process.exit(1); process.stdout.write(p.status+\" \"+p.lastSeen+\"\\n\")'" 2>/dev/null
+    "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/discovery\"); if(!r.ok) process.exit(1); const o=await r.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); if(!p || (p.status!==\"online\" && p.status!==\"connecting\") || !Number.isInteger(p.lastSeen)) process.exit(1); process.stdout.write(p.status+\" \"+p.lastSeen+\"\\n\")'" 2>/dev/null
 }
 
 controller_verify() {
@@ -232,7 +232,7 @@ controller_verify() {
       status="${snapshot%% *}"; seen="${snapshot##* }"
       if [[ "$status" == online && "$seen" =~ ^[0-9]+$ ]] && (( seen > minimum_seen )); then
         if /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 seoul \
-            "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/refresh\",{method:\"POST\"}); if(!r.ok) process.exit(1); const o=await r.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); const resource=p?.resources?.find((x)=>x.id===\"$RESOURCE_ID\"); const status=p?.resourceStatuses?.[\"$RESOURCE_ID\"]; if(p?.status!==\"online\" || !Number.isInteger(p.lastSeen) || p.lastSeen<=${minimum_seen} || resource?.statusRunnerId!==\"$RUNNER_ID\" || status?.state!==\"ready\" || status?.workspace?.workspaceRevision!==\"$REVIEWED_COMMIT\" || status?.workspace?.remoteCodexControl!==true) process.exit(1); process.stdout.write(\"ok\\n\")'" \
+            "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/refresh\",{method:\"POST\"}); if(!r.ok) process.exit(1); const refresh=await r.json(); const d=await fetch(\"$CONTROLLER_URL/api/discovery\"); if(!d.ok) process.exit(1); const o=await d.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); const resource=(o.resources??[]).find((x)=>x.id===\"$RESOURCE_ID\"); const status=resource?.status; if(p?.status!==\"online\" || !Number.isInteger(p.lastSeen) || p.lastSeen<=${minimum_seen} || resource?.statusRunnerId!==\"$RUNNER_ID\" || status?.state!==\"ready\" || status?.workspace?.workspaceRevision!==\"$REVIEWED_COMMIT\" || status?.workspace?.remoteCodexControl!==true) process.exit(1); process.stdout.write(\"ok\\n\")'" \
             >/dev/null 2>/dev/null; then
           controller_verify_seen="$seen"
           return 0

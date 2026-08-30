@@ -62,6 +62,11 @@ fetch  = +refs/heads/*:refs/remotes/origin/*
 
 ## Reverse-tunnel health
 
+Control endpoint discovery checks use `GET /api/discovery`, a bounded
+read-only response containing peer/resource readiness and task counts. The
+loopback web console continues to use `GET /api/overview`; its task rows are
+metadata-only.
+
 The fixed readiness probe checks three layers without changing any process:
 
 1. KMac SSH is listening and returns an SSH banner on `127.0.0.1:22`.

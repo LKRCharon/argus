@@ -132,7 +132,7 @@ export class ControlApiClient {
   }
 
   async listDevices(): Promise<unknown> {
-    return this.request("GET", "/api/overview");
+    return this.request("GET", "/api/discovery");
   }
 
   async submitJob(input: MeshSubmitJobInput): Promise<unknown> {
@@ -605,13 +605,8 @@ function summarizeOverview(value: unknown): Record<string, unknown> {
   if (!overview) throw new GatewayError("控制 API 返回的设备摘要格式无效");
   const peers = array(overview.peers);
   const resources = array(overview.resources);
-  const tasks = array(overview.tasks);
-  const taskStatusCounts: Record<string, number> = Object.create(null) as Record<string, number>;
-  for (const item of tasks) {
-    const status = textField(record(item), "status", 64);
-    if (status) taskStatusCounts[status] = (taskStatusCounts[status] ?? 0) + 1;
-  }
-
+  const taskCount = numberField(overview, "taskCount");
+  const taskStatusCounts = boundedTaskStatusCounts(overview.taskStatusCounts);
   return {
     controllerNodeId: idField(overview, "controllerNodeId", MeshNodeIdSchema),
     generatedAt: numberField(overview, "generatedAt"),
@@ -619,7 +614,7 @@ function summarizeOverview(value: unknown): Record<string, unknown> {
       peers: peers.length,
       onlinePeers: peers.filter((peer) => textField(record(peer), "status", 64) === "online").length,
       resources: resources.length,
-      tasks: tasks.length,
+      tasks: taskCount,
     },
     peers: peers.slice(0, MAX_PEERS).map(summarizePeer),
     resources: resources.slice(0, MAX_RESOURCES).map(summarizeResource),
@@ -629,6 +624,16 @@ function summarizeOverview(value: unknown): Record<string, unknown> {
       resources: Math.max(0, resources.length - MAX_RESOURCES),
     },
   };
+}
+
+function boundedTaskStatusCounts(value: unknown): Record<string, number> {
+  const counts = record(value);
+  if (!counts) throw new GatewayError("控制 API 返回的任务状态摘要格式无效");
+  return Object.fromEntries(Object.entries(counts).slice(0, 16).flatMap(([status, count]) => (
+    typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+      ? [[status.slice(0, 64), count] as [string, number]]
+      : []
+  )));
 }
 
 function summarizePeer(value: unknown): Record<string, unknown> {
