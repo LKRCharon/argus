@@ -176,7 +176,7 @@ verify_candidate_config() {
     const { candidateMeshHashMatches } = await import(process.env.GATES_MODULE);
     if (!candidateMeshHashMatches(process.env.ACTUAL_HASH, process.env.EXPECTED_HASH)) process.exit(1);
   ' >/dev/null || return 1
-  CONFIG="$CANDIDATE_CONFIG" RELEASE="$CANDIDATE_RELEASE" GATES_MODULE="$GATES_MODULE" \
+  env CONFIG="$CANDIDATE_CONFIG" RELEASE="$CANDIDATE_RELEASE" GATES_MODULE="$GATES_MODULE" \
     EXPECTED_RUNTIME_BUN="$BUN" \
     EXPECTED_STATE_DIR="$base_canonical/state" \
     EXPECTED_CODEX_BIN="$HOME/.local/bin/codex" \

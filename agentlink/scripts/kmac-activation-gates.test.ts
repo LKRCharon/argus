@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -49,6 +50,13 @@ function runBashPathPredicate(predicate: string, value: string): boolean {
   return result.status === 0;
 }
 
+function extractCandidateConfigGate(source: string): string {
+  const start = source.indexOf("verify_candidate_config() {");
+  const end = source.indexOf("\n}\n\ncontroller_snapshot() {", start);
+  if (start < 0 || end < 0) throw new Error("candidate config gate not found");
+  return source.slice(start, end + 2);
+}
+
 describe("KMac activation gates", () => {
   test("executes every shell path predicate without the impossible NUL check", () => {
     const normalPath = "/Users/kairong/Library/Application Support/AgentLink/releases/candidate";
@@ -62,6 +70,114 @@ describe("KMac activation gates", () => {
       expect(runBashPathPredicate(predicate, normalPath)).toBe(true);
       expect(runBashPathPredicate(predicate, invalidTemporaryPath)).toBe(false);
       expect(runBashPathPredicate(predicate, invalidNewlinePath)).toBe(false);
+    }
+  });
+
+  test("executes the candidate config gate with a readonly module binding", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const gate = extractCandidateConfigGate(activation);
+    const testRoot = mkdtempSync(join(tmpdir(), "argus-kmac-config-gate-"));
+    const baseRoot = join(testRoot, "agentlink");
+    const homeRoot = join(testRoot, "home");
+    const candidateConfig = join(baseRoot, "prepared", "mesh.json");
+    const sourceRelease = join(import.meta.dir, "..");
+    const release = join(testRoot, "release");
+    const bun = process.execPath;
+    const stateDir = join(baseRoot, "state");
+    const workspaceRoot = join(baseRoot, "workspace");
+    const codexBin = join(homeRoot, ".local", "bin", "codex");
+    const statusPath = `${homeRoot}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+    const config = {
+      version: 1,
+      groups: [{ id: "group-alpha", members: ["node-a", "node-b"] }],
+      requesters: ["node-a"],
+      legacyControl: false,
+      remoteCodexControl: true,
+      allowedRoots: [workspaceRoot],
+      resources: [{
+        id: "workspace:kmac-m4",
+        ownerNodeId: "node-b",
+        kind: "directory",
+        displayName: "KMac",
+        root: workspaceRoot,
+        statusRunnerId: "kmac-status-v1",
+      }],
+      runners: [{
+        id: "kmac-status-v1",
+        resourceId: "workspace:kmac-m4",
+        purpose: "status",
+        executable: bun,
+        fixedArgs: [`${release}/deploy/kmac-workspace-status.ts`],
+        workdir: ".",
+        env: {
+          PATH: statusPath,
+          ARGUS_STATUS_STATE_DIR: stateDir,
+          ARGUS_STATUS_WATCH_LABEL: "com.kairong.agentlink-watch",
+          ARGUS_STATUS_CODEX_BIN: codexBin,
+          ARGUS_STATUS_RELAY_PORT: "28787",
+        },
+        maxRuntimeMs: 5000,
+        maxOutputBytes: 4096,
+        allowDynamicArgs: false,
+        allowInput: false,
+        approvalRequired: false,
+        workspaceCapabilities: ["read-only-status"],
+        exposeDebugOutput: false,
+      }],
+    };
+    const configText = `${JSON.stringify(config)}\n`;
+    mkdirSync(join(baseRoot, "prepared"), { recursive: true, mode: 0o700 });
+    mkdirSync(join(release, "packages", "daemon", "src", "mesh"), { recursive: true, mode: 0o700 });
+    mkdirSync(join(release, "deploy"), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(release, "packages", "daemon", "src", "mesh", "config.ts"),
+      `export { parseMeshConfig } from ${JSON.stringify(
+        join(sourceRelease, "packages", "daemon", "src", "mesh", "config.ts"),
+      )};\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(join(release, "deploy", "kmac-workspace-status.ts"), "", { mode: 0o600 });
+    writeFileSync(candidateConfig, configText, { mode: 0o600 });
+    const expectedHash = createHash("sha256").update(configText).digest("hex");
+
+    try {
+      const result = spawnSync("/bin/bash", [
+        "-c",
+        [
+          "set -Eeuo pipefail",
+          'CANDIDATE_CONFIG="$1"',
+          'CANDIDATE_RELEASE="$2"',
+          'readonly GATES_MODULE="$3"',
+          'BUN="$4"',
+          'base_canonical="$5"',
+          'export HOME="$6"',
+          'export AGENTLINK_HOME="$5/agentlink-home"',
+          'EXPECTED_CANDIDATE_MESH_SHA256="$7"',
+          "sha256_file() {",
+          "  local output",
+          '  output="$(/usr/bin/shasum -a 256 "$1" 2>/dev/null || true)"',
+          '  printf \'%s\\n\' "${output%% *}"',
+          "}",
+          gate,
+          "verify_candidate_config",
+          "printf 'candidate_config_gate=passed\\n'",
+        ].join("\n"),
+        "candidate-config-gate-regression",
+        candidateConfig,
+        release,
+        join(sourceRelease, "deploy", "kmac-activation-gates.ts"),
+        bun,
+        baseRoot,
+        homeRoot,
+        expectedHash,
+      ], { encoding: "utf8" });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("candidate_config_gate=passed\n");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(testRoot, { recursive: true, force: true });
     }
   });
 
