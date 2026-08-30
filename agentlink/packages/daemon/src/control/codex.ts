@@ -243,15 +243,15 @@ export class CodexPeerGateway {
     const controlRequestId = options.controlRequestId ?? `codex:${randomUUID()}`;
     const deadlineAt = options.deadlineAt ?? Date.now() + this.requestTimeoutMs;
     const deadlineRemaining = deadlineAt - Date.now();
+    if (deadlineRemaining <= 0) {
+      throw new CodexGatewayError("controller deadline elapsed before dispatch", "controller", true, true);
+    }
     const requestBudget = options.durableStart
       ? Math.max(1, deadlineRemaining + DURABLE_START_RESPONSE_GRACE_MS)
       : this.requestTimeoutMs;
     const remaining = options.durableStart
       ? requestBudget
       : Math.min(requestBudget, deadlineRemaining);
-    if (remaining <= 0) {
-      throw new CodexGatewayError("controller deadline elapsed before dispatch", "controller", true, true);
-    }
     let dispatched = false;
     const response = new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {

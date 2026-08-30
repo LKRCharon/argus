@@ -196,15 +196,47 @@ describe("CodexPeerGateway", () => {
     }
   });
 
-  test("keeps a bounded response grace after the durable deadline", async () => {
-    const durable = new CodexPeerGateway(async () => undefined, { requestTimeoutMs: 30_000 });
-    const durableStartedAt = Date.now();
+  test("rejects an expired durable deadline before dispatch", async () => {
+    let sendCount = 0;
+    const durable = new CodexPeerGateway(async () => { sendCount += 1; }, { requestTimeoutMs: 30_000 });
     await expect(durable.startThread("mac-node", "start", undefined, {
-      deadlineAt: durableStartedAt + 350,
-      controlRequestId: "codex:durable-deadline",
-    })).rejects.toMatchObject({ stage: "watcher", timedOut: true });
-    expect(Date.now() - durableStartedAt).toBeGreaterThanOrEqual(1_000);
-    expect(Date.now() - durableStartedAt).toBeLessThan(1_500);
+      deadlineAt: Date.now() - 1,
+      controlRequestId: "codex:expired-durable-deadline",
+    })).rejects.toMatchObject({
+      stage: "controller",
+      timedOut: true,
+      retryable: true,
+    });
+    expect(sendCount).toBe(0);
+  });
+
+  test("accepts a correlated durable error during response grace", async () => {
+    let sent: Record<string, unknown> | undefined;
+    const durable = new CodexPeerGateway(async (_targetNodeId, payload) => { sent = payload; }, {
+      requestTimeoutMs: 30_000,
+    });
+    const deadlineAt = Date.now() + 50;
+    const pending = durable.startThread("mac-node", "start", undefined, {
+      deadlineAt,
+      controlRequestId: "codex:durable-post-deadline-error",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    expect(Date.now()).toBeGreaterThan(deadlineAt);
+    expect(durable.handlePayload("mac-node", {
+      kind: "codex-error",
+      controlRequestId: sent?.controlRequestId,
+      note: "app-server timed out after session creation",
+      timedOut: true,
+      timedOutStage: "app-server",
+      retryable: true,
+      sessionId: "thread-created-before-timeout",
+    })).toBe(true);
+    await expect(pending).rejects.toMatchObject({
+      stage: "app-server",
+      timedOut: true,
+      retryable: true,
+      sessionId: "thread-created-before-timeout",
+    });
 
     const ordinary = new CodexPeerGateway(async () => undefined, { requestTimeoutMs: 60 });
     const ordinaryStartedAt = Date.now();
