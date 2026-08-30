@@ -67,7 +67,7 @@ describe("Seoul Codex MCP gateway", () => {
           platform: "linux",
           status: "online",
           lastSeen: 120,
-          resources: [{ id: "gpu:l40" }],
+          resourceCount: 1,
         }],
         resources: [{
           id: "gpu:l40",
@@ -123,8 +123,12 @@ describe("Seoul Codex MCP gateway", () => {
             },
           },
         }],
+        totalPeerCount: 1,
+        totalResourceCount: 2,
+        onlinePeerCount: 1,
         taskCount: 1,
         taskStatusCounts: { running: 1 },
+        truncated: { peers: 0, resources: 0 },
       });
     };
     const mcp = await connectMcp(fetchImpl);
@@ -168,6 +172,16 @@ describe("Seoul Codex MCP gateway", () => {
           resourceId: "workspace:kmac-m4",
           defaultGroupId: "seoul-mac",
           statusRunnerId: "kmac-status-v1",
+          runners: [{
+            runnerId: "kmac-status-v1",
+            title: "KMac workspace status",
+            purpose: "status",
+            approvalRequired: false,
+            maxRuntimeMs: 10_000,
+            workspaceCapabilities: ["read-only-status"],
+            inputSchema: { type: "null" },
+            resultSchema: { type: "object" },
+          }],
           status: {
             workspace: {
               connectionStatus: "online",
@@ -581,7 +595,7 @@ describe("Seoul Codex MCP gateway", () => {
             deviceName: "KMac",
             platform: "darwin",
             status: "online",
-            resources: [],
+            resourceCount: 0,
           }],
           resources: [{
             id: resourceId,
@@ -599,6 +613,10 @@ describe("Seoul Codex MCP gateway", () => {
           }],
           taskCount: 0,
           taskStatusCounts: {},
+          totalPeerCount: 1,
+          totalResourceCount: 1,
+          onlinePeerCount: 1,
+          truncated: { peers: 0, resources: 0 },
         });
       }
       if (path.startsWith("/api/tasks/")) {

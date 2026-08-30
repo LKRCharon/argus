@@ -291,7 +291,7 @@ async function handleApi(request: Request, url: URL, controller: ControlControll
     }
     if (request.method === "POST" && path === "/api/refresh") {
       await controller.refreshResources();
-      return json(controller.overview());
+      return json(overviewView(controller.overview()));
     }
     if (request.method === "POST" && path === "/api/tasks") {
       return await createTask(request, controller);
@@ -511,11 +511,16 @@ function taskRowView(record: ControlTaskRecord): Record<string, unknown> {
 
 function discoveryView(overview: ControllerOverview): Record<string, unknown> {
   const tasks = overview.tasks;
+  const totalPeerCount = overview.peers.length;
+  const totalResourceCount = overview.resources.length;
   const taskStatusCounts: Record<string, number> = Object.create(null) as Record<string, number>;
   for (const task of tasks) taskStatusCounts[task.status] = (taskStatusCounts[task.status] ?? 0) + 1;
   return {
     controllerNodeId: overview.controllerNodeId,
     generatedAt: overview.generatedAt,
+    totalPeerCount,
+    totalResourceCount,
+    onlinePeerCount: overview.peers.filter((peer) => peer.status === "online").length,
     peers: overview.peers.slice(0, MAX_DISCOVERY_PEERS).map((peer) => ({
       fingerprint: peer.fingerprint,
       deviceName: peer.deviceName,
@@ -536,10 +541,24 @@ function discoveryView(overview: ControllerOverview): Record<string, unknown> {
       defaultGroupId: resource.defaultGroupId,
       runnerIds: resource.runnerIds,
       statusRunnerId: resource.statusRunnerId,
+      runners: (resource.runners ?? []).slice(0, 32).map((runner) => ({
+        runnerId: runner.runnerId,
+        title: runner.title,
+        purpose: runner.purpose,
+        approvalRequired: runner.approvalRequired,
+        maxRuntimeMs: runner.maxRuntimeMs,
+        workspaceCapabilities: runner.workspaceCapabilities,
+        inputSchema: runner.inputSchema,
+        resultSchema: runner.resultSchema,
+      })),
       ...(resource.status ? { status: discoveryResourceStatus(resource.status) } : {}),
     })),
     taskCount: tasks.length,
     taskStatusCounts,
+    truncated: {
+      peers: Math.max(0, totalPeerCount - MAX_DISCOVERY_PEERS),
+      resources: Math.max(0, totalResourceCount - MAX_DISCOVERY_RESOURCES),
+    },
   };
 }
 

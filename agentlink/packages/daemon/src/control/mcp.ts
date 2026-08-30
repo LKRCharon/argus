@@ -605,25 +605,47 @@ function summarizeOverview(value: unknown): Record<string, unknown> {
   if (!overview) throw new GatewayError("控制 API 返回的设备摘要格式无效");
   const peers = array(overview.peers);
   const resources = array(overview.resources);
+  const totalPeerCount = boundedCount(overview, "totalPeerCount");
+  const totalResourceCount = boundedCount(overview, "totalResourceCount");
+  const truncated = boundedTruncation(overview.truncated, totalPeerCount, totalResourceCount, peers.length, resources.length);
   const taskCount = numberField(overview, "taskCount");
   const taskStatusCounts = boundedTaskStatusCounts(overview.taskStatusCounts);
   return {
     controllerNodeId: idField(overview, "controllerNodeId", MeshNodeIdSchema),
     generatedAt: numberField(overview, "generatedAt"),
     counts: {
-      peers: peers.length,
-      onlinePeers: peers.filter((peer) => textField(record(peer), "status", 64) === "online").length,
-      resources: resources.length,
+      peers: totalPeerCount,
+      onlinePeers: boundedCount(overview, "onlinePeerCount"),
+      resources: totalResourceCount,
       tasks: taskCount,
     },
     peers: peers.slice(0, MAX_PEERS).map(summarizePeer),
     resources: resources.slice(0, MAX_RESOURCES).map(summarizeResource),
     taskStatusCounts,
     truncated: {
-      peers: Math.max(0, peers.length - MAX_PEERS),
-      resources: Math.max(0, resources.length - MAX_RESOURCES),
+      peers: truncated.peers,
+      resources: truncated.resources,
     },
   };
+}
+
+function boundedCount(body: Record<string, unknown>, name: string, fallback?: number): number {
+  const value = body[name] ?? fallback;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new GatewayError(`控制 API 返回的 ${name} 格式无效`);
+  }
+  return value;
+}
+
+function boundedTruncation(value: unknown, totalPeers: number, totalResources: number, peerLength: number, resourceLength: number): { peers: number; resources: number } {
+  const truncation = record(value);
+  if (!truncation) throw new GatewayError("控制 API 返回的截断摘要格式无效");
+  const peers = boundedCount(truncation, "peers");
+  const resources = boundedCount(truncation, "resources");
+  if (peers !== totalPeers - peerLength || resources !== totalResources - resourceLength) {
+    throw new GatewayError("控制 API 返回的设备截断摘要不一致");
+  }
+  return { peers, resources };
 }
 
 function boundedTaskStatusCounts(value: unknown): Record<string, number> {
@@ -644,7 +666,7 @@ function summarizePeer(value: unknown): Record<string, unknown> {
     platform: textField(peer, "platform", 128),
     status: textField(peer, "status", 64),
     lastSeen: numberField(peer, "lastSeen"),
-    resourceCount: array(peer?.resources).length,
+    resourceCount: boundedCount(peer ?? {}, "resourceCount"),
   };
 }
 

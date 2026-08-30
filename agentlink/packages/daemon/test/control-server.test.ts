@@ -50,6 +50,16 @@ function fakeController(root = mkdtempSync(join(tmpdir(), "argus-control-"))): {
         allowedOperations: ["inspect", "run"],
         allowedGroupIds: ["group-alpha"],
         defaultGroupId: "group-alpha",
+        runners: [{
+          runnerId: "repo:runner",
+          title: "Repository runner",
+          purpose: "task",
+          approvalRequired: true,
+          maxRuntimeMs: 60_000,
+          workspaceCapabilities: ["read-only-status"],
+          inputSchema: { type: "object" },
+          resultSchema: { type: "object" },
+        }],
       }],
       tasks: journal.list(),
     }),
@@ -306,6 +316,56 @@ describe("Seoul control API", () => {
     expect(JSON.stringify(discovery)).not.toContain("credential-secret");
     expect(JSON.stringify(discovery)).not.toContain("relay-secret");
     expect(JSON.stringify(discovery)).not.toContain("aaaaaaaa");
+    expect(discovery).toMatchObject({ totalPeerCount: 0, totalResourceCount: 1, truncated: { peers: 0, resources: 0 } });
+    expect(discovery).toMatchObject({ resources: [{ runners: [{
+      runnerId: "repo:runner",
+      title: "Repository runner",
+      purpose: "task",
+      approvalRequired: true,
+      maxRuntimeMs: 60_000,
+      workspaceCapabilities: ["read-only-status"],
+      inputSchema: { type: "object" },
+      resultSchema: { type: "object" },
+    }] }] });
+
+    const refreshResponse = await handler(new Request("http://localhost/api/refresh", { method: "POST" }));
+    const refreshed = await refreshResponse.json() as Record<string, unknown>;
+    expect((refreshed.tasks as Array<Record<string, unknown>>)[0]).toEqual(task);
+    expect(JSON.stringify(refreshed)).not.toContain("credential-secret");
+    expect(JSON.stringify(refreshed)).not.toContain("P".repeat(100));
+
+    const baseOverview = controller.overview();
+    controller.overview = () => ({
+      ...baseOverview,
+      peers: Array.from({ length: 35 }, (_, index) => ({
+        fingerprint: `node-${index}`,
+        deviceName: `device-${index}`,
+        platform: "linux",
+        pairedAt: 1,
+        status: "online" as const,
+        lastSeen: 2,
+        error: null,
+        resources: Array.from({ length: 2 }, (_, resourceIndex) => ({
+          ...baseOverview.resources[0],
+          id: `resource:${index}:${resourceIndex}`,
+        })),
+        resourceStatuses: {},
+      })),
+      resources: Array.from({ length: 70 }, (_, index) => ({
+        ...baseOverview.resources[0],
+        id: `repo:gpu-${index}`,
+      })),
+    });
+    const boundedResponse = await handler(new Request("http://localhost/api/discovery"));
+    const bounded = await boundedResponse.json() as Record<string, unknown>;
+    expect(bounded).toMatchObject({
+      totalPeerCount: 35,
+      totalResourceCount: 70,
+      truncated: { peers: 3, resources: 6 },
+    });
+    expect((bounded.peers as unknown[]).length).toBe(32);
+    expect((bounded.resources as unknown[]).length).toBe(64);
+    expect(Buffer.byteLength(JSON.stringify(bounded), "utf8")).toBeLessThan(64 * 1024);
   });
 
   test("rejects non-loopback hosts and cross-origin mutations", async () => {
