@@ -150,6 +150,68 @@ disabled, and only the `read-only-status` capability. The final flag is an
 explicit candidate-only opt-in; omitting it preserves `remoteCodexControl:
 false`. No new task runner or shell surface is created.
 
+## Phase-three release workflow
+
+Phase three makes release activation an explicit, auditable sequence. Run it
+from the reviewed checkout with canonical absolute paths. The base must be the
+persistent AgentLink root; temporary roots are available only to the exported
+test API and are rejected by the CLI.
+
+```bash
+cd agentlink
+reviewed_commit="$(git rev-parse HEAD)"
+candidate="$HOME/Library/Application Support/AgentLink/releases/<release-id>"
+active="$HOME/Library/Application Support/AgentLink/releases/<active-release>"
+
+bun run release:workflow -- prepare \
+  --candidate "$candidate" --git-root "$PWD" \
+  --reviewed-commit "$reviewed_commit" --executor hardened-kmac --json
+
+bun run release:workflow -- preflight \
+  --candidate "$candidate" --active "$active" --git-root "$PWD" \
+  --reviewed-commit "$reviewed_commit" --json
+```
+
+`prepare` archives the exact reviewed commit, writes the functional SHA-256
+manifest, verifies the complete tree, and makes the candidate non-writable
+before recording its operation ID. `preflight` is read-only: it creates no
+directories, lock, operation state, audit record, link, or Mesh/config file.
+Both commands reject path aliases, traversal, symlink escapes, dirty
+functional files, stale Git HEAD, and a candidate whose manifest does not
+match the reviewed artifact.
+
+Production activation uses the existing hardened adapter unchanged. It requires
+the explicit live and candidate Mesh hashes, the fixed runtime, repository,
+candidate config, and `--require-remote-codex-control`:
+
+```bash
+bun run release:workflow -- activate \
+  --candidate "$candidate" --active "$active" --git-root "$PWD" \
+  --reviewed-commit "$reviewed_commit" --operation-id <operation-id> \
+  --executor hardened-kmac \
+  --runtime-bun "$HOME/Library/Application Support/AgentLink/runtime/bun-1.3.14/bin/bun" \
+  --candidate-config "$HOME/Library/Application Support/AgentLink/prepared/<stage>/mesh.json" \
+  --expected-live-mesh-sha256 <live-hash> \
+  --expected-candidate-mesh-sha256 <candidate-hash> \
+  --repository-root "$PWD" --require-remote-codex-control --json
+```
+
+The command records durable operation state before the switch and a hash-chain
+audit record before reporting `active`. It serializes activation with a
+non-reclaimable lock; malformed or stale lock metadata blocks. `status` and
+`audit` are read-only bounded JSON queries. `rollback` verifies the exact prior
+release captured by the operation and atomically restores the `current` link;
+it reports `rolled-back` only after the prior tree, directory identity, link,
+state, and audit postconditions all pass. A hardened adapter failure performs
+its existing internal rollback. The workflow intentionally blocks a separate
+hardened rollback because no live Mesh backup may be inferred or overwritten;
+filesystem rollback is exposed only through the temporary-root test API.
+
+The old `deploy/activate-kmac-watcher.sh` entry point remains the production
+adapter and is not replaced. New callers should use the workflow for
+prepare/preflight/audit/status and invoke its hardened `activate` phase; direct
+shell invocation remains compatible for the existing commander migration.
+
 Stage one stops here. Do not replace `state/mesh.json`, switch `current`, run
 `launchctl kickstart`, or stop the old watcher. Activation must switch the
 reviewed release and its matching candidate config together, verify relay

@@ -18,6 +18,7 @@
   "include": [
     "packages/*/src/**/*.ts",
     "packages/*/test/**/*.ts",
-    "scripts/**/*.ts"
+    "scripts/**/*.ts",
+    "deploy/kmac-release-workflow*.ts"
   ]
 }
