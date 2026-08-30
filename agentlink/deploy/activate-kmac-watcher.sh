@@ -294,7 +294,8 @@ atomic_link_switch() {
     /bin/rm -f "$temporary" || true
     return 1
   fi
-  /bin/mv -f "$temporary" "$CURRENT" || { /bin/rm -f "$temporary" || true; return 1; }
+  # BSD mv -h replaces a destination symlink instead of following it into a directory.
+  /bin/mv -f -h "$temporary" "$CURRENT" || { /bin/rm -f "$temporary" || true; return 1; }
 }
 
 rollback() {

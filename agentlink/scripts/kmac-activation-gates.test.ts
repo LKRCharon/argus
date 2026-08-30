@@ -31,6 +31,13 @@ function extractPersistentPathPredicate(source: string): string {
   return source.slice(start, end + 2);
 }
 
+function extractAtomicLinkSwitch(source: string): string {
+  const start = source.indexOf("atomic_link_switch() {");
+  const end = source.indexOf("\n}\n\nrollback() {", start);
+  if (start < 0 || end < 0) throw new Error("atomic link switch not found");
+  return source.slice(start, end + 2);
+}
+
 function runBashPathPredicate(predicate: string, value: string): boolean {
   const result = spawnSync("/bin/bash", [
     "-c",
@@ -65,6 +72,51 @@ describe("KMac activation gates", () => {
     expect(candidateMeshHashMatches("short", expected)).toBe(false);
     expect(reversePlistHashMatches(expected, expected)).toBe(true);
     expect(reversePlistHashMatches("A".repeat(64), expected)).toBe(false);
+  });
+
+  test("atomically replaces current without following its destination symlink", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const switchFunction = extractAtomicLinkSwitch(activation);
+    expect(activation).toContain('/bin/mv -f -h "$temporary" "$CURRENT"');
+    expect(activation).not.toContain('/bin/mv -f "$temporary" "$CURRENT"');
+    expect(switchFunction).toContain(
+      '/bin/rm -f "$temporary" || true; return 1',
+    );
+
+    const testRoot = mkdtempSync(join(tmpdir(), "argus-kmac-link-"));
+    try {
+      const result = spawnSync("/bin/bash", [
+        "-c",
+        [
+          "set -Eeuo pipefail",
+          'root="$1"',
+          'old="$root/old"',
+          'candidate="$root/candidate"',
+          'CURRENT="$root/current"',
+          '/bin/mkdir -p "$old" "$candidate"',
+          '/bin/ln -s "$old" "$CURRENT"',
+          `assert_no_stage2() { [[ -z "$(/usr/bin/find "$1" -name 'current.stage2.*' -print)" ]]; }`,
+          switchFunction,
+          'atomic_link_switch "$candidate"',
+          '[[ "$(/usr/bin/readlink "$CURRENT")" == "$candidate" ]]',
+          'assert_no_stage2 "$old"',
+          'assert_no_stage2 "$candidate"',
+          'atomic_link_switch "$old"',
+          '[[ "$(/usr/bin/readlink "$CURRENT")" == "$old" ]]',
+          'assert_no_stage2 "$old"',
+          'assert_no_stage2 "$candidate"',
+        ].join("\n"),
+        "atomic-link-switch-regression",
+        testRoot,
+      ], { encoding: "utf8" });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
   });
 
   test("requires a valid tree and the reviewed manifest commit", () => {
