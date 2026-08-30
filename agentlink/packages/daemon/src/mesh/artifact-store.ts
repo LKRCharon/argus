@@ -35,6 +35,8 @@ export const MAX_ARTIFACT_FILE_BYTES = 1 * 1024 * 1024;
 export const MAX_ARTIFACT_TOTAL_BYTES = 8 * 1024 * 1024;
 const MAX_RESULT_MANIFEST_BYTES = 12 * 1024 * 1024;
 
+const WINDOWS_AMBIGUOUS_PATH_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f<>:"|?*]/;
+
 interface ValidatedBaseArtifact {
   manifest: MeshBaseArtifactManifest;
   contents: Map<string, Buffer>;
@@ -65,11 +67,47 @@ export interface MeshArtifactStoreCaptureHooks {
   beforeFileRead?: (path: string) => void;
 }
 
+/**
+ * Applies the wire schema and the stricter path rules required by every
+ * supported filesystem. `maxBytes` is used by destinations, whose CLI path
+ * budget is expressed in UTF-8 bytes rather than schema characters.
+ */
+export function validatePortableArtifactPath(
+  value: unknown,
+  label = "artifact path",
+  maxBytes?: number,
+): string {
+  let path: string;
+  try {
+    path = MeshArtifactPathSchema.parse(value);
+  } catch {
+    throw new Error(`${label} must be a safe relative POSIX path`);
+  }
+  if (maxBytes !== undefined && Buffer.byteLength(path, "utf8") > maxBytes) {
+    throw new Error(`${label} exceeds its path size limit`);
+  }
+  for (const segment of path.split("/")) {
+    if (WINDOWS_AMBIGUOUS_PATH_CHARACTER_PATTERN.test(segment)
+      || segment.endsWith(".")
+      || segment.endsWith(" ")
+      || isWindowsDeviceName(segment)) {
+      throw new Error(`${label} contains an unsafe path component`);
+    }
+  }
+  return path;
+}
+
+function isWindowsDeviceName(value: string): boolean {
+  const basename = value.split(".", 1)[0].replace(/[. ]+$/g, "");
+  return /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])$/i.test(basename);
+}
+
 export function validateBaseArtifactManifest(value: unknown): ValidatedBaseArtifact {
   const manifest = MeshBaseArtifactManifestSchema.parse(value);
   const contents = new Map<string, Buffer>();
   let totalBytes = 0;
   for (const file of manifest.files) {
+    validatePortableArtifactPath(file.path, "base artifact file path");
     if (contents.has(file.path)) throw new Error("artifact contains a duplicate path");
     const content = decodeCanonicalBase64(file.contentBase64);
     if (content.byteLength !== file.size) throw new Error("artifact file size mismatch");
@@ -94,6 +132,7 @@ export function validateResultArtifactManifest(value: unknown): MeshResultArtifa
   const seen = new Set<string>();
   let totalBytes = 0;
   for (const file of manifest.changed) {
+    validatePortableArtifactPath(file.path, "result artifact changed file path");
     if (seen.has(file.path)) throw new Error("artifact contains a duplicate path");
     seen.add(file.path);
     const content = decodeCanonicalBase64(file.contentBase64);
@@ -104,6 +143,7 @@ export function validateResultArtifactManifest(value: unknown): MeshResultArtifa
     if (totalBytes > MAX_ARTIFACT_TOTAL_BYTES) throw new Error("artifact exceeds total size limit");
   }
   for (const path of manifest.deleted) {
+    validatePortableArtifactPath(path, "result artifact deleted path");
     if (seen.has(path)) throw new Error("artifact contains a duplicate path");
     seen.add(path);
   }
@@ -323,7 +363,7 @@ function scanWorkspace(
       totalBytes += info.size;
       if (totalBytes > MAX_ARTIFACT_TOTAL_BYTES) throw new Error("artifact exceeds total size limit");
       const path = relative(workspace, absolute).split(sep).join("/");
-      MeshArtifactPathSchema.parse(path);
+      validatePortableArtifactPath(path, "artifact workspace file path");
       if (files.has(path)) throw new Error("artifact contains a duplicate path");
       beforeFileRead?.(absolute);
       const content = readFileSync(absolute);
@@ -341,7 +381,7 @@ function scanWorkspace(
 }
 
 function joinArtifactPath(root: string, path: string): string {
-  MeshArtifactPathSchema.parse(path);
+  validatePortableArtifactPath(path);
   const candidate = resolve(root, ...path.split("/"));
   const rel = relative(root, candidate);
   if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {

@@ -7,3 +7,4 @@ export * from "./service";
 export * from "./signing";
 export * from "./cli";
 export * from "./audit";
+export * from "./artifact-materializer";
