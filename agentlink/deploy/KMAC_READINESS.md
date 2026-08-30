@@ -140,3 +140,43 @@ Stage one stops here. Do not replace `state/mesh.json`, switch `current`, run
 `launchctl kickstart`, or stop the old watcher. Activation must switch the
 reviewed release and its matching candidate config together, verify relay
 reconnection and status discovery, and roll both back together on failure.
+
+## Stage-two activation
+
+After the correction is reviewed and pushed, build a release from that exact
+commit, install its frozen dependencies, and prepare a new mode-`0600` config.
+The activation script is deliberately parameterized so the release and config
+cannot be inferred from a mutable `current` path:
+
+```bash
+export ARGUS_REPO_ROOT="$PWD"
+export ARGUS_REVIEWED_COMMIT="$(git rev-parse HEAD)"
+export ARGUS_CANDIDATE_RELEASE="$HOME/Library/Application Support/AgentLink/releases/<release-id>"
+export ARGUS_CANDIDATE_CONFIG="$HOME/Library/Application Support/AgentLink/prepared/stage2-20260830/mesh.json"
+./agentlink/deploy/activate-kmac-watcher.sh
+```
+
+It fails closed unless `current` is the reviewed old release, the live config
+has SHA-256
+`b44c335294c4df0aaff0e8c1b8be418859fddf364f0f0ebe8befb1766339943f`, the
+checkout is clean at `ARGUS_REVIEWED_COMMIT`, the candidate manifest and config
+validate against the candidate code, and the old watcher is actually running.
+It backs up the live config with a hash, atomically swaps the symlink and
+config, restarts only `com.kairong.agentlink-watch`, and asks Seoul's fixed
+read-only controller endpoint to prove a newer `lastSeen`, online peer,
+`kmac-status-v1` binding, and ready workspace status. A post-switch failure
+restores both artifacts atomically, restarts the old watcher, and prints
+`ROLLED_BACK`; a gate failure before mutation prints `BLOCKED`.
+
+The reverse tunnel is a separate passive handoff. Install and load the reviewed
+plist with:
+
+```bash
+./agentlink/deploy/install-kmac-reverse-tunnel.sh
+```
+
+This backs up an existing plist, installs mode `0600`, validates it with
+`plutil`, and loads only the dedicated label. It never signals or replaces an
+existing manual reverse SSH process; while port `22022` is occupied, launchd's
+child may retry. Recheck the unchanged manual PID and Seoul loopback SSH banner
+after loading.

@@ -2,11 +2,23 @@ import { describe, expect, test } from "bun:test";
 import {
   countActiveJobs,
   deriveWorkspaceStatus,
+  launchctlStateIsRunning,
 } from "../deploy/kmac-workspace-status";
 
 const checkedAt = "2026-08-30T03:00:00.000Z";
 
 describe("KMac workspace status", () => {
+  test("does not treat a loaded but stopped launchd job as running", () => {
+    expect(launchctlStateIsRunning([
+      "gui/501/com.kairong.agentlink-watch = {",
+      "\tpath = /Users/kairong/Library/LaunchAgents/com.kairong.agentlink-watch.plist",
+      "\tstate = exited",
+      "}",
+    ].join("\n"))).toBe(false);
+    expect(launchctlStateIsRunning("state = running\n")).toBe(true);
+    expect(launchctlStateIsRunning(`${"x".repeat(16 * 1024)}\nstate = running\n`)).toBe(false);
+  });
+
   test("emits the exact ready workspace contract", () => {
     const status = deriveWorkspaceStatus({
       watcherAvailable: true,

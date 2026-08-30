@@ -81,9 +81,26 @@ function commandSucceeds(executable: string, args: string[]): boolean {
   return result.status === 0 && !result.error;
 }
 
+const MAX_LAUNCHCTL_OUTPUT_BYTES = 16 * 1024;
+
+/** Accept only launchd's bounded, explicit running state line. */
+export function launchctlStateIsRunning(output: string): boolean {
+  if (Buffer.byteLength(output, "utf8") > MAX_LAUNCHCTL_OUTPUT_BYTES) return false;
+  return output.split(/\r?\n/).some((line) => /^\s*state\s*=\s*running\s*$/.test(line));
+}
+
 function watcherIsRunning(label: string): boolean {
   if (process.platform !== "darwin" || process.getuid === undefined) return false;
-  return commandSucceeds("/bin/launchctl", ["print", `gui/${process.getuid()}/${label}`]);
+  const result = spawnSync("/bin/launchctl", ["print", `gui/${process.getuid()}/${label}`], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2_000,
+    maxBuffer: MAX_LAUNCHCTL_OUTPUT_BYTES,
+  });
+  return result.status === 0
+    && !result.error
+    && typeof result.stdout === "string"
+    && launchctlStateIsRunning(result.stdout);
 }
 
 function codexIsAvailable(): boolean {
