@@ -314,6 +314,9 @@ export async function serveWatch(
 
   /** Codex control plane, started on first use (it spawns a process). */
   let codexServer: CodexAppServer | null = null as CodexAppServer | null;
+  let stopped = false;
+  const backgroundCodexStarts = new Set<Promise<void>>();
+  const CODEX_START_MAX_CONCURRENCY = 2;
   /** Turn currently running per thread, so steer/interrupt have a target. */
   const activeTurns = new Map<string, string>();
   /** Approvals awaiting a phone answer: requestId -> app-server request id. */
@@ -503,7 +506,7 @@ export async function serveWatch(
         // approvals silently stopped working while events kept flowing.)
         continue;
       }
-      void (async () => {
+      await (async () => {
       try {
         const openedPayload = await chan.open<{
           kind?: string;
@@ -799,15 +802,39 @@ export async function serveWatch(
         } else if (payload?.kind === "new-session" && payload.text) {
           const wantCodex = payload.agent === "codex";
           const cwd = payload.cwd ?? homedir();
+          const prompt = payload.text;
           let r: { ok: boolean; note: string; sessionId?: string };
           if (wantCodex) {
+            if (stopped) {
+              if (controlRequestId) {
+                await sendPayload(codexErrorReply(new Error("watcher 已停止"), controlReply));
+              }
+              return;
+            }
+            if (backgroundCodexStarts.size >= CODEX_START_MAX_CONCURRENCY) {
+              if (controlRequestId) {
+                await sendPayload({
+                  kind: "codex-error",
+                  code: "codex-start-overloaded",
+                  note: "Codex new-session capacity is full",
+                  timedOut: false,
+                  timedOutStage: "watcher",
+                  retryable: true,
+                  ...controlReply,
+                });
+              }
+              return;
+            }
+            const backgroundStart = (async () => {
             // Codex owns its threads, so a new one is a protocol call and the
             // first turn streams back like any other.
             let createdThreadId: string | undefined;
             try {
               const srv = await withinDeadline(codexControl(), deadlineAt);
+              if (stopped) throw new Error("watcher 已停止");
               const threadId = await srv.startThread(cwd, remainingMs(deadlineAt), controlRequestId ? (lateThreadId) => {
-                void sendPayload({
+                if (stopped) return;
+                void enqueueSendAsync({
                   kind: "input-ack",
                   sessionId: lateThreadId,
                   status: "failed",
@@ -818,7 +845,10 @@ export async function serveWatch(
               } : undefined);
               if (!threadId) throw new Error("thread/start 未返回 threadId");
               createdThreadId = threadId;
-              const turnId = await srv.startTurn(threadId, payload.text, remainingMs(deadlineAt));
+              if (Date.now() >= deadlineAt) {
+                throw new Error("app-server deadline exceeded before initial turn");
+              }
+              const turnId = await srv.startTurn(threadId, prompt, remainingMs(deadlineAt));
               if (turnId) activeTurns.set(threadId, turnId);
               r = { ok: true, note: `已在 ${cwd} 新建 Codex 会话`, sessionId: threadId };
             } catch (e) {
@@ -828,6 +858,34 @@ export async function serveWatch(
               }
               r = { ok: false, note: `新建失败: ${e instanceof Error ? e.message : e}` };
             }
+            const newId = r.sessionId;
+            if (newId) {
+              enqueueSend({
+                kind: "session-started",
+                sessionId: newId,
+                agent: "codex",
+                cwd,
+                prompt,
+                ...controlReply,
+              });
+            }
+            await sendPayload({
+              kind: "input-ack",
+              sessionId: newId ?? payload.sessionId ?? "",
+              status: r.ok ? "running" : "queued",
+              note: r.note,
+              ...controlReply,
+            });
+            })();
+            backgroundCodexStarts.add(backgroundStart);
+            void backgroundStart
+              .catch(async (error) => {
+                if (!stopped && controlRequestId) {
+                  await sendPayload(codexErrorReply(error, controlReply));
+                }
+              })
+              .finally(() => backgroundCodexStarts.delete(backgroundStart));
+            return;
           } else {
             // ACP by default (visible progress + answerable approvals);
             // AGENTLINK_ACP=0 falls back to the silent `qodercli -p` route.
@@ -978,6 +1036,7 @@ export async function serveWatch(
   })();
 
   const stop = () => {
+    stopped = true;
     watcher.stop();
     codexWatcher.stop();
     hookServer.stop();

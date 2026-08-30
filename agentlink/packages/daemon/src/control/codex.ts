@@ -53,12 +53,15 @@ export interface CodexRequestOptions {
   deadlineAt?: number;
   controlRequestId?: string;
   onSent?: () => void;
+  /** Allow a durable new-session request to use its bounded operation deadline. */
+  durableStart?: boolean;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_EVENTS_PER_PEER = 500;
 const DEFAULT_MAX_APPROVALS_PER_PEER = 100;
 const MAX_REMOTE_ERROR_CHARS = 512;
+const DURABLE_START_RESPONSE_MARGIN_MS = 250;
 
 export class CodexGatewayError extends Error {
   constructor(
@@ -118,7 +121,7 @@ export class CodexPeerGateway {
       agent: "codex",
       text,
       ...(cwd ? { cwd } : {}),
-    }, ["input-ack"], options);
+    }, ["input-ack"], { ...options, durableStart: true });
   }
 
   async sendInput(targetNodeId: string, sessionId: string, text: string, deadlineAt?: number): Promise<Record<string, unknown>> {
@@ -239,7 +242,11 @@ export class CodexPeerGateway {
   ): Promise<Record<string, unknown>> {
     const controlRequestId = options.controlRequestId ?? `codex:${randomUUID()}`;
     const deadlineAt = options.deadlineAt ?? Date.now() + this.requestTimeoutMs;
-    const remaining = Math.min(this.requestTimeoutMs, deadlineAt - Date.now());
+    const deadlineRemaining = deadlineAt - Date.now();
+    const requestBudget = options.durableStart
+      ? Math.max(1, deadlineRemaining - DURABLE_START_RESPONSE_MARGIN_MS)
+      : this.requestTimeoutMs;
+    const remaining = Math.min(requestBudget, deadlineRemaining);
     if (remaining <= 0) {
       throw new CodexGatewayError("controller deadline elapsed before dispatch", "controller", true, true);
     }

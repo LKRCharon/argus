@@ -196,6 +196,23 @@ describe("CodexPeerGateway", () => {
     }
   });
 
+  test("uses the durable deadline only for new-session requests", async () => {
+    const durable = new CodexPeerGateway(async () => undefined, { requestTimeoutMs: 30_000 });
+    const durableStartedAt = Date.now();
+    await expect(durable.startThread("mac-node", "start", undefined, {
+      deadlineAt: durableStartedAt + 350,
+      controlRequestId: "codex:durable-deadline",
+    })).rejects.toMatchObject({ stage: "watcher", timedOut: true });
+    expect(Date.now() - durableStartedAt).toBeGreaterThanOrEqual(50);
+    expect(Date.now() - durableStartedAt).toBeLessThan(350);
+
+    const ordinary = new CodexPeerGateway(async () => undefined, { requestTimeoutMs: 60 });
+    const ordinaryStartedAt = Date.now();
+    await expect(ordinary.listThreads("mac-node", ordinaryStartedAt + 500))
+      .rejects.toMatchObject({ stage: "watcher", timedOut: true });
+    expect(Date.now() - ordinaryStartedAt).toBeLessThan(250);
+  });
+
   test("turns a correlated policy rejection into a non-timeout watcher failure", async () => {
     let sent: Record<string, unknown> | undefined;
     const gateway = new CodexPeerGateway(async (_target, payload) => { sent = payload; }, {
