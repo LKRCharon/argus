@@ -516,7 +516,7 @@ function validateHardenedKmac(
   paths: ReturnType<typeof resolveReleasePaths>,
   options: PreflightOptions,
   hardened: HardenedKmacOptions,
-): { runtimeBun: string; candidateConfig: string; repositoryRoot: string; activationScript: string; expectedLiveHash: string; expectedCandidateHash: string } {
+): { runtimeBun: string; candidateConfig: string; repositoryRoot: string; activationScript: string; expectedLiveHash: string; expectedCandidateHash: string; requireGithubAuth: boolean } {
   if (paths.allowTemporaryRoots) fail("path_validation", "hardened_executor_requires_persistent_root");
   if (hardened.requireRemoteCodexControl !== true) fail("activation_script", "remote_codex_control_not_required");
   if (!SHA256_PATTERN.test(hardened.expectedLiveMeshSha256) || !SHA256_PATTERN.test(hardened.expectedCandidateMeshSha256)) {
@@ -554,6 +554,7 @@ function validateHardenedKmac(
     activationScript,
     expectedLiveHash: hardened.expectedLiveMeshSha256,
     expectedCandidateHash: hardened.expectedCandidateMeshSha256,
+    requireGithubAuth: hardened.requireGithubAuth === true,
   };
 }
 
@@ -576,6 +577,7 @@ function runHardenedKmac(
     ARGUS_EXPECTED_CANDIDATE_MESH_SHA256: validated.expectedCandidateHash,
     ARGUS_RUNTIME_BUN: validated.runtimeBun,
     ARGUS_REQUIRE_REMOTE_CODEX_CONTROL: "true",
+    ARGUS_REQUIRE_GITHUB_AUTH: String(validated.requireGithubAuth),
   };
   const child = spawnSync(validated.activationScript, {
     cwd: validated.repositoryRoot,
@@ -1074,6 +1076,7 @@ const HARDENED_FLAGS = new Set([
   "repository-root",
   "activation-script",
   "require-remote-codex-control",
+  "require-github-auth",
 ]);
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -1101,7 +1104,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     const inline = equals === -1 ? undefined : argument.slice(equals + 1);
     if (!allowed.has(rawName)) fail("usage", "unknown_flag");
     if (values.has(rawName)) fail("usage", "duplicate_flag");
-    if (rawName === "json" || rawName === "require-remote-codex-control") {
+    if (["json", "require-remote-codex-control", "require-github-auth"].includes(rawName)) {
       if (inline !== undefined) fail("usage", "boolean_flag_value");
       values.set(rawName, true);
       continue;
@@ -1137,6 +1140,7 @@ function hardenedOptions(values: Map<string, string | true>): HardenedKmacOption
     repositoryRoot: required(values, "repository-root"),
     activationScript: optional(values, "activation-script"),
     requireRemoteCodexControl: values.get("require-remote-codex-control") === true,
+    requireGithubAuth: values.get("require-github-auth") === true,
   };
 }
 

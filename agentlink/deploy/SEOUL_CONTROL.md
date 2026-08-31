@@ -105,11 +105,11 @@ For `workspace:kmac-m4`, configure the fixed `kmac-status-v1` workspace probe
 and the fixed `kmac-github-status-v1` GitHub probe with `purpose: "status"`,
 `approvalRequired: false`, no dynamic arguments or stdin, and only the
 `read-only-status` workspace capability. The GitHub runner hard-codes
-`/opt/homebrew/bin/gh auth status --hostname github.com`, strips credential and
-configuration overrides, and returns only `status`, `login`, `source`,
-`checkedAt`, and an optional bounded `errorCode`. Executable paths, fixed
-arguments, environment, and arbitrary commands remain target-local and are not
-published by discovery.
+`/opt/homebrew/bin/gh auth status --active --hostname github.com --json hosts`,
+strips credential and configuration overrides, and returns only `status`,
+`login`, `source`, `checkedAt`, and an optional bounded `errorCode`. Executable
+paths, fixed arguments, environment, and arbitrary commands remain target-local
+and are not published by discovery.
 
 Resource discovery publishes `allowedGroupIds`, `defaultGroupId` only when a
 single trusted group is available, `allowedOperations`, and safe runner metadata.

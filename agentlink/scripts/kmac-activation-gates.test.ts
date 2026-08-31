@@ -296,6 +296,24 @@ describe("KMac activation gates", () => {
     expect(activation).toContain("READY_FOR_COMMANDER_CANARY remoteCodexControl=true");
   });
 
+  test("gates GitHub authentication only when the deployment explicitly opts in", () => {
+    const activation = readFileSync(join(import.meta.dir,
+      "../deploy/activate-kmac-watcher.sh"), "utf8");
+    const workflow = readFileSync(join(import.meta.dir,
+      "../deploy/kmac-release-workflow.ts"), "utf8");
+
+    expect(activation).toContain('readonly REQUIRE_GITHUB_AUTH="${ARGUS_REQUIRE_GITHUB_AUTH:-false}"');
+    expect(activation).toContain(
+      '[[ "$REQUIRE_GITHUB_AUTH" == true || "$REQUIRE_GITHUB_AUTH" == false ]] || fail_precondition github_auth_gate_option',
+    );
+    expect(activation).toContain(String.raw`const requireGithubAuth=\"$REQUIRE_GITHUB_AUTH\"===\"true\"`);
+    expect(activation).toContain("!githubObserved || (requireGithubAuth && !githubAuthenticated)");
+    expect(activation).not.toContain("remoteCodexControl!==true || !githubAuthenticated");
+    expect(activation).toContain("githubAuthRequired=%s");
+    expect(workflow).toContain('"require-github-auth"');
+    expect(workflow).toContain("ARGUS_REQUIRE_GITHUB_AUTH: String(validated.requireGithubAuth)");
+  });
+
   test("atomically replaces current without following its destination symlink", () => {
     const activation = readFileSync(join(import.meta.dir,
       "../deploy/activate-kmac-watcher.sh"), "utf8");

@@ -281,7 +281,10 @@ export const MeshGitHubStatusSchema = z.discriminatedUnion("status", [
     login: z.null(),
     source: z.literal("none"),
     checkedAt: MeshTimestampSchema,
-    errorCode: z.literal("not-authenticated"),
+    errorCode: z.enum([
+      "not-authenticated",
+      "invalid-credential",
+    ]),
   }).strict(),
   z.object({
     status: z.literal("unavailable"),
@@ -294,6 +297,7 @@ export const MeshGitHubStatusSchema = z.discriminatedUnion("status", [
       "spawn-failed",
       "network-unavailable",
       "runner-unavailable",
+      "credential-unavailable",
     ]),
   }).strict(),
   z.object({

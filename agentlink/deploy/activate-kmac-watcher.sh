@@ -13,6 +13,7 @@ readonly REVIEWED_COMMIT="${ARGUS_REVIEWED_COMMIT:?ARGUS_REVIEWED_COMMIT is requ
 readonly EXPECTED_LIVE_MESH_SHA256="${ARGUS_EXPECTED_LIVE_MESH_SHA256:?ARGUS_EXPECTED_LIVE_MESH_SHA256 is required}"
 readonly EXPECTED_CANDIDATE_MESH_SHA256="${ARGUS_EXPECTED_CANDIDATE_MESH_SHA256:?ARGUS_EXPECTED_CANDIDATE_MESH_SHA256 is required}"
 readonly REQUIRE_REMOTE_CODEX_CONTROL="${ARGUS_REQUIRE_REMOTE_CODEX_CONTROL:?ARGUS_REQUIRE_REMOTE_CODEX_CONTROL is required}"
+readonly REQUIRE_GITHUB_AUTH="${ARGUS_REQUIRE_GITHUB_AUTH:-false}"
 readonly REPO_ROOT="${ARGUS_REPO_ROOT:-$(CDPATH= cd -P -- "$SCRIPT_DIR/../.." && pwd -P)}"
 readonly BUN="${ARGUS_RUNTIME_BUN:-$BASE/runtime/bun-1.3.14/bin/bun}"
 readonly LABEL="com.kairong.agentlink-watch"
@@ -262,7 +263,7 @@ controller_verify() {
       status="${snapshot%% *}"; seen="${snapshot##* }"
       if [[ "$status" == online && "$seen" =~ ^[0-9]+$ ]] && (( seen > minimum_seen )); then
         if /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 seoul \
-            "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/refresh\",{method:\"POST\"}); if(!r.ok) process.exit(1); const refresh=await r.json(); const d=await fetch(\"$CONTROLLER_URL/api/discovery\"); if(!d.ok) process.exit(1); const o=await d.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); const resource=(o.resources??[]).find((x)=>x.id===\"$RESOURCE_ID\"); const status=resource?.status; const github=status?.github; const githubLogin=typeof github?.login===\"string\" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(github.login); const githubAuthenticated=github?.status===\"authenticated\" && githubLogin && (github.source===\"keychain\" || github.source===\"config\") && !Object.hasOwn(github,\"errorCode\"); if(p?.status!==\"online\" || !Number.isInteger(p.lastSeen) || p.lastSeen<=${minimum_seen} || resource?.statusRunnerId!==\"$RUNNER_ID\" || resource?.githubStatusRunnerId!==\"$GITHUB_STATUS_RUNNER_ID\" || status?.state!==\"ready\" || status?.workspace?.workspaceRevision!==\"$REVIEWED_COMMIT\" || status?.workspace?.remoteCodexControl!==true || !githubAuthenticated) process.exit(1); process.stdout.write(\"ok\\n\")'" \
+            "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/refresh\",{method:\"POST\"}); if(!r.ok) process.exit(1); const refresh=await r.json(); const d=await fetch(\"$CONTROLLER_URL/api/discovery\"); if(!d.ok) process.exit(1); const o=await d.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); const resource=(o.resources??[]).find((x)=>x.id===\"$RESOURCE_ID\"); const status=resource?.status; const github=status?.github; const githubObserved=github!==null && typeof github===\"object\" && [\"authenticated\",\"unauthenticated\",\"unavailable\",\"error\"].includes(github.status) && typeof github.checkedAt===\"string\"; const githubLogin=typeof github?.login===\"string\" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(github.login); const githubAuthenticated=github?.status===\"authenticated\" && githubLogin && (github.source===\"keychain\" || github.source===\"config\") && !Object.hasOwn(github,\"errorCode\"); const requireGithubAuth=\"$REQUIRE_GITHUB_AUTH\"===\"true\"; if(p?.status!==\"online\" || !Number.isInteger(p.lastSeen) || p.lastSeen<=${minimum_seen} || resource?.statusRunnerId!==\"$RUNNER_ID\" || resource?.githubStatusRunnerId!==\"$GITHUB_STATUS_RUNNER_ID\" || status?.state!==\"ready\" || status?.workspace?.workspaceRevision!==\"$REVIEWED_COMMIT\" || status?.workspace?.remoteCodexControl!==true || !githubObserved || (requireGithubAuth && !githubAuthenticated)) process.exit(1); process.stdout.write(\"ok\\n\")'" \
             >/dev/null 2>/dev/null; then
           controller_verify_seen="$seen"
           return 0
@@ -422,6 +423,7 @@ path_is_under "$base_canonical/prepared" "$candidate_config_canonical" || fail_p
 [[ "$EXPECTED_LIVE_MESH_SHA256" =~ ^[a-f0-9]{64}$ ]] || fail_precondition expected_live_mesh_sha256
 [[ "$EXPECTED_CANDIDATE_MESH_SHA256" =~ ^[a-f0-9]{64}$ ]] || fail_precondition expected_candidate_mesh_sha256
 [[ "$REQUIRE_REMOTE_CODEX_CONTROL" == true ]] || fail_precondition remote_codex_control_opt_in
+[[ "$REQUIRE_GITHUB_AUTH" == true || "$REQUIRE_GITHUB_AUTH" == false ]] || fail_precondition github_auth_gate_option
 [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40,64}$ ]] || fail_precondition reviewed_commit
 controller_inputs_are_safe || fail_precondition controller_inputs
 [[ -d "$REPO_ROOT" ]] || fail_precondition repository
@@ -478,5 +480,5 @@ ready_pid="$(watcher_pid 2>/dev/null || true)"
 [[ "$ready_pid" =~ ^[0-9]+$ ]] || rollback 1
 
 trap - ERR INT TERM
-printf 'READY_FOR_COMMANDER_CANARY remoteCodexControl=true old_release=%s candidate_release=%s pid=%s lastSeen=%s mesh_backup=%s mesh_backup_sha256=%s\n' \
-  "$OLD_RELEASE" "$CANDIDATE_RELEASE" "$ready_pid" "$reconnected_at" "$backup_mesh" "$backup_mesh_sha256"
+printf 'READY_FOR_COMMANDER_CANARY remoteCodexControl=true githubAuthRequired=%s old_release=%s candidate_release=%s pid=%s lastSeen=%s mesh_backup=%s mesh_backup_sha256=%s\n' \
+  "$REQUIRE_GITHUB_AUTH" "$OLD_RELEASE" "$CANDIDATE_RELEASE" "$ready_pid" "$reconnected_at" "$backup_mesh" "$backup_mesh_sha256"

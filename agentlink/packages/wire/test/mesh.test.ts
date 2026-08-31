@@ -399,6 +399,20 @@ describe("Mesh wire schema", () => {
       errorCode: "command-failed",
     }).success).toBe(false);
     expect(MeshGitHubStatusSchema.safeParse({
+      status: "unauthenticated",
+      login: null,
+      source: "none",
+      checkedAt,
+      errorCode: "invalid-credential",
+    }).success).toBe(true);
+    expect(MeshGitHubStatusSchema.safeParse({
+      status: "unavailable",
+      login: null,
+      source: "none",
+      checkedAt,
+      errorCode: "credential-unavailable",
+    }).success).toBe(true);
+    expect(MeshGitHubStatusSchema.safeParse({
       status: "unavailable",
       login: null,
       source: "none",

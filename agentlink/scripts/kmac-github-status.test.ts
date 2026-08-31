@@ -12,7 +12,13 @@ const checkedAt = new Date("2026-08-31T00:00:00.000Z");
 describe("KMac GitHub status runner", () => {
   test("uses one fixed github.com operation and strips hostile environment overrides", () => {
     const secret = "ghp_hostile-token-value";
-    let call: { command: string; args: readonly string[]; env: Record<string, string> } | undefined;
+    let call: {
+      command: string;
+      args: readonly string[];
+      env: Record<string, string>;
+      timeoutMs: number;
+      maxOutputBytes: number;
+    } | undefined;
     const status = runKmacGitHubStatus({
       env: {
         HOME: "/Users/kmac",
@@ -27,10 +33,23 @@ describe("KMac GitHub status runner", () => {
       },
       now: () => checkedAt,
       commandRunner: (command, args, options) => {
-        call = { command, args, env: options.env };
+        call = { command, args, ...options };
         return {
           status: 0,
-          stdout: `Logged in to github.com account octocat (keyring)\nToken: ${secret}\n`,
+          stdout: JSON.stringify({
+            hosts: {
+              "github.com": [{
+                active: true,
+                error: "",
+                gitProtocol: "ssh",
+                host: "github.com",
+                login: "octocat",
+                scopes: "repo",
+                state: "success",
+                tokenSource: "keyring",
+              }],
+            },
+          }),
           stderr: `warning: Authorization: Bearer ${secret}\n`,
         };
       },
@@ -50,6 +69,8 @@ describe("KMac GitHub status runner", () => {
         PATH: "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         GH_PROMPT_DISABLED: "1",
       },
+      timeoutMs: 8_000,
+      maxOutputBytes: 16 * 1024,
     });
     expect(JSON.stringify(status)).not.toContain(secret);
     expect(JSON.stringify(call)).not.toContain(secret);
@@ -58,7 +79,7 @@ describe("KMac GitHub status runner", () => {
   test("returns strict, bounded states for unauthenticated, unavailable, and error results", () => {
     const unauthenticated = runKmacGitHubStatus({
       now: () => checkedAt,
-      commandRunner: () => ({ status: 1, stdout: "not logged in to github.com", stderr: "" }),
+      commandRunner: () => ({ status: 0, stdout: JSON.stringify({ hosts: {} }), stderr: "" }),
     });
     expect(unauthenticated).toMatchObject({
       status: "unauthenticated",
@@ -80,6 +101,67 @@ describe("KMac GitHub status runner", () => {
     expect(error).toMatchObject({ status: "error", errorCode: "invalid-output" });
   });
 
+  test("distinguishes an unavailable credential from a credential rejected by GitHub", () => {
+    const authEntry = (tokenSource: string) => JSON.stringify({
+      hosts: {
+        "github.com": [{
+          active: true,
+          error: "HTTP 401: Bad credentials",
+          gitProtocol: "ssh",
+          host: "github.com",
+          login: "LKRCharon",
+          state: "error",
+          tokenSource,
+        }],
+      },
+    });
+    const unavailable = runKmacGitHubStatus({
+      now: () => checkedAt,
+      commandRunner: () => ({ status: 0, stdout: authEntry("default"), stderr: "" }),
+    });
+    expect(unavailable).toMatchObject({
+      status: "unavailable",
+      errorCode: "credential-unavailable",
+      login: null,
+      source: "none",
+    });
+
+    const invalid = runKmacGitHubStatus({
+      now: () => checkedAt,
+      commandRunner: () => ({ status: 0, stdout: authEntry("keyring"), stderr: "" }),
+    });
+    expect(invalid).toMatchObject({
+      status: "unauthenticated",
+      errorCode: "invalid-credential",
+      login: null,
+      source: "none",
+    });
+  });
+
+  test("keeps network failures separate from invalid credentials", () => {
+    const status = runKmacGitHubStatus({
+      now: () => checkedAt,
+      commandRunner: () => ({
+        status: 0,
+        stdout: JSON.stringify({
+          hosts: {
+            "github.com": [{
+              active: true,
+              error: "dial tcp: network is unreachable",
+              gitProtocol: "ssh",
+              host: "github.com",
+              login: "octocat",
+              state: "error",
+              tokenSource: "keyring",
+            }],
+          },
+        }),
+        stderr: "",
+      }),
+    });
+    expect(status).toMatchObject({ status: "unavailable", errorCode: "network-unavailable" });
+  });
+
   test("rejects arbitrary fields and keeps redaction out of the public schema", () => {
     expect(MeshGitHubStatusSchema.safeParse({
       status: "authenticated",
@@ -97,7 +179,15 @@ describe("KMac GitHub status runner", () => {
   });
 
   test("does not let a caller replace the fixed operation", () => {
-    expect(KMAC_GITHUB_STATUS_ARGS).toEqual(["auth", "status", "--hostname", "github.com"]);
+    expect(KMAC_GITHUB_STATUS_ARGS).toEqual([
+      "auth",
+      "status",
+      "--active",
+      "--hostname",
+      "github.com",
+      "--json",
+      "hosts",
+    ]);
     expect(githubStatusEnvironment({
       HOME: "/Users/kmac",
       GH_TOKEN: "ghp_secret",

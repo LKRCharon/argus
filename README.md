@@ -213,8 +213,9 @@ task runner. Runner executables and fixed environment values remain local.
 
 For KMac, the documented preparation flow creates the workspace status runner
 and the fixed `kmac-github-status-v1` runner. The latter invokes only GitHub's
-status operation, strips process credential overrides, and returns the safe
-states `authenticated`, `unauthenticated`, `unavailable`, or `error`. See
+token-free structured status operation, strips process credential overrides,
+and returns the safe states `authenticated`, `unauthenticated`, `unavailable`,
+or `error`. See
 [`agentlink/deploy/KMAC_READINESS.md`](agentlink/deploy/KMAC_READINESS.md).
 
 ## CLI and use cases
@@ -279,6 +280,12 @@ KMac release preparation and activation are separate owner-controlled steps.
 documents the read-only checks, fixed GitHub runner, candidate config, and
 release workflow. It does not activate a watcher, replace live state, or claim
 that a deployment succeeded.
+
+Watcher activation always verifies the fixed GitHub status-runner binding and
+its typed observation, but GitHub authentication is not a default deployment
+gate. Add `--require-github-auth` only when the deployment operation itself
+requires authenticated GitHub API access. A credential outage must not block an
+otherwise healthy reconnect or result-delivery correction.
 
 ## Result artifacts
 
@@ -350,8 +357,8 @@ returns one of these states:
 | State | Meaning | Next check |
 |---|---|---|
 | `authenticated` | The fixed operation returned a validated login. | Continue with the configured Git transport. |
-| `unauthenticated` | The GitHub CLI found no usable login for the intended user. | Sign in through the owner's normal Keychain/config flow. |
-| `unavailable` | The fixed binary, process, or network path was unavailable. | Check the installed binary and local connectivity. |
+| `unauthenticated` | No account is configured (`not-authenticated`), or an obtained Keychain/config credential was rejected (`invalid-credential`). | Use the owner's normal sign-in flow only after checking the bounded code. |
+| `unavailable` | The fixed binary, process, network, or configured credential was unavailable. `credential-unavailable` includes `gh`'s `default` fallback when Keychain/config retrieval failed; it does not claim the stored credential is invalid. | Check tooling/connectivity or unlock the owner's Keychain in an interactive session. |
 | `error` | The response was malformed or the fixed operation failed unexpectedly. | Inspect only the bounded error code and runner configuration. |
 
 Run the read-only KMac readiness command from the checkout when testing that
@@ -364,6 +371,12 @@ host's configuration:
 The output contains the safe structured result and coarse state labels only.
 It does not print tokens, raw command streams, paths from the runner, or
 arbitrary error text.
+
+The runner never probes a Keychain secret independently. In particular, it
+does not use `security ... -w` or otherwise print, copy, or request credential
+material. A locked and a missing secure credential are both conservatively
+reported as `credential-unavailable` because `gh` does not preserve that finer
+distinction in its status result.
 
 ### Android connection
 

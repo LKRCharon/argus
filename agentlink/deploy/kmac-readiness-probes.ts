@@ -215,14 +215,10 @@ function commandResult(
   runner: ProbeCommandRunner,
   command: string,
   args: readonly string[],
-  env: Record<string, string>,
+  options: ProbeCommandOptions,
 ): ProbeCommandResult {
   try {
-    const result = runner(command, args, {
-      env,
-      timeoutMs: COMMAND_TIMEOUT_MS,
-      maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
-    });
+    const result = runner(command, args, options);
     return {
       status: typeof result.status === "number" ? result.status : null,
       stdout: typeof result.stdout === "string" ? result.stdout : "",
@@ -257,7 +253,7 @@ export function probeGitHubReadiness(options: ReadinessProbeOptions = {}): GitHu
   const githubStatus = runKmacGitHubStatus({
     env,
     isExecutable: executable,
-    commandRunner: (command, args, commandOptions) => commandResult(runner, command, args, commandOptions.env),
+    commandRunner: (command, args, commandOptions) => commandResult(runner, command, args, commandOptions),
   });
   const credentialSource: CredentialSourceKind = githubStatus.source;
   const identity = githubStatus.login ? { login: githubStatus.login } : null;
@@ -278,7 +274,11 @@ export function probeGitHubReadiness(options: ReadinessProbeOptions = {}): GitHu
       "ls-remote",
       "--heads",
       remote,
-    ], commandEnvironment(env));
+    ], {
+      env: commandEnvironment(env),
+      timeoutMs: COMMAND_TIMEOUT_MS,
+      maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+    });
     gitSshState = gitResult.status === 0 ? "reachable" : "unreachable";
   }
 

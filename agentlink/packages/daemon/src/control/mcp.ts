@@ -1035,6 +1035,7 @@ function summarizeCodexThread(
     nextCursor: page.nextCursor,
     hasMore: page.hasMore,
     cursorGap: page.cursorGap,
+    cursorGapEvents: page.cursorGapEvents,
     truncated: page.truncated || truncatedRecords > 0,
     truncatedEvents: page.truncatedEvents,
     truncatedRecords,
@@ -1087,6 +1088,7 @@ function summarizeCodexEvents(
     nextCursor: page.nextCursor,
     hasMore: page.hasMore,
     cursorGap: page.cursorGap,
+    cursorGapEvents: page.cursorGapEvents,
     truncated: page.truncated || truncatedRecords > 0,
     truncatedEvents: page.truncatedEvents,
     truncatedRecords,
@@ -1171,6 +1173,7 @@ type CodexEventPage = {
   nextCursor: number | null;
   hasMore: boolean;
   cursorGap: boolean;
+  cursorGapEvents: number;
   truncated: boolean;
   truncatedEvents: number;
 };
@@ -1212,30 +1215,37 @@ function pageCodexEvents(
   const declaredHasMore = optionalBooleanField(payload, "hasMore");
   const declaredTruncated = optionalBooleanField(payload, "truncated");
   const declaredTruncatedEvents = optionalNonnegativeField(payload, "truncatedEvents");
-  const hasMore = declaredHasMore ?? available.length > pageRows.length;
+  const localHasMore = available.length > pageRows.length;
+  const upstreamHasMore = declaredHasMore ?? false;
+  const hasMore = upstreamHasMore || localHasMore;
   const upstreamTotal = boundedTotal(payload.totalEvents ?? payload.total, rows.length);
   // Older controllers may omit the explicit count.  Only rows in this
   // response can establish omitted events; totalEvents also includes rows
   // already consumed by afterSeq and must not imply truncation.
   const localTruncatedEvents = Math.max(0, available.length - pageRows.length);
-  const truncatedEvents = declaredTruncatedEvents ?? localTruncatedEvents;
-  if (
-    declaredHasMore !== undefined
-    && declaredTruncatedEvents !== undefined
-    && declaredHasMore !== (declaredTruncatedEvents > 0)
-  ) {
+  if (upstreamHasMore && declaredTruncatedEvents === 0) {
     throw new GatewayError("控制 API 返回的 Codex 事件分页格式无效");
   }
   const declaredNextSeq = optionalSequenceField(payload, "nextSeq");
-  const nextSeq = declaredNextSeq ?? pageRows.at(-1)?.seq ?? safeAfterSeq;
+  const localNextSeq = pageRows.at(-1)?.seq ?? safeAfterSeq;
+  const nextSeq = localHasMore ? localNextSeq : declaredNextSeq ?? localNextSeq;
   if (
     nextSeq < safeAfterSeq
     || (pageRows.at(-1)?.seq !== undefined && nextSeq < pageRows.at(-1)!.seq)
     || (hasMore && nextSeq <= safeAfterSeq)
+    || nextSeq > latestSeq
   ) {
     throw new GatewayError("控制 API 返回的 Codex 事件游标无效");
   }
-  const cursorGap = declaredCursorGap ?? localCursorGap;
+  const cursorGap = (declaredCursorGap ?? false) || localCursorGap;
+  const declaredCursorGapEvents = optionalNonnegativeField(payload, "cursorGapEvents");
+  if (declaredCursorGap === false && declaredCursorGapEvents !== undefined && declaredCursorGapEvents > 0) {
+    throw new GatewayError("控制 API 返回的 Codex 事件分页格式无效");
+  }
+  const localCursorGapEvents = localCursorGap ? oldestSeq - safeAfterSeq - 1 : 0;
+  const cursorGapEvents = Math.max(declaredCursorGapEvents ?? 0, localCursorGapEvents);
+  const upstreamTruncatedEvents = Math.max(declaredTruncatedEvents ?? 0, cursorGapEvents);
+  const truncatedEvents = safeCountSum(upstreamTruncatedEvents, localTruncatedEvents);
   const upstreamTruncated = declaredTruncated ?? false;
   return {
     rows: pageRows,
@@ -1246,6 +1256,7 @@ function pageCodexEvents(
     nextCursor: hasMore ? nextSeq : null,
     hasMore,
     cursorGap,
+    cursorGapEvents,
     truncated: cursorGap || hasMore || upstreamTruncated || truncatedEvents > 0,
     truncatedEvents,
   };
@@ -1301,6 +1312,13 @@ function boundedNonnegative(value: unknown): number {
     throw new GatewayError("控制 API 返回的截断计数格式无效");
   }
   return value;
+}
+
+function safeCountSum(left: number, right: number): number {
+  if (left > Number.MAX_SAFE_INTEGER - right) {
+    throw new GatewayError("控制 API 返回的截断计数格式无效");
+  }
+  return left + right;
 }
 
 function sequenceField(value: unknown): number | null {

@@ -33,6 +33,7 @@ export interface RemoteCodexEventsPage {
   totalEvents: number;
   hasMore: boolean;
   cursorGap: boolean;
+  cursorGapEvents: number;
   truncated: boolean;
   truncatedEvents: number;
 }
@@ -105,7 +106,7 @@ export class CodexPeerGateway {
   private readonly maxEventsPerPeer: number;
   private readonly maxApprovalsPerPeer: number;
   private readonly onUnmatchedResponse?: CodexPeerGatewayOptions["onUnmatchedResponse"];
-  private nextEventSeq = 1;
+  private readonly nextEventSeqByPeer = new Map<string, number>();
 
   constructor(
     private readonly sendToPeer: SendToPeer,
@@ -172,21 +173,23 @@ export class CodexPeerGateway {
     const oldestSeq = stored[0]?.seq ?? 0;
     const latestSeq = Math.max(afterSeq, stored.at(-1)?.seq ?? 0);
     const cursorGap = stored.length > 0 && afterSeq < oldestSeq - 1;
-    const truncatedEvents = Math.max(0, filtered.length - rows.length);
-    const hasMore = truncatedEvents > 0;
+    const cursorGapEvents = cursorGap ? oldestSeq - afterSeq - 1 : 0;
+    const retainedPageEvents = Math.max(0, filtered.length - rows.length);
+    const hasMore = retainedPageEvents > 0;
     return {
       targetNodeId,
       events: rows,
-      nextSeq: rows.at(-1)?.seq ?? afterSeq,
+      nextSeq: hasMore ? rows.at(-1)?.seq ?? afterSeq : latestSeq,
       oldestSeq,
       latestSeq,
       totalEvents: sessionId
         ? stored.filter((event) => payloadSessionId(event.payload) === sessionId).length
         : stored.length,
       cursorGap,
+      cursorGapEvents,
       hasMore,
-      truncated: cursorGap || truncatedEvents > 0,
-      truncatedEvents,
+      truncated: cursorGap || retainedPageEvents > 0,
+      truncatedEvents: cursorGapEvents + retainedPageEvents,
     };
   }
 
@@ -321,8 +324,10 @@ export class CodexPeerGateway {
 
   private storeEvent(targetNodeId: string, payload: Record<string, unknown>): void {
     const rows = this.events.get(targetNodeId) ?? [];
+    const seq = this.nextEventSeqByPeer.get(targetNodeId) ?? 1;
+    this.nextEventSeqByPeer.set(targetNodeId, seq + 1);
     rows.push({
-      seq: this.nextEventSeq++,
+      seq,
       targetNodeId,
       receivedAt: Date.now(),
       payload,

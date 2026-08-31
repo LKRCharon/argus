@@ -880,6 +880,87 @@ describe("Seoul Codex MCP gateway", () => {
     }
   });
 
+  test("does not let terminal upstream metadata hide gateway-local event pages", async () => {
+    const events = Array.from({ length: 3 }, (_, index) => ({
+      seq: index + 1,
+      receivedAt: index + 1,
+      payload: { kind: "codex-event", sessionId: "thread-local-page", type: "text", text: `event-${index + 1}` },
+    }));
+    const fetchImpl: ControlFetch = async () => Response.json({
+      kind: "codex-events",
+      totalEvents: events.length,
+      oldestSeq: 1,
+      latestSeq: 3,
+      events,
+      nextSeq: 3,
+      hasMore: false,
+      cursorGap: false,
+      cursorGapEvents: 0,
+      truncated: false,
+      truncatedEvents: 0,
+    });
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const result = await mcp.client.callTool({
+        name: "remote_codex_get_events",
+        arguments: { targetNodeId: "node-kmac", afterSeq: 0, limit: 1 },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(JSON.parse(textContent(result))).toMatchObject({
+        events: [{ seq: 1 }],
+        nextSeq: 1,
+        nextCursor: 1,
+        hasMore: true,
+        cursorGap: false,
+        cursorGapEvents: 0,
+        truncated: true,
+        truncatedEvents: 2,
+      });
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  test("preserves retained-buffer cursor gaps when no forward page remains", async () => {
+    const fetchImpl: ControlFetch = async () => Response.json({
+      kind: "codex-events",
+      totalEvents: 1,
+      oldestSeq: 5,
+      latestSeq: 5,
+      events: [{
+        seq: 5,
+        receivedAt: 5,
+        payload: { kind: "codex-event", sessionId: "thread-gap", type: "text", text: "retained" },
+      }],
+      nextSeq: 5,
+      hasMore: false,
+      cursorGap: true,
+      cursorGapEvents: 4,
+      truncated: true,
+      truncatedEvents: 4,
+    });
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const result = await mcp.client.callTool({
+        name: "remote_codex_get_events",
+        arguments: { targetNodeId: "node-kmac", afterSeq: 0, limit: 10 },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(JSON.parse(textContent(result))).toMatchObject({
+        events: [{ seq: 5 }],
+        nextSeq: 5,
+        nextCursor: null,
+        hasMore: false,
+        cursorGap: true,
+        cursorGapEvents: 4,
+        truncated: true,
+        truncatedEvents: 4,
+      });
+    } finally {
+      await mcp.close();
+    }
+  });
+
   test("pages oversized Codex history and keeps raw payload opt-in", async () => {
     const events = Array.from({ length: 120 }, (_, index) => ({
       kind: "codex-event",

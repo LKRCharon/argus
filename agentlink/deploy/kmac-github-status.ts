@@ -12,8 +12,11 @@ export const KMAC_GITHUB_CLI_PATH = "/opt/homebrew/bin/gh";
 export const KMAC_GITHUB_STATUS_ARGS = Object.freeze([
   "auth",
   "status",
+  "--active",
   "--hostname",
   "github.com",
+  "--json",
+  "hosts",
 ] as const);
 
 const COMMAND_TIMEOUT_MS = 8_000;
@@ -104,20 +107,16 @@ export function githubStatusEnvironment(
   };
 }
 
-function loginFromOutput(value: string): string | null {
-  for (const line of value.split(/\r?\n/)) {
-    const match = /\b(?:logged in to )?github\.com\s+account\s+([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)\b/i.exec(line);
-    if (match && GITHUB_LOGIN.test(match[1])) return match[1];
-  }
-  return null;
-}
-
-function sourceFromOutput(value: string): "keychain" | "config" {
-  if (/keychain|keyring/i.test(value)) return "keychain";
-  return "config";
-}
-
 type MeshGitHubErrorCode = Extract<MeshGitHubStatus, { errorCode: string }>["errorCode"];
+
+type GitHubCredentialSource = "keychain" | "config" | "unavailable" | "unknown";
+
+interface GitHubAuthEntry {
+  state: "success" | "error" | "timeout";
+  login: string;
+  tokenSource: string;
+  error: string;
+}
 
 function result(
   status: MeshGitHubStatus["status"],
@@ -139,19 +138,15 @@ function classifyCommand(
   command: GitHubStatusCommandResult,
   checkedAt: string,
 ): MeshGitHubStatus {
-  const diagnostic = redactGitHubOutput(`${command.stdout}\n${command.stderr}`);
-  if (command.status === 0) {
-    const login = loginFromOutput(diagnostic);
-    return login
-      ? result("authenticated", checkedAt, login, sourceFromOutput(diagnostic))
-      : result("error", checkedAt, null, "none", "invalid-output");
-  }
   if (command.timedOut) return result("unavailable", checkedAt, null, "none", "timeout");
   if (command.outputLimit) return result("error", checkedAt, null, "none", "output-limit");
   if (command.spawnError === "missing") return result("unavailable", checkedAt, null, "none", "gh-missing");
   if (command.status === null || command.spawnError === "other") {
     return result("unavailable", checkedAt, null, "none", "spawn-failed");
   }
+  if (command.status === 0) return classifyStructuredStatus(command.stdout, checkedAt);
+
+  const diagnostic = redactGitHubOutput(`${command.stdout}\n${command.stderr}`);
   if (/not logged in|not authenticated|authentication required|run gh auth login|no accounts? found/i.test(diagnostic)) {
     return result("unauthenticated", checkedAt, null, "none", "not-authenticated");
   }
@@ -159,6 +154,89 @@ function classifyCommand(
     return result("unavailable", checkedAt, null, "none", "network-unavailable");
   }
   return result("error", checkedAt, null, "none", "command-failed");
+}
+
+function classifyStructuredStatus(stdout: string, checkedAt: string): MeshGitHubStatus {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return result("error", checkedAt, null, "none", "invalid-output");
+  }
+  const root = record(parsed);
+  const hosts = record(root?.hosts);
+  if (!root || !hosts || Object.keys(hosts).some((host) => host !== "github.com")) {
+    return result("error", checkedAt, null, "none", "invalid-output");
+  }
+  if (!Object.hasOwn(hosts, "github.com")) {
+    return result("unauthenticated", checkedAt, null, "none", "not-authenticated");
+  }
+  const entries = hosts["github.com"];
+  if (!Array.isArray(entries) || entries.length > 1) {
+    return result("error", checkedAt, null, "none", "invalid-output");
+  }
+  if (entries.length === 0) {
+    return result("unauthenticated", checkedAt, null, "none", "not-authenticated");
+  }
+  const entry = parseAuthEntry(entries[0]);
+  if (!entry) return result("error", checkedAt, null, "none", "invalid-output");
+  if (entry.state === "timeout") {
+    return result("unavailable", checkedAt, null, "none", "timeout");
+  }
+
+  const credentialSource = classifyCredentialSource(entry.tokenSource);
+  if (entry.state === "success") {
+    if (!GITHUB_LOGIN.test(entry.login) || !["keychain", "config"].includes(credentialSource)) {
+      return result("error", checkedAt, null, "none", "invalid-output");
+    }
+    return result("authenticated", checkedAt, entry.login, credentialSource as "keychain" | "config");
+  }
+
+  // gh uses the literal source "default" when an account is configured but
+  // no token could be obtained from env, config, or Keychain. Its human output
+  // calls that token invalid, but the token was never available to validate.
+  if (credentialSource === "unavailable") {
+    return result("unavailable", checkedAt, null, "none", "credential-unavailable");
+  }
+  const diagnostic = redactGitHubOutput(entry.error);
+  if (/could not resolve|connection|network|proxy|tls|timeout|timed out|unreachable|service unavailable|no route to host/i.test(diagnostic)) {
+    return result("unavailable", checkedAt, null, "none", "network-unavailable");
+  }
+  if (
+    (credentialSource === "keychain" || credentialSource === "config")
+    && /\b(?:401|unauthorized|bad credentials|invalid (?:credential|token)|authentication failed)\b/i.test(diagnostic)
+  ) {
+    return result("unauthenticated", checkedAt, null, "none", "invalid-credential");
+  }
+  return result("error", checkedAt, null, "none", "command-failed");
+}
+
+function parseAuthEntry(value: unknown): GitHubAuthEntry | null {
+  const entry = record(value);
+  if (!entry || Object.hasOwn(entry, "token")) return null;
+  if (entry.host !== "github.com" || entry.active !== true) return null;
+  if (!["success", "error", "timeout"].includes(String(entry.state))) return null;
+  if (typeof entry.login !== "string" || typeof entry.tokenSource !== "string") return null;
+  if (entry.error !== undefined && typeof entry.error !== "string") return null;
+  return {
+    state: entry.state as GitHubAuthEntry["state"],
+    login: entry.login,
+    tokenSource: entry.tokenSource,
+    error: entry.error ?? "",
+  };
+}
+
+function classifyCredentialSource(value: string): GitHubCredentialSource {
+  if (value === "keyring") return "keychain";
+  if (/(?:^|[/\\])hosts\.yml$/i.test(value)) return "config";
+  if (value === "default") return "unavailable";
+  return "unknown";
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 /** Run the one owner-configured GitHub operation. The caller cannot supply argv, host, repo, or env. */

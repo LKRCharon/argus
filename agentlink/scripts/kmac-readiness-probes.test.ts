@@ -10,18 +10,30 @@ import {
 } from "../deploy/kmac-readiness-probes";
 
 function commandSequence(results: ProbeCommandResult[]): {
-  calls: Array<{ command: string; args: readonly string[]; env: Record<string, string> }>;
+  calls: Array<{
+    command: string;
+    args: readonly string[];
+    env: Record<string, string>;
+    timeoutMs: number;
+    maxOutputBytes: number;
+  }>;
   runner: (
     command: string,
     args: readonly string[],
-    options: { env: Record<string, string> },
+    options: { env: Record<string, string>; timeoutMs: number; maxOutputBytes: number },
   ) => ProbeCommandResult;
 } {
-  const calls: Array<{ command: string; args: readonly string[]; env: Record<string, string> }> = [];
+  const calls: Array<{
+    command: string;
+    args: readonly string[];
+    env: Record<string, string>;
+    timeoutMs: number;
+    maxOutputBytes: number;
+  }> = [];
   return {
     calls,
     runner: (command, args, options) => {
-      calls.push({ command, args, env: options.env });
+      calls.push({ command, args, ...options });
       return results.shift() ?? { status: 1, stdout: "", stderr: "" };
     },
   };
@@ -46,7 +58,19 @@ describe("KMac readiness probes", () => {
     const commands = commandSequence([
       {
         status: 0,
-        stdout: "Logged in to github.com account octocat (keyring)\nToken: ghp_fake-token-value\n",
+        stdout: JSON.stringify({
+          hosts: {
+            "github.com": [{
+              active: true,
+              error: "",
+              gitProtocol: "ssh",
+              host: "github.com",
+              login: "octocat",
+              state: "success",
+              tokenSource: "keyring",
+            }],
+          },
+        }),
         stderr: "",
       },
       { status: 0, stdout: "deadbeef\tHEAD\n", stderr: "" },
@@ -79,10 +103,14 @@ describe("KMac readiness probes", () => {
     });
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(commands.calls.map((call) => call.args)).toEqual([
-      ["auth", "status", "--hostname", "github.com"],
+      ["auth", "status", "--active", "--hostname", "github.com", "--json", "hosts"],
       ["-c", "core.askPass=", "ls-remote", "--heads", "git@github.com:owner/repo.git"],
     ]);
     expect(commands.calls.flatMap((call) => call.args)).not.toContain("--show-token");
+    expect(commands.calls.map(({ timeoutMs, maxOutputBytes }) => ({ timeoutMs, maxOutputBytes }))).toEqual([
+      { timeoutMs: 8_000, maxOutputBytes: 16 * 1024 },
+      { timeoutMs: 8_000, maxOutputBytes: 32 * 1024 },
+    ]);
     expect(commands.calls[0].env.GH_TOKEN).toBeUndefined();
     expect(commands.calls[0].env.GITHUB_TOKEN).toBeUndefined();
     expect(commands.calls[1].env.GH_TOKEN).toBeUndefined();
@@ -90,7 +118,23 @@ describe("KMac readiness probes", () => {
 
   test("classifies keychain, auth, and transport outcomes without raw diagnostics", () => {
     const keychain = commandSequence([
-      { status: 0, stdout: "Logged in to github.com account octocat (keyring)", stderr: "" },
+      {
+        status: 0,
+        stdout: JSON.stringify({
+          hosts: {
+            "github.com": [{
+              active: true,
+              error: "",
+              gitProtocol: "ssh",
+              host: "github.com",
+              login: "octocat",
+              state: "success",
+              tokenSource: "keyring",
+            }],
+          },
+        }),
+        stderr: "",
+      },
       { status: 1, stdout: "", stderr: "Permission denied (publickey)." },
     ]);
     expect(probeGitHubReadiness({
@@ -107,7 +151,7 @@ describe("KMac readiness probes", () => {
     });
 
     const forbidden = commandSequence([
-      { status: 1, stdout: "", stderr: "not logged in" },
+      { status: 0, stdout: JSON.stringify({ hosts: {} }), stderr: "" },
       { status: 1, stdout: "", stderr: "network unreachable" },
     ]);
     expect(probeGitHubReadiness({

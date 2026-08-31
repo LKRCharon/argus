@@ -98,6 +98,18 @@ Operation states are `queued`, `sent`, `acknowledged`, `running`, `completed`,
 intentional: synchronous list/read/send calls can carry a deadline up to 120
 seconds and must not be cut off by an older 15-second outer timeout.
 
+`remote_codex_get_events` uses a cursor scoped to the requested `targetNodeId`;
+each peer has its own contiguous sequence. `hasMore` means another retained
+forward page can be fetched. `cursorGap` means the caller's cursor predates the
+retained peer buffer, and `cursorGapEvents` is the exact number of peer sequence
+positions that aged out. `truncatedEvents` adds those aged-out positions to any
+retained matching rows omitted by the page limit. With a `sessionId` filter,
+the gap count still describes the target peer stream, while page-limit counts
+describe matching retained rows. The MCP gateway combines its own bounded page
+with upstream metadata: upstream `hasMore: false`, `truncated: false`, or
+`truncatedEvents: 0` cannot hide events omitted locally, and a local page cursor
+always points to the last event actually returned.
+
 Codex CLI, the IDE extension, and the ChatGPT desktop app share MCP
 configuration on the same Codex host. The current configuration fields and
 approval modes are documented in the

@@ -185,6 +185,7 @@ export interface HardenedKmacOptions {
   repositoryRoot: string;
   activationScript?: string;
   requireRemoteCodexControl?: boolean;
+  requireGithubAuth?: boolean;
 }
 
 export interface ActivateOptions extends PreflightOptions {

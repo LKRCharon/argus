@@ -91,15 +91,17 @@ describe("CodexPeerGateway", () => {
       nextSeq: 1,
       hasMore: true,
       cursorGap: false,
+      cursorGapEvents: 0,
       truncatedEvents: 1,
     });
 
     const terminal = gateway.listEvents("mac-node", first.nextSeq, 1, "thread-a");
     expect(terminal.events.map((event) => event.seq)).toEqual([3]);
     expect(terminal).toMatchObject({
-      nextSeq: 3,
+      nextSeq: 4,
       hasMore: false,
       cursorGap: false,
+      cursorGapEvents: 0,
       truncatedEvents: 0,
     });
 
@@ -113,7 +115,44 @@ describe("CodexPeerGateway", () => {
     }
     expect(retainedGapGateway.listEvents("mac-node", 0, 10, "thread-a")).toMatchObject({
       cursorGap: true,
+      cursorGapEvents: 1,
       truncated: true,
+      truncatedEvents: 1,
+    });
+  });
+
+  test("scopes event cursors and retained-gap counts to each target peer", () => {
+    const gateway = new CodexPeerGateway(async () => undefined, { maxEventsPerPeer: 2 });
+    gateway.handlePayload("mac-a", { kind: "codex-event", sessionId: "thread-a", type: "text" });
+    gateway.handlePayload("mac-b", { kind: "codex-event", sessionId: "thread-b", type: "text" });
+    gateway.handlePayload("mac-a", { kind: "codex-event", sessionId: "thread-a", type: "text" });
+
+    expect(gateway.listEvents("mac-b", 0, 10)).toMatchObject({
+      events: [{ seq: 1, targetNodeId: "mac-b" }],
+      oldestSeq: 1,
+      latestSeq: 1,
+      nextSeq: 1,
+      cursorGap: false,
+      cursorGapEvents: 0,
+      truncatedEvents: 0,
+    });
+
+    gateway.handlePayload("mac-a", { kind: "codex-event", sessionId: "thread-a", type: "text" });
+    expect(gateway.listEvents("mac-a", 0, 1)).toMatchObject({
+      events: [{ seq: 2, targetNodeId: "mac-a" }],
+      oldestSeq: 2,
+      latestSeq: 3,
+      nextSeq: 2,
+      hasMore: true,
+      cursorGap: true,
+      cursorGapEvents: 1,
+      truncatedEvents: 2,
+    });
+    expect(gateway.listEvents("mac-a", 2, 10)).toMatchObject({
+      events: [{ seq: 3, targetNodeId: "mac-a" }],
+      hasMore: false,
+      cursorGap: false,
+      cursorGapEvents: 0,
       truncatedEvents: 0,
     });
   });

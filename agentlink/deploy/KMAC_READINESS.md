@@ -43,16 +43,25 @@ normal Codex CLI entry point; see the
 
 GitHub authentication readiness is provided by the owner-configured
 `kmac-github-status-v1` named status runner. It invokes the exact
-`/opt/homebrew/bin/gh auth status --hostname github.com` operation and rejects
-all caller arguments, stdin, host/repository selection, and environment input.
-The child environment is an allowlist containing only the intended `HOME`, a
-fixed `PATH`, and `GH_PROMPT_DISABLED`; `GH_TOKEN`, `GITHUB_TOKEN`, enterprise
-variants, `GH_CONFIG_DIR`, and other override variables are removed before
-`gh` starts. The runner parses its own output and emits only the typed status,
-login, source, check time, and bounded error code.
+`/opt/homebrew/bin/gh auth status --active --hostname github.com --json hosts`
+operation and rejects all caller arguments, stdin, host/repository selection,
+and environment input. The child environment is an allowlist containing only
+the intended `HOME`, a fixed `PATH`, and `GH_PROMPT_DISABLED`; `GH_TOKEN`,
+`GITHUB_TOKEN`, enterprise variants, `GH_CONFIG_DIR`, and other override
+variables are removed before `gh` starts. Without `--show-token`, the structured
+`gh` result has no token field. The runner parses it locally and emits only the
+typed status, login, source, check time, and bounded error code.
 Git fetch and push always use the repository's GitHub SSH-over-Clash alias.
 GitHub API and PR work default to the Windows commander. The readiness path
 never accepts or forwards a process token.
+
+`gh` reports token source `default` when an account is configured but no token
+could be obtained from environment, config, or Keychain. That can be a locked
+or otherwise inaccessible Keychain in a headless session, so the runner returns
+`unavailable` with `credential-unavailable`; it does not mislabel the unseen
+secret as invalid. `invalid-credential` is emitted only when `gh` obtained a
+Keychain/config credential and GitHub rejected it. No secondary command reads,
+prints, copies, or requests the Keychain secret.
 
 The readiness command also emits one `READINESS_PROBES=<json>` record from
 `deploy/kmac-readiness-probes.ts`. Its GitHub object includes the safe runner
@@ -201,7 +210,7 @@ Both commands reject path aliases, traversal, symlink escapes, dirty
 functional files, stale Git HEAD, and a candidate whose manifest does not
 match the reviewed artifact.
 
-Production activation uses the existing hardened adapter unchanged. It requires
+Production activation uses the hardened adapter. It requires
 the explicit live and candidate Mesh hashes, the fixed runtime, repository,
 candidate config, and `--require-remote-codex-control`:
 
@@ -227,6 +236,12 @@ state, and audit postconditions all pass. A hardened adapter failure performs
 its existing internal rollback. The workflow intentionally blocks a separate
 hardened rollback because no live Mesh backup may be inferred or overwritten;
 filesystem rollback is exposed only through the temporary-root test API.
+
+GitHub authentication is deliberately not required by the command above. The
+fixed runner binding and its typed status observation are still verified. Add
+`--require-github-auth` only for an activation whose declared operation needs
+authenticated GitHub API access; watcher reconnect and result-delivery fixes do
+not use that gate.
 
 The old `deploy/activate-kmac-watcher.sh` entry point remains the production
 adapter and is not replaced. New callers should use the workflow for
@@ -258,6 +273,10 @@ export ARGUS_REQUIRE_REMOTE_CODEX_CONTROL=true
 ./agentlink/deploy/activate-kmac-watcher.sh
 ```
 
+Direct legacy invocation defaults `ARGUS_REQUIRE_GITHUB_AUTH` to `false`. Set it
+to `true` only for the same explicit GitHub-dependent case represented by the
+workflow's `--require-github-auth` flag.
+
 All release/config identity parameters above are explicit: no old-release or live-hash
 default is hidden in the script. It fails closed unless `current` is the
 expected old release, both hashes are lowercase SHA-256 and the candidate hash
@@ -276,8 +295,11 @@ The script backs up the live config with a hash, atomically swaps the symlink an
 config, restarts only `com.kairong.agentlink-watch`, and asks Seoul's fixed
 read-only controller endpoint to prove a newer `lastSeen`, online peer,
 `kmac-status-v1` binding, ready workspace status, and
-`remoteCodexControl: true`. It also requires the explicit
-`ARGUS_REQUIRE_REMOTE_CODEX_CONTROL=true` activation input before any mutation.
+`remoteCodexControl: true`. It verifies that the fixed GitHub runner produced a
+typed observation, but accepts authenticated, unauthenticated, unavailable, and
+error observations unless the explicit GitHub gate is enabled. It also requires
+the explicit `ARGUS_REQUIRE_REMOTE_CODEX_CONTROL=true` activation input before
+any mutation.
 A post-switch failure
 restores both artifacts atomically, restarts the old watcher, and checks only
 rollback reconnect health before printing `ROLLED_BACK`; a gate failure before
