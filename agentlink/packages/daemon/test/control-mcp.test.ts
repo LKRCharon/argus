@@ -539,6 +539,46 @@ describe("Seoul Codex MCP gateway", () => {
     }
   });
 
+  test("accepts a bounded oversized Codex thread list and truncates its rows", async () => {
+    const threads = Array.from({ length: 41 }, (_, index) => ({
+      id: `thread-${index}`,
+      name: `Thread ${index}`,
+      preview: "p".repeat(1_600),
+      cwd: "/Users/test/project",
+      status: "idle",
+      canAcceptDirectInput: true,
+    }));
+    const responseBody = JSON.stringify({ kind: "codex-thread-list", threads });
+    const responseBytes = Buffer.byteLength(responseBody, "utf8");
+    expect(responseBytes).toBeGreaterThan(64 * 1024);
+    expect(responseBytes).toBeLessThan(2 * 1024 * 1024);
+
+    const fetchImpl: ControlFetch = async () => new Response(responseBody, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const result = await mcp.client.callTool({
+        name: "remote_codex_list_threads",
+        arguments: { targetNodeId: "mac-node" },
+      });
+      expect(result.isError).not.toBe(true);
+
+      const summary = JSON.parse(textContent(result)) as {
+        threads: Array<{ preview?: unknown }>;
+        truncatedThreads: number;
+      };
+      expect(summary.threads).toHaveLength(40);
+      expect(summary.truncatedThreads).toBe(1);
+      expect(summary.threads.every((thread) => (
+        typeof thread.preview === "string" && thread.preview.length <= 1_024
+      ))).toBe(true);
+    } finally {
+      await mcp.close();
+    }
+  });
+
   test("redacts API error details and never returns response blobs", async () => {
     let oversized = false;
     const fetchImpl: ControlFetch = async () => {

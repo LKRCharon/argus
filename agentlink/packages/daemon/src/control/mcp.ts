@@ -187,7 +187,10 @@ export class ControlApiClient {
 
   async listCodexThreads(targetNodeId: string, deadlineMs: number): Promise<unknown> {
     const query = new URLSearchParams({ targetNodeId, deadlineMs: String(deadlineMs) });
-    return this.request("GET", `/api/codex/threads?${query}`, undefined, { timeoutMs: deadlineMs + 2_000 });
+    return this.request("GET", `/api/codex/threads?${query}`, undefined, {
+      maxResponseBytes: MAX_LIST_HTTP_RESPONSE_BYTES,
+      timeoutMs: deadlineMs + 2_000,
+    });
   }
 
   async readCodexThread(targetNodeId: string, sessionId: string, deadlineMs: number): Promise<unknown> {
