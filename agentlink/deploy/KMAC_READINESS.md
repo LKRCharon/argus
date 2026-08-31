@@ -43,12 +43,22 @@ normal Codex CLI entry point; see the
 
 GitHub CLI readiness is a capability check, not an account verdict. The
 readiness probe runs `gh auth status` with output suppressed; a
-Keychain-invisible SSH session reports
-`GH_KEYCHAIN_CONTEXT=UNAVAILABLE_CONTEXT_LIMITATION`, never “account invalid”.
+Keychain-invisible command context reports a coarse unavailable or
+unauthenticated state, never “account invalid”.
 Git fetch and push always use the repository's GitHub SSH-over-Clash alias.
 GitHub API and PR work default to the Windows commander. Only a user-authorized
 single task may provide a short-lived `GH_TOKEN`; it is never persisted,
-printed, or inspected by these scripts.
+printed, or included in a readiness result. The probe only checks whether a
+credential variable is present and passes it to the bounded `gh` command.
+
+The readiness command also emits one `READINESS_PROBES=<json>` record from
+`deploy/kmac-readiness-probes.ts`. Its GitHub object contains only the provider,
+`credentialSource` (`keychain`, `env`, or `none`), a validated login, Git SSH
+reachability, and a coarse API classification (`authenticated`,
+`unauthenticated`, `forbidden`, `unreachable`, or `tooling-missing`). The probe
+uses command-scoped environments, never requests `gh auth status --show-token`,
+and does not include command output, token values, private keys, or
+Authorization headers in its result.
 
 The repository-specific Git transport must read back as:
 
@@ -345,5 +355,12 @@ status, dispatch id, timestamps, numeric PIDs, and fixed reason tokens. This
 stage-three implementation turn does not run the dispatcher, stop PID `97171`,
 or modify the live watcher/tunnel.
 
-Android remains `NEED_ANDROID_LICENSE`: do not accept licenses or install
-platforms, build-tools, emulator images, Studio, APKs, or phone software.
+The same JSON record contains the read-only Android SDK probe. It checks
+`PATH`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, and the known per-user SDK
+locations. Its aggregate state is one of `ready`, `missing-packages`,
+`missing-license`, or `missing-tooling`, with booleans for `adb`, the API 35
+platform/build-tools, platform-tools, and the SDK license marker. It never
+runs `adb devices`, starts an adb server, accepts licenses, installs packages,
+or touches a device. A missing license remains `missing-license`; do not
+accept licenses or install platforms, build-tools, emulator images, Studio,
+APKs, or phone software as part of readiness.

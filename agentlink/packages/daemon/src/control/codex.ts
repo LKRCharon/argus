@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+  classifyMeshDiagnostic,
   MeshRequestIdSchema,
   MeshThreadIdSchema,
+  type MeshDiagnosticClassification,
   type MeshDeadlineStage,
 } from "@agentlink/wire";
 
@@ -64,14 +66,23 @@ const MAX_REMOTE_ERROR_CHARS = 512;
 const DURABLE_START_RESPONSE_GRACE_MS = 1_000;
 
 export class CodexGatewayError extends Error {
+  readonly classification: MeshDiagnosticClassification;
+
   constructor(
     message: string,
     readonly stage: MeshDeadlineStage,
     readonly retryable: boolean,
     readonly timedOut: boolean,
     readonly sessionId?: string,
+    classification?: MeshDiagnosticClassification,
   ) {
     super(message);
+    this.classification = classification ?? classifyMeshDiagnostic({
+      message,
+      retryable,
+      timedOut,
+      timedOutStage: stage,
+    }).classification;
   }
 }
 
@@ -363,13 +374,17 @@ function remoteGatewayError(payload: Record<string, unknown>): CodexGatewayError
   const stage: MeshDeadlineStage = ["controller", "relay", "peer", "watcher", "app-server"].includes(candidate)
     ? candidate as MeshDeadlineStage
     : "app-server";
-  const timedOut = payload.timedOut === true;
+  const diagnostic = classifyMeshDiagnostic(payload, {
+    controlRequestId: typedString(payload.controlRequestId, MeshRequestIdSchema) || undefined,
+    timedOutStage: stage,
+  });
   return new CodexGatewayError(
-    boundedString(payload.note, MAX_REMOTE_ERROR_CHARS) || "远端 Codex 请求失败",
-    stage,
-    payload.retryable === true || timedOut,
-    timedOut,
+    diagnostic.message || "远端 Codex 请求失败",
+    diagnostic.timedOutStage ?? stage,
+    diagnostic.retryable,
+    diagnostic.timedOut,
     typedString(payload.sessionId, MeshThreadIdSchema) || undefined,
+    diagnostic.classification,
   );
 }
 
@@ -377,7 +392,15 @@ function asTransportError(error: unknown): CodexGatewayError {
   if (error instanceof CodexGatewayError) return error;
   const message = error instanceof Error ? error.message : String(error);
   const stage: MeshDeadlineStage = /未连接|closed|关闭|peer/i.test(message) ? "peer" : "relay";
-  return new CodexGatewayError(message.slice(0, MAX_REMOTE_ERROR_CHARS), stage, true, false);
+  const diagnostic = classifyMeshDiagnostic(error, { retryable: true, timedOutStage: stage });
+  return new CodexGatewayError(
+    diagnostic.message.slice(0, MAX_REMOTE_ERROR_CHARS),
+    stage,
+    diagnostic.retryable,
+    diagnostic.timedOut,
+    undefined,
+    diagnostic.classification,
+  );
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

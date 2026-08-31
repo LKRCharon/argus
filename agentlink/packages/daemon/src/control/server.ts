@@ -303,6 +303,7 @@ async function handleApi(request: Request, url: URL, controller: ControlControll
         error: {
           code: error.timedOut ? "CODEX_DEADLINE_EXCEEDED" : "CODEX_CONTROL_FAILED",
           message: error.message,
+          classification: error.classification,
           timedOutStage: error.stage,
           retryable: error.retryable,
         },

@@ -131,7 +131,7 @@ describe("CodexPeerGateway", () => {
       throw new Error("expected relay timeout");
     } catch (error) {
       expect(error).toBeInstanceOf(CodexGatewayError);
-      expect(error).toMatchObject({ stage: "relay", timedOut: true, retryable: true });
+      expect(error).toMatchObject({ stage: "relay", timedOut: true, retryable: true, classification: "timeout-deadline" });
     }
 
     const watcher = new CodexPeerGateway(async () => undefined, { requestTimeoutMs: 10 });
@@ -140,7 +140,7 @@ describe("CodexPeerGateway", () => {
       throw new Error("expected watcher timeout");
     } catch (error) {
       expect(error).toBeInstanceOf(CodexGatewayError);
-      expect(error).toMatchObject({ stage: "watcher", timedOut: true, retryable: true });
+      expect(error).toMatchObject({ stage: "watcher", timedOut: true, retryable: true, classification: "timeout-deadline" });
     }
 
     let sent: Record<string, unknown> | undefined;
@@ -164,6 +164,7 @@ describe("CodexPeerGateway", () => {
         stage: "app-server",
         timedOut: true,
         retryable: true,
+        classification: "timeout-deadline",
         sessionId: "thread-created-before-timeout",
       });
     }
@@ -184,7 +185,7 @@ describe("CodexPeerGateway", () => {
       await failedPending;
       throw new Error("expected app-server failure");
     } catch (error) {
-      expect(error).toMatchObject({ stage: "app-server", timedOut: false, retryable: false });
+      expect(error).toMatchObject({ stage: "app-server", timedOut: false, retryable: false, classification: "code-error" });
     }
 
     const peer = new CodexPeerGateway(async () => { throw new Error("设备未连接"); });
@@ -192,7 +193,7 @@ describe("CodexPeerGateway", () => {
       await peer.sendInput("mac-node", "thread-1", "continue", Date.now() + 1_000);
       throw new Error("expected peer failure");
     } catch (error) {
-      expect(error).toMatchObject({ stage: "peer", timedOut: false, retryable: true });
+      expect(error).toMatchObject({ stage: "peer", timedOut: false, retryable: true, classification: "transport-closed" });
     }
   });
 
@@ -264,6 +265,7 @@ describe("CodexPeerGateway", () => {
         stage: "watcher",
         timedOut: false,
         retryable: false,
+        classification: "sandbox-capability",
       });
     }
   });

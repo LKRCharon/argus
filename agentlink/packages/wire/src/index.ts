@@ -4,3 +4,4 @@ export * from "./schema";
 export * from "./pairing";
 export * from "./agent";
 export * from "./mesh";
+export * from "./diagnostic";

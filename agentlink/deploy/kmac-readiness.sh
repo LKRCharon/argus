@@ -61,15 +61,16 @@ fi
 [[ "$path_gh" == /opt/homebrew/bin/gh ]] && ok NONINTERACTIVE_GH "$path_gh" || fail NONINTERACTIVE_GH
 [[ "$path_bun" == /opt/homebrew/bin/bun ]] && ok NONINTERACTIVE_BUN "$path_bun" || fail NONINTERACTIVE_BUN
 
-if [[ -x /opt/homebrew/bin/gh ]]; then
-  if GH_PROMPT_DISABLED=1 /opt/homebrew/bin/gh auth status --hostname github.com >/dev/null 2>&1; then
-    ok GH_KEYCHAIN_CONTEXT AVAILABLE
+probe_bun="${path_bun:-/opt/homebrew/bin/bun}"
+if [[ -x "$probe_bun" ]]; then
+  readiness_probes="$($probe_bun "$SCRIPT_DIR/kmac-readiness-probes.ts" --json 2>/dev/null || true)"
+  if [[ "$readiness_probes" == \{*\} ]]; then
+    ok READINESS_PROBES "$readiness_probes"
   else
-    warn GH_KEYCHAIN_CONTEXT UNAVAILABLE_CONTEXT_LIMITATION
+    warn READINESS_PROBES TOOLING_MISSING
   fi
-  ok GH_API_CAPABILITY WINDOWS_COMMANDER_DEFAULT
 else
-  fail GH_BINARY
+  warn READINESS_PROBES TOOLING_MISSING
 fi
 
 if [[ -d "$REPO_ROOT" ]]; then
@@ -172,17 +173,6 @@ if [[ "$available_kib" =~ ^[0-9]+$ ]] && (( available_kib >= 12 * 1024 * 1024 ))
   ok ANDROID_DISK_GATE "${available_kib}KiB"
 else
   fail ANDROID_DISK_GATE
-fi
-
-android_check="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
-if [[ -f "$android_check/platforms/android-35/android.jar" \
-  && -x "$android_check/platform-tools/adb" \
-  && -x "$android_check/build-tools/35.0.0/aapt2" ]]; then
-  ok ANDROID_API35 READY
-elif [[ -s "$android_check/licenses/android-sdk-license" ]]; then
-  warn ANDROID_API35 PACKAGES_MISSING
-else
-  warn ANDROID_API35 NEED_ANDROID_LICENSE
 fi
 
 if (( failures == 0 )); then

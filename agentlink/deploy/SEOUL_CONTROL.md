@@ -160,6 +160,11 @@ the raw prompt. List/read/send deadlines propagate through controller, relay,
 peer, watcher, and app-server rather than being cut off by a fixed 15-second
 outer timeout.
 
+Codex control failures expose a typed classification alongside the existing
+stage and retry fields: `transport-closed`, `timeout-deadline`, `auth-authz`,
+`sandbox-capability`, or `code-error`. Correlation IDs and idempotency fields
+remain caller-owned metadata and are preserved by the shared diagnostic helper.
+
 ## KMac connectivity
 
 The supported KMac path is its outbound, paired AgentLink connection to the
