@@ -121,6 +121,12 @@ describe("Seoul Codex MCP gateway", () => {
               lastErrorStage: null,
               checkedAt: "2026-08-19T00:00:00.000Z",
             },
+            github: {
+              status: "authenticated",
+              login: "octocat",
+              source: "keychain",
+              checkedAt: "2026-08-19T00:00:00.000Z",
+            },
           },
         }],
         totalPeerCount: 1,
@@ -191,6 +197,12 @@ describe("Seoul Codex MCP gateway", () => {
               activeJobs: 0,
               workspaceRevision: "a".repeat(40),
             },
+            github: {
+              status: "authenticated",
+              login: "octocat",
+              source: "keychain",
+              checkedAt: "2026-08-19T00:00:00.000Z",
+            },
           },
         }],
       });
@@ -202,6 +214,92 @@ describe("Seoul Codex MCP gateway", () => {
       expect(text).toContain(apiKeyInTypedIdArray);
     } finally {
       await mcp.close();
+    }
+  });
+
+  test("keeps only a valid safe GitHub status in the discovery summary", async () => {
+    const checkedAt = "2026-08-19T00:00:00.000Z";
+    const baseDiscovery = (github: unknown) => ({
+      controllerNodeId: "node-seoul",
+      generatedAt: 1,
+      peers: [{
+        fingerprint: "node-kmac",
+        deviceName: "KMac",
+        platform: "macOS",
+        status: "online",
+        lastSeen: 1,
+        resourceCount: 1,
+      }],
+      resources: [{
+        id: "workspace:kmac-m4",
+        nodeId: "node-kmac",
+        deviceName: "KMac",
+        kind: "directory",
+        displayName: "KMac",
+        capabilities: [],
+        allowedOperations: ["inspect"],
+        allowedGroupIds: ["seoul-mac"],
+        defaultGroupId: "seoul-mac",
+        runnerIds: [],
+        statusRunnerId: "kmac-status-v1",
+        runners: [],
+        status: {
+          state: "ready",
+          summary: "workspace ready",
+          observedAt: checkedAt,
+          github,
+        },
+      }],
+      totalPeerCount: 1,
+      totalResourceCount: 1,
+      onlinePeerCount: 1,
+      taskCount: 0,
+      taskStatusCounts: {},
+      truncated: { peers: 0, resources: 0 },
+    });
+    const safeStatus = {
+      status: "authenticated",
+      login: "octocat",
+      source: "config",
+      checkedAt,
+    };
+    const validMcp = await connectMcp(async () => Response.json(baseDiscovery(safeStatus)));
+    try {
+      const valid = await validMcp.client.callTool({ name: "mesh_list_devices", arguments: {} });
+      expect(valid.isError).not.toBe(true);
+      expect(JSON.parse(textContent(valid))).toMatchObject({
+        resources: [{
+          status: {
+            github: safeStatus,
+          },
+        }],
+      });
+    } finally {
+      await validMcp.close();
+    }
+
+    const hostile = {
+      ...safeStatus,
+      stdout: "ghp_hostile-discovery-output",
+    };
+    const impossible = {
+      status: "authenticated",
+      login: null,
+      source: "none",
+      checkedAt,
+      errorCode: "command-failed",
+    };
+    for (const github of [hostile, impossible]) {
+      const mcp = await connectMcp(async () => Response.json(baseDiscovery(github)));
+      try {
+        const result = await mcp.client.callTool({ name: "mesh_list_devices", arguments: {} });
+        const text = textContent(result);
+        expect(result.isError).toBe(true);
+        expect(text).not.toContain("ghp_hostile-discovery-output");
+        expect(text).not.toContain("command-failed");
+      } finally {
+        await mcp.close();
+      }
     }
   });
 
@@ -461,6 +559,49 @@ describe("Seoul Codex MCP gateway", () => {
     }
   });
 
+  test("rejects a self-consistent result artifact for a different requested task", async () => {
+    const content = Buffer.from("bound content\n", "utf8");
+    const changed = [{
+      type: "file" as const,
+      path: "src/bound.ts",
+      mode: 0o644,
+      size: content.byteLength,
+      sha256: createHash("sha256").update(content).digest("hex"),
+      contentBase64: content.toString("base64"),
+    }];
+    const identity = {
+      version: 1 as const,
+      kind: "result" as const,
+      baseArtifactId: "sha256:" + "b".repeat(64),
+      taskId: "task-artifact-payload",
+      changed,
+      deleted: [] as string[],
+    };
+    const digest = meshArtifactSha256(identity);
+    const manifest = { ...identity, artifactId: "sha256:" + digest, sha256: digest };
+    const fetchImpl: ControlFetch = async () => Response.json({
+      kind: "mesh-artifact",
+      requestId: "artifact-request-boundary",
+      targetNodeId: "node-kmac",
+      taskId: identity.taskId,
+      manifest,
+    });
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const result = await mcp.client.callTool({
+        name: "mesh_get_result_artifact",
+        arguments: { taskId: "task-artifact-requested" },
+      });
+      const text = textContent(result);
+      expect(result.isError).toBe(true);
+      expect(text).not.toContain(content.toString("base64"));
+      expect(text).not.toContain("bound content");
+      expect(text).not.toContain(manifest.artifactId);
+    } finally {
+      await mcp.close();
+    }
+  });
+
   test("routes bounded remote Codex thread, input, and approval calls", async () => {
     const captured: Request[] = [];
     const fetchImpl: ControlFetch = async (input, init) => {
@@ -659,6 +800,81 @@ describe("Seoul Codex MCP gateway", () => {
       const secondPage = JSON.parse(textContent(second)) as { events: Array<{ seq: number }>; nextSeq: number };
       expect(secondPage.events.map((event) => event.seq)).toEqual(Array.from({ length: 50 }, (_, index) => index + 51));
       expect(secondPage.nextSeq).toBe(100);
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  test("trusts an explicit false cursor gap for a sparse filtered first event", async () => {
+    const fetchImpl: ControlFetch = async () => Response.json({
+      kind: "codex-events",
+      totalEvents: 1,
+      oldestSeq: 1,
+      latestSeq: 42,
+      events: [{
+        seq: 42,
+        receivedAt: 42,
+        payload: { kind: "codex-event", sessionId: "thread-filtered", type: "text", text: "event" },
+      }],
+      nextSeq: 42,
+      hasMore: false,
+      cursorGap: false,
+      truncated: false,
+      truncatedEvents: 0,
+    });
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const result = await mcp.client.callTool({
+        name: "remote_codex_get_events",
+        arguments: { targetNodeId: "node-kmac", sessionId: "thread-filtered", afterSeq: 0, limit: 1 },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(JSON.parse(textContent(result))).toMatchObject({
+        events: [{ seq: 42 }],
+        nextSeq: 42,
+        nextCursor: null,
+        hasMore: false,
+        cursorGap: false,
+        truncated: false,
+        truncatedEvents: 0,
+      });
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  test("does not count consumed history as Codex event truncation", async () => {
+    const fetchImpl: ControlFetch = async () => Response.json({
+      kind: "codex-events",
+      totalEvents: 2,
+      oldestSeq: 1,
+      latestSeq: 42,
+      events: [{
+        seq: 42,
+        receivedAt: 42,
+        payload: { kind: "codex-event", sessionId: "thread-filtered", type: "text", text: "terminal" },
+      }],
+      nextSeq: 42,
+      hasMore: false,
+      cursorGap: false,
+      truncated: false,
+      truncatedEvents: 0,
+    });
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const result = await mcp.client.callTool({
+        name: "remote_codex_get_events",
+        arguments: { targetNodeId: "node-kmac", sessionId: "thread-filtered", afterSeq: 5, limit: 1 },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(JSON.parse(textContent(result))).toMatchObject({
+        nextSeq: 42,
+        nextCursor: null,
+        hasMore: false,
+        cursorGap: false,
+        truncated: false,
+        truncatedEvents: 0,
+      });
     } finally {
       await mcp.close();
     }

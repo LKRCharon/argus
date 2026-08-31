@@ -490,6 +490,53 @@ describe("ReconnectSupervisor", () => {
     await supervisor.stop();
   });
 
+  test("keeps stop terminal when handshake publication or validation stops the lifecycle", async () => {
+    const exercise = async (stopDuringValidation: boolean) => {
+      const candidate = fakeUpstream("discarded");
+      let validations = 0;
+      let connects = 0;
+      let stopPromise: Promise<void> | undefined;
+      let supervisor!: ReconnectSupervisor<string>;
+      supervisor = new ReconnectSupervisor({
+        connect: async () => {
+          connects++;
+          return candidate;
+        },
+        validateHandshake: () => {
+          validations++;
+          if (stopDuringValidation) stopPromise = supervisor.stop();
+          return false;
+        },
+        baseBackoffMs: 1,
+        maxBackoffMs: 2,
+        onStatusChanged: status => {
+          if (!stopDuringValidation && status.state === "connecting" && status.stage === "handshake") {
+            stopPromise = supervisor.stop();
+          }
+        },
+      });
+
+      supervisor.start();
+      await flush();
+      expect(stopPromise).toBeDefined();
+      await stopPromise!;
+      await flush();
+
+      expect(connects).toBe(1);
+      expect(validations).toBe(stopDuringValidation ? 1 : 0);
+      expect(candidate.closeCount()).toBe(1);
+      expect(supervisor.currentStatus).toMatchObject({
+        state: "stopped",
+        retryable: false,
+      });
+      expect(supervisor.currentStatus.errorCode).toBeUndefined();
+      expect(supervisor.currentStatus.nextRetryAt).toBeUndefined();
+    };
+
+    await exercise(false);
+    await exercise(true);
+  });
+
   test("default sleep removes its listener after resolution and abort", async () => {
     const makeSignal = () => {
       let aborted = false;

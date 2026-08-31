@@ -6,7 +6,7 @@
 
 **Keep your Mac awake while coding agents work, then restore normal sleep when they stop.**
 
-[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://www.apple.com/macos/)
+[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B%20arm64-black?logo=apple)](https://www.apple.com/macos/)
 [![Language](https://img.shields.io/badge/language-Swift%20%2B%20AppKit-orange?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -20,11 +20,12 @@ self-hosted relay, a Mesh control path, and an Android companion. It observes
 local agent activity and exposes only the explicitly enabled, typed operations
 that each paired device is allowed to use.
 
-**Prerequisites and boundaries:** the desktop app requires macOS 13 or later;
-the daemon and relay use Bun; the Android companion uses JDK 17 and Android SDK
-API 35. No hosted relay, API key, signing credential, or private deployment
-endpoint is included. A relay, remote Codex app-server, Mesh worker, and phone
-connection are optional and must be configured by their owner.
+**Prerequisites and boundaries:** the source build currently targets Apple
+silicon (arm64) with a macOS 13.0 deployment target; it does not produce an
+Intel binary. The daemon and relay use Bun; the Android companion uses JDK 17
+and Android SDK API 35. No hosted relay, API key, signing credential, or private
+deployment endpoint is included. A relay, remote Codex app-server, Mesh worker,
+and phone connection are optional and must be configured by their owner.
 
 ## Quick start
 
@@ -428,6 +429,8 @@ Argus/
 
 - The Android Argus mode and Mesh remote operations require a paired,
   owner-operated relay and target daemon.
+- The root macOS build currently produces an Apple-silicon (arm64) binary only;
+  an Intel build is not currently produced.
 - Qoder input injection cannot steer or interrupt an already running turn.
 - Remote Codex control requires a target app-server and explicit
   `remoteCodexControl` policy; it does not control arbitrary desktop sessions.
@@ -435,8 +438,9 @@ Argus/
   service endpoint.
 - KMac readiness reports GitHub status from the fixed owner runner, but it does
   not sign in, refresh credentials, or repair Keychain/config state.
-- Artifact bodies are bounded and pageable. Large results may return complete
-  metadata with omitted bodies and explicit truncation.
+- Artifact bodies are bounded, and large results may return complete metadata
+  with omitted bodies and explicit truncation; `mesh_get_result_artifact` has no
+  artifact cursor.
 
 ## Documentation index
 

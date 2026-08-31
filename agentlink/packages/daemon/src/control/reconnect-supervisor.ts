@@ -257,6 +257,10 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
           stage,
           handshake: upstream.handshake,
         });
+        if (!this.isOwner(owner) || signal.aborted) {
+          await this.closeOnce(upstream);
+          return;
+        }
         let validHandshake = false;
         try {
           validHandshake = this.options.validateHandshake(upstream.handshake);
@@ -265,6 +269,7 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
         }
         if (!validHandshake) {
           await this.closeOnce(upstream);
+          if (!this.isOwner(owner) || signal.aborted) return;
           this.publish({
             state: "incompatible",
             attempt: this.attempt,
@@ -273,6 +278,10 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
             stage,
             errorCode: "handshake_invalid",
           });
+          return;
+        }
+        if (!this.isOwner(owner) || signal.aborted) {
+          await this.closeOnce(upstream);
           return;
         }
 

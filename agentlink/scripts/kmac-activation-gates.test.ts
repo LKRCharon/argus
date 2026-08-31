@@ -159,6 +159,42 @@ describe("KMac activation gates", () => {
     writeFileSync(join(release, "deploy", "kmac-workspace-status.ts"), "", { mode: 0o600 });
     writeFileSync(candidateConfig, configText, { mode: 0o600 });
     const expectedHash = createHash("sha256").update(configText).digest("hex");
+    const runGate = (candidate: typeof config) => {
+      const candidateText = JSON.stringify(candidate) + "\n";
+      writeFileSync(candidateConfig, candidateText, { mode: 0o600 });
+      const candidateHash = createHash("sha256").update(candidateText).digest("hex");
+      return spawnSync("/bin/bash", [
+        "-c",
+        [
+          "set -Eeuo pipefail",
+          'CANDIDATE_CONFIG="$1"',
+          'CANDIDATE_RELEASE="$2"',
+          'readonly GATES_MODULE="$3"',
+          'BUN="$4"',
+          'base_canonical="$5"',
+          'export HOME="$6"',
+          'export AGENTLINK_HOME="$5/agentlink-home"',
+          'GITHUB_STATUS_RUNNER_ID="kmac-github-status-v1"',
+          'EXPECTED_CANDIDATE_MESH_SHA256="$7"',
+          "sha256_file() {",
+          "  local output",
+          '  output="$(/usr/bin/shasum -a 256 "$1" 2>/dev/null || true)"',
+          '  printf \'%s\\n\' "$output" | /usr/bin/cut -d " " -f 1',
+          "}",
+          gate,
+          "verify_candidate_config",
+          "printf 'candidate_config_gate=passed\\n'",
+        ].join("\n"),
+        "candidate-config-gate-regression",
+        candidateConfig,
+        release,
+        join(sourceRelease, "deploy", "kmac-activation-gates.ts"),
+        bun,
+        baseRoot,
+        homeRoot,
+        candidateHash,
+      ], { encoding: "utf8" });
+    };
 
     try {
       const result = spawnSync("/bin/bash", [
@@ -172,6 +208,7 @@ describe("KMac activation gates", () => {
           'base_canonical="$5"',
           'export HOME="$6"',
           'export AGENTLINK_HOME="$5/agentlink-home"',
+          'GITHUB_STATUS_RUNNER_ID="kmac-github-status-v1"',
           'EXPECTED_CANDIDATE_MESH_SHA256="$7"',
           "sha256_file() {",
           "  local output",
@@ -195,6 +232,36 @@ describe("KMac activation gates", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("candidate_config_gate=passed\n");
       expect(result.stderr).toBe("");
+
+      const tamperedCases: Array<[string, (candidate: typeof config) => void]> = [
+        ["executable", candidate => {
+          candidate.runners.find((entry) => entry.id === "kmac-github-status-v1")!.executable = "/tmp/other-bun";
+        }],
+        ["fixed argument", candidate => {
+          candidate.runners.find((entry) => entry.id === "kmac-github-status-v1")!.fixedArgs = [release + "/deploy/other.ts"];
+        }],
+        ["environment", candidate => {
+          Object.assign(candidate.runners.find((entry) => entry.id === "kmac-github-status-v1")!.env!, {
+            HOME: homeRoot,
+            PATH: "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            GH_TOKEN: "must-not-be-accepted",
+          });
+        }],
+        ["runtime limit", candidate => {
+          candidate.runners.find((entry) => entry.id === "kmac-github-status-v1")!.maxRuntimeMs = 9_999;
+        }],
+        ["output limit", candidate => {
+          candidate.runners.find((entry) => entry.id === "kmac-github-status-v1")!.maxOutputBytes = 8_191;
+        }],
+        ["status binding", candidate => {
+          candidate.resources[0]!.githubStatusRunnerId = "other-runner";
+        }],
+      ];
+      for (const [name, tamper] of tamperedCases) {
+        const candidate = JSON.parse(JSON.stringify(config)) as typeof config;
+        tamper(candidate);
+        expect(runGate(candidate).status, name).not.toBe(0);
+      }
     } finally {
       rmSync(testRoot, { recursive: true, force: true });
     }

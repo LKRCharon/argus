@@ -6,7 +6,8 @@ import {
   type MeshGitHubStatus,
 } from "@agentlink/wire";
 
-export const KMAC_GITHUB_STATUS_RUNNER_ID = "kmac-github-status-v1";
+export const GITHUB_STATUS_RUNNER_ID = "kmac-github-status-v1";
+export const KMAC_GITHUB_STATUS_RUNNER_ID = GITHUB_STATUS_RUNNER_ID;
 export const KMAC_GITHUB_CLI_PATH = "/opt/homebrew/bin/gh";
 export const KMAC_GITHUB_STATUS_ARGS = Object.freeze([
   "auth",
@@ -116,12 +117,14 @@ function sourceFromOutput(value: string): "keychain" | "config" {
   return "config";
 }
 
+type MeshGitHubErrorCode = Extract<MeshGitHubStatus, { errorCode: string }>["errorCode"];
+
 function result(
   status: MeshGitHubStatus["status"],
   checkedAt: string,
   login: string | null,
   source: MeshGitHubStatus["source"],
-  errorCode?: MeshGitHubStatus["errorCode"],
+  errorCode?: MeshGitHubErrorCode,
 ): MeshGitHubStatus {
   return MeshGitHubStatusSchema.parse({
     status,

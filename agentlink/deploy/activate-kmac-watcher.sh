@@ -182,6 +182,9 @@ verify_candidate_config() {
     EXPECTED_STATE_DIR="$base_canonical/state" \
     EXPECTED_CODEX_BIN="$HOME/.local/bin/codex" \
     EXPECTED_STATUS_PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    EXPECTED_GITHUB_STATUS_RUNNER_ID="$GITHUB_STATUS_RUNNER_ID" \
+    EXPECTED_GITHUB_HOME="$HOME" \
+    EXPECTED_GITHUB_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
     "$BUN" -e '
     const config = JSON.parse(await Bun.file(process.env.CONFIG).text());
     const { parseMeshConfig } = await import(`${process.env.RELEASE}/packages/daemon/src/mesh/config.ts`);
@@ -189,7 +192,8 @@ verify_candidate_config() {
     const parsed = parseMeshConfig(config);
     const resource = parsed.resources.find((entry) => entry.id === "workspace:kmac-m4");
     const runner = parsed.runners?.find((entry) => entry.id === "kmac-status-v1");
-    const githubRunner = parsed.runners?.find((entry) => entry.id === "kmac-github-status-v1");
+    const githubRunnerId = process.env.EXPECTED_GITHUB_STATUS_RUNNER_ID;
+    const githubRunner = parsed.runners?.find((entry) => entry.id === githubRunnerId);
     const expectedEnv = {
       PATH: process.env.EXPECTED_STATUS_PATH,
       ARGUS_STATUS_STATE_DIR: process.env.EXPECTED_STATE_DIR,
@@ -201,8 +205,16 @@ verify_candidate_config() {
     const envMatches = env !== undefined
       && Object.keys(env).length === Object.keys(expectedEnv).length
       && Object.entries(expectedEnv).every(([key, value]) => env[key] === value);
+    const expectedGithubEnv = {
+      HOME: process.env.EXPECTED_GITHUB_HOME,
+      PATH: process.env.EXPECTED_GITHUB_PATH,
+    };
+    const githubEnv = githubRunner?.env;
+    const githubEnvMatches = githubEnv !== undefined
+      && Object.keys(githubEnv).length === Object.keys(expectedGithubEnv).length
+      && Object.entries(expectedGithubEnv).every(([key, value]) => githubEnv[key] === value);
     if (resource?.statusRunnerId !== "kmac-status-v1"
-      || resource?.githubStatusRunnerId !== "kmac-github-status-v1"
+      || resource?.githubStatusRunnerId !== githubRunnerId
       || runner?.resourceId !== "workspace:kmac-m4"
       || runner?.purpose !== "status"
       || runner?.executable !== process.env.EXPECTED_RUNTIME_BUN
@@ -216,14 +228,24 @@ verify_candidate_config() {
       || runner?.workspaceCapabilities?.length !== 1
       || runner.workspaceCapabilities[0] !== "read-only-status"
       || runner?.exposeDebugOutput !== false
+      || githubRunner?.resourceId !== "workspace:kmac-m4"
       || githubRunner?.purpose !== "status"
+      || githubRunner?.executable !== process.env.EXPECTED_RUNTIME_BUN
+      || githubRunner?.fixedArgs?.length !== 1
+      || githubRunner?.fixedArgs?.[0] !== process.env.RELEASE + "/deploy/kmac-github-status.ts"
+      || githubRunner?.workdir !== "."
+      || githubRunner?.maxRuntimeMs !== 10000
+      || githubRunner?.maxOutputBytes !== 8192
       || githubRunner?.approvalRequired !== false
       || githubRunner?.allowDynamicArgs !== false
       || githubRunner?.allowInput !== false
+      || githubRunner?.workspaceCapabilities?.length !== 1
+      || githubRunner.workspaceCapabilities[0] !== "read-only-status"
       || githubRunner?.exposeDebugOutput !== false
       || !envMatches
+      || !githubEnvMatches
       || !remoteCodexControlIsEnabled(parsed)
-      || runner?.fixedArgs?.[0] !== `${process.env.RELEASE}/deploy/kmac-workspace-status.ts`) process.exit(1);
+      || runner?.fixedArgs?.[0] !== process.env.RELEASE + "/deploy/kmac-workspace-status.ts") process.exit(1);
   ' >/dev/null
 }
 
@@ -240,7 +262,7 @@ controller_verify() {
       status="${snapshot%% *}"; seen="${snapshot##* }"
       if [[ "$status" == online && "$seen" =~ ^[0-9]+$ ]] && (( seen > minimum_seen )); then
         if /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 seoul \
-            "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/refresh\",{method:\"POST\"}); if(!r.ok) process.exit(1); const refresh=await r.json(); const d=await fetch(\"$CONTROLLER_URL/api/discovery\"); if(!d.ok) process.exit(1); const o=await d.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); const resource=(o.resources??[]).find((x)=>x.id===\"$RESOURCE_ID\"); const status=resource?.status; if(p?.status!==\"online\" || !Number.isInteger(p.lastSeen) || p.lastSeen<=${minimum_seen} || resource?.statusRunnerId!==\"$RUNNER_ID\" || status?.state!==\"ready\" || status?.workspace?.workspaceRevision!==\"$REVIEWED_COMMIT\" || status?.workspace?.remoteCodexControl!==true) process.exit(1); process.stdout.write(\"ok\\n\")'" \
+            "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/refresh\",{method:\"POST\"}); if(!r.ok) process.exit(1); const refresh=await r.json(); const d=await fetch(\"$CONTROLLER_URL/api/discovery\"); if(!d.ok) process.exit(1); const o=await d.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); const resource=(o.resources??[]).find((x)=>x.id===\"$RESOURCE_ID\"); const status=resource?.status; const github=status?.github; const githubLogin=typeof github?.login===\"string\" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(github.login); const githubAuthenticated=github?.status===\"authenticated\" && githubLogin && (github.source===\"keychain\" || github.source===\"config\") && !Object.hasOwn(github,\"errorCode\"); if(p?.status!==\"online\" || !Number.isInteger(p.lastSeen) || p.lastSeen<=${minimum_seen} || resource?.statusRunnerId!==\"$RUNNER_ID\" || resource?.githubStatusRunnerId!==\"$GITHUB_STATUS_RUNNER_ID\" || status?.state!==\"ready\" || status?.workspace?.workspaceRevision!==\"$REVIEWED_COMMIT\" || status?.workspace?.remoteCodexControl!==true || !githubAuthenticated) process.exit(1); process.stdout.write(\"ok\\n\")'" \
             >/dev/null 2>/dev/null; then
           controller_verify_seen="$seen"
           return 0

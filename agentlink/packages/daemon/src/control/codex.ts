@@ -32,7 +32,9 @@ export interface RemoteCodexEventsPage {
   latestSeq: number;
   totalEvents: number;
   hasMore: boolean;
+  cursorGap: boolean;
   truncated: boolean;
+  truncatedEvents: number;
 }
 
 export interface CodexPeerGatewayOptions {
@@ -170,18 +172,21 @@ export class CodexPeerGateway {
     const oldestSeq = stored[0]?.seq ?? 0;
     const latestSeq = Math.max(afterSeq, stored.at(-1)?.seq ?? 0);
     const cursorGap = stored.length > 0 && afterSeq < oldestSeq - 1;
-    const hasMore = filtered.length > rows.length;
+    const truncatedEvents = Math.max(0, filtered.length - rows.length);
+    const hasMore = truncatedEvents > 0;
     return {
       targetNodeId,
       events: rows,
-      nextSeq: rows.at(-1)?.seq ?? Math.max(afterSeq, latestSeq),
+      nextSeq: rows.at(-1)?.seq ?? afterSeq,
       oldestSeq,
       latestSeq,
       totalEvents: sessionId
         ? stored.filter((event) => payloadSessionId(event.payload) === sessionId).length
         : stored.length,
+      cursorGap,
       hasMore,
-      truncated: cursorGap || hasMore,
+      truncated: cursorGap || truncatedEvents > 0,
+      truncatedEvents,
     };
   }
 

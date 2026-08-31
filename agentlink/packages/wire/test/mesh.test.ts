@@ -7,6 +7,7 @@ import {
   MeshArtifactRequestPayloadSchema,
   MeshAuditEventPayloadSchema,
   MeshCapabilityGrantSchema,
+  MeshGitHubStatusSchema,
   MeshPayloadSchema,
   MeshResourceListPayloadSchema,
   MeshResourceListRequestPayloadSchema,
@@ -362,5 +363,54 @@ describe("Mesh wire schema", () => {
     const unknown = { kind: "mesh-resource" as const, resource: { ...resource, kind: "volume" } };
     const result = MeshResourcePayloadSchema.safeParse(unknown);
     expect(result.success).toBe(false);
+  });
+
+  test("rejects impossible GitHub authentication status combinations", () => {
+    const checkedAt = "2026-08-17T00:00:00.000Z";
+    const authenticated = {
+      status: "authenticated" as const,
+      login: "octocat",
+      source: "keychain" as const,
+      checkedAt,
+    };
+    expect(MeshGitHubStatusSchema.safeParse(authenticated).success).toBe(true);
+    expect(MeshGitHubStatusSchema.safeParse({
+      ...authenticated,
+      login: null,
+      source: "none",
+      errorCode: "command-failed",
+    }).success).toBe(false);
+    expect(MeshGitHubStatusSchema.safeParse({
+      ...authenticated,
+      errorCode: "command-failed",
+    }).success).toBe(false);
+    expect(MeshGitHubStatusSchema.safeParse({
+      status: "unauthenticated",
+      login: "octocat",
+      source: "config",
+      checkedAt,
+      errorCode: "not-authenticated",
+    }).success).toBe(false);
+    expect(MeshGitHubStatusSchema.safeParse({
+      status: "unauthenticated",
+      login: null,
+      source: "none",
+      checkedAt,
+      errorCode: "command-failed",
+    }).success).toBe(false);
+    expect(MeshGitHubStatusSchema.safeParse({
+      status: "unavailable",
+      login: null,
+      source: "none",
+      checkedAt,
+      errorCode: "not-authenticated",
+    }).success).toBe(false);
+    expect(MeshGitHubStatusSchema.safeParse({
+      status: "error",
+      login: null,
+      source: "none",
+      checkedAt,
+      errorCode: "gh-missing",
+    }).success).toBe(false);
   });
 });

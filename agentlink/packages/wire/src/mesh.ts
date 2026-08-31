@@ -269,23 +269,45 @@ export type MeshWorkspaceStatus = z.infer<typeof MeshWorkspaceStatusSchema>;
 const GITHUB_LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 
 /** Safe, target-local GitHub authentication readiness; no command diagnostics cross the wire. */
-export const MeshGitHubStatusSchema = z.object({
-  status: z.enum(["authenticated", "unauthenticated", "unavailable", "error"]),
-  login: z.string().max(39).regex(GITHUB_LOGIN_PATTERN).nullable(),
-  source: z.enum(["keychain", "config", "none"]),
-  checkedAt: MeshTimestampSchema,
-  errorCode: z.enum([
-    "gh-missing",
-    "timeout",
-    "spawn-failed",
-    "output-limit",
-    "not-authenticated",
-    "network-unavailable",
-    "invalid-output",
-    "command-failed",
-    "runner-unavailable",
-  ]).optional(),
-}).strict();
+export const MeshGitHubStatusSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("authenticated"),
+    login: z.string().max(39).regex(GITHUB_LOGIN_PATTERN),
+    source: z.enum(["keychain", "config"]),
+    checkedAt: MeshTimestampSchema,
+  }).strict(),
+  z.object({
+    status: z.literal("unauthenticated"),
+    login: z.null(),
+    source: z.literal("none"),
+    checkedAt: MeshTimestampSchema,
+    errorCode: z.literal("not-authenticated"),
+  }).strict(),
+  z.object({
+    status: z.literal("unavailable"),
+    login: z.null(),
+    source: z.literal("none"),
+    checkedAt: MeshTimestampSchema,
+    errorCode: z.enum([
+      "gh-missing",
+      "timeout",
+      "spawn-failed",
+      "network-unavailable",
+      "runner-unavailable",
+    ]),
+  }).strict(),
+  z.object({
+    status: z.literal("error"),
+    login: z.null(),
+    source: z.literal("none"),
+    checkedAt: MeshTimestampSchema,
+    errorCode: z.enum([
+      "output-limit",
+      "invalid-output",
+      "command-failed",
+    ]),
+  }).strict(),
+]);
 export type MeshGitHubStatus = z.infer<typeof MeshGitHubStatusSchema>;
 
 export const MeshResourceStatusSchema = z.object({

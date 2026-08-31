@@ -6,6 +6,7 @@ import {
   MeshBaseArtifactManifestSchema,
   MeshArtifactPayloadSchema,
   MeshGroupIdSchema,
+  MeshGitHubStatusSchema,
   MeshIdempotencyKeySchema,
   MeshNodeIdSchema,
   MeshOperationIdSchema,
@@ -429,7 +430,7 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async ({ taskId }) => artifactToolCall(async () => await api.getResultArtifact(taskId)));
+  }, async ({ taskId }) => artifactToolCall(taskId, async () => await api.getResultArtifact(taskId)));
 
   server.registerTool("mesh_cancel_job", {
     title: "Cancel Mesh job",
@@ -626,9 +627,10 @@ async function toolCall(load: () => Promise<unknown>): Promise<CallToolResult> {
   }
 }
 
-async function artifactToolCall(load: () => Promise<unknown>): Promise<CallToolResult> {
+async function artifactToolCall(expectedTaskId: string, load: () => Promise<unknown>): Promise<CallToolResult> {
   try {
     const payload = MeshArtifactPayloadSchema.parse(await load());
+    if (payload.taskId !== expectedTaskId) throw new GatewayError("result artifact 请求任务绑定校验失败");
     const manifest = validateResultArtifactManifest(payload.manifest);
     if (manifest.taskId !== payload.taskId) throw new GatewayError("result artifact 任务绑定校验失败");
     const digest = meshArtifactSha256(manifest);
@@ -801,6 +803,12 @@ function summarizeResource(value: unknown): Record<string, unknown> {
   const workspace = record(status?.workspace);
   const devices = array(gpu?.devices);
   const runners = array(resource?.runners);
+  let githubStatus: z.infer<typeof MeshGitHubStatusSchema> | undefined;
+  if (status && Object.hasOwn(status, "github")) {
+    const parsedGithub = MeshGitHubStatusSchema.safeParse(status.github);
+    if (!parsedGithub.success) throw new GatewayError("控制 API 返回的 GitHub 状态格式无效");
+    githubStatus = parsedGithub.data;
+  }
   return {
     resourceId: idField(resource, "id", MeshResourceIdSchema),
     nodeId: idField(resource, "nodeId", MeshNodeIdSchema),
@@ -859,6 +867,7 @@ function summarizeResource(value: unknown): Record<string, unknown> {
             checkedAt: textField(workspace, "checkedAt", 128),
           },
         } : {}),
+        ...(githubStatus ? { github: githubStatus } : {}),
       },
     } : {}),
   };
@@ -1059,13 +1068,6 @@ function summarizeCodexEvents(
   const page = pageCodexEvents(payload, afterSeq, limit);
   const formatted = page.rows.map((row) => boundedCodexEvent(row.payload, raw));
   const truncatedRecords = formatted.filter((row) => row.truncated).length;
-  const upstreamNextSeq = sequenceField(payload.nextSeq) ?? page.nextSeq;
-  const upstreamHasMore = payload.hasMore === true;
-  const upstreamOldestSeq = sequenceField(payload.oldestSeq) ?? page.oldestSeq;
-  const upstreamLatestSeq = sequenceField(payload.latestSeq) ?? page.latestSeq;
-  const upstreamTotalEvents = boundedTotal(payload.totalEvents, page.totalEvents);
-  const upstreamTruncated = payload.truncated === true || boundedNonnegative(payload.truncatedEvents) > 0;
-  const hasMore = upstreamHasMore || page.hasMore;
   return {
     targetNodeId,
     raw,
@@ -1077,16 +1079,16 @@ function summarizeCodexEvents(
         event: row.value,
       };
     }),
-    totalEvents: upstreamTotalEvents,
+    totalEvents: page.totalEvents,
     returnedEvents: page.rows.length,
-    oldestSeq: upstreamOldestSeq,
-    latestSeq: upstreamLatestSeq,
-    nextSeq: upstreamNextSeq,
-    nextCursor: hasMore ? upstreamNextSeq : null,
-    hasMore,
+    oldestSeq: page.oldestSeq,
+    latestSeq: page.latestSeq,
+    nextSeq: page.nextSeq,
+    nextCursor: page.nextCursor,
+    hasMore: page.hasMore,
     cursorGap: page.cursorGap,
-    truncated: page.truncated || upstreamTruncated || truncatedRecords > 0,
-    truncatedEvents: Math.max(page.truncatedEvents, boundedNonnegative(payload.truncatedEvents)),
+    truncated: page.truncated || truncatedRecords > 0,
+    truncatedEvents: page.truncatedEvents,
     truncatedRecords,
   };
 }
@@ -1198,17 +1200,43 @@ function pageCodexEvents(
 
   const safeAfterSeq = sequenceField(afterSeq) ?? 0;
   const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), MAX_CODEX_EVENTS);
-  const oldestSeq = rows[0]?.seq ?? 0;
-  const latestSeq = Math.max(rows.at(-1)?.seq ?? 0, safeAfterSeq);
-  const cursorGap = rows.length > 0 && safeAfterSeq < oldestSeq - 1;
+  const declaredOldestSeq = optionalSequenceField(payload, "oldestSeq");
+  const declaredLatestSeq = optionalSequenceField(payload, "latestSeq");
+  const oldestSeq = declaredOldestSeq ?? rows[0]?.seq ?? 0;
+  const latestSeq = declaredLatestSeq ?? Math.max(rows.at(-1)?.seq ?? 0, safeAfterSeq);
+  if (oldestSeq > latestSeq) throw new GatewayError("控制 API 返回的 Codex 事件边界无效");
+  const localCursorGap = rows.length > 0 && safeAfterSeq < oldestSeq - 1;
   const available = rows.filter((row) => row.seq > safeAfterSeq);
   const pageRows = available.slice(0, safeLimit);
-  const hasMore = available.length > pageRows.length;
+  const declaredCursorGap = optionalBooleanField(payload, "cursorGap");
+  const declaredHasMore = optionalBooleanField(payload, "hasMore");
+  const declaredTruncated = optionalBooleanField(payload, "truncated");
+  const declaredTruncatedEvents = optionalNonnegativeField(payload, "truncatedEvents");
+  const hasMore = declaredHasMore ?? available.length > pageRows.length;
   const upstreamTotal = boundedTotal(payload.totalEvents ?? payload.total, rows.length);
-  const upstreamTruncated = payload.truncated === true || boundedNonnegative(payload.truncatedEvents) > 0;
-  const skipped = rows.filter((row) => row.seq <= safeAfterSeq).length;
-  const truncatedEvents = Math.max(0, upstreamTotal - skipped - pageRows.length);
-  const nextSeq = pageRows.at(-1)?.seq ?? safeAfterSeq;
+  // Older controllers may omit the explicit count.  Only rows in this
+  // response can establish omitted events; totalEvents also includes rows
+  // already consumed by afterSeq and must not imply truncation.
+  const localTruncatedEvents = Math.max(0, available.length - pageRows.length);
+  const truncatedEvents = declaredTruncatedEvents ?? localTruncatedEvents;
+  if (
+    declaredHasMore !== undefined
+    && declaredTruncatedEvents !== undefined
+    && declaredHasMore !== (declaredTruncatedEvents > 0)
+  ) {
+    throw new GatewayError("控制 API 返回的 Codex 事件分页格式无效");
+  }
+  const declaredNextSeq = optionalSequenceField(payload, "nextSeq");
+  const nextSeq = declaredNextSeq ?? pageRows.at(-1)?.seq ?? safeAfterSeq;
+  if (
+    nextSeq < safeAfterSeq
+    || (pageRows.at(-1)?.seq !== undefined && nextSeq < pageRows.at(-1)!.seq)
+    || (hasMore && nextSeq <= safeAfterSeq)
+  ) {
+    throw new GatewayError("控制 API 返回的 Codex 事件游标无效");
+  }
+  const cursorGap = declaredCursorGap ?? localCursorGap;
+  const upstreamTruncated = declaredTruncated ?? false;
   return {
     rows: pageRows,
     totalEvents: upstreamTotal,
@@ -1221,6 +1249,26 @@ function pageCodexEvents(
     truncated: cursorGap || hasMore || upstreamTruncated || truncatedEvents > 0,
     truncatedEvents,
   };
+}
+
+function optionalBooleanField(payload: Record<string, unknown>, name: string): boolean | undefined {
+  if (!Object.hasOwn(payload, name)) return undefined;
+  if (typeof payload[name] !== "boolean") {
+    throw new GatewayError("控制 API 返回的 Codex 事件分页格式无效");
+  }
+  return payload[name];
+}
+
+function optionalNonnegativeField(payload: Record<string, unknown>, name: string): number | undefined {
+  if (!Object.hasOwn(payload, name)) return undefined;
+  return boundedNonnegative(payload[name]);
+}
+
+function optionalSequenceField(payload: Record<string, unknown>, name: string): number | undefined {
+  if (!Object.hasOwn(payload, name)) return undefined;
+  const value = sequenceField(payload[name]);
+  if (value === null) throw new GatewayError("控制 API 返回的 Codex 事件序列无效");
+  return value;
 }
 
 function boundedCodexEvent(value: unknown, raw: boolean): { value: unknown; truncated: boolean } {

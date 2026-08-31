@@ -8,6 +8,9 @@ AGENTLINK_BASE="${AGENTLINK_INSTALL_ROOT:-$HOME/Library/Application Support/Agen
 PREPARED_ROOT="$AGENTLINK_BASE/prepared/${ARGUS_BACKUP_TAG:-argus-infra-stage1-20260830}"
 EXPECTED_REMOTE="git@github-argus-clash:LKRCharon/argus.git"
 EXPECTED_FETCH='+refs/heads/*:refs/remotes/origin/*'
+readonly GITHUB_STATUS_RUNNER_ID="kmac-github-status-v1"
+readonly EXPECTED_RUNTIME_BUN="$AGENTLINK_BASE/runtime/bun-1.3.14/bin/bun"
+readonly EXPECTED_GITHUB_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 failures=0
 warnings=0
 
@@ -153,7 +156,7 @@ if [[ -f "$live_mesh" ]]; then
   [[ "$live_status" == kmac-status-v1 ]] && ok LIVE_STATUS_RUNNER "$live_status" || fail LIVE_STATUS_RUNNER
   live_github_status="$(CONFIG="$live_mesh" /opt/homebrew/bin/bun -e \
     'const c=await Bun.file(process.env.CONFIG).json(); const r=(c.resources??[]).find((x)=>x.id==="workspace:kmac-m4"); console.log(r?.githubStatusRunnerId??"missing");' 2>/dev/null || true)"
-  [[ "$live_github_status" == kmac-github-status-v1 ]] && ok LIVE_GITHUB_STATUS_RUNNER "$live_github_status" || fail LIVE_GITHUB_STATUS_RUNNER
+  [[ "$live_github_status" == "$GITHUB_STATUS_RUNNER_ID" ]] && ok LIVE_GITHUB_STATUS_RUNNER "$live_github_status" || fail LIVE_GITHUB_STATUS_RUNNER
   live_remote_codex_control="$(mesh_remote_codex_control_state "$live_mesh")"
   case "$live_remote_codex_control" in
     enabled) ok LIVE_REMOTE_CODEX_CONTROL ENABLED ;;
@@ -165,8 +168,63 @@ else
   fail LIVE_REMOTE_CODEX_CONTROL
 fi
 if [[ -f "$prepared_mesh" ]]; then
-  prepared_status="$(CONFIG="$prepared_mesh" /opt/homebrew/bin/bun -e \
-    'const c=await Bun.file(process.env.CONFIG).json(); const resource=(c.resources??[]).find((x)=>x.id==="workspace:kmac-m4"); const runner=(c.runners??[]).find((x)=>x.id==="kmac-status-v1"); const github=(c.runners??[]).find((x)=>x.id==="kmac-github-status-v1"); const valid=resource?.statusRunnerId==="kmac-status-v1"&&resource?.githubStatusRunnerId==="kmac-github-status-v1"&&runner?.purpose==="status"&&runner?.approvalRequired===false&&runner?.allowDynamicArgs===false&&runner?.allowInput===false&&github?.purpose==="status"&&github?.approvalRequired===false&&github?.allowDynamicArgs===false&&github?.allowInput===false; console.log(valid?"ready":"invalid");' 2>/dev/null || true)"
+  prepared_status="$(CONFIG="$prepared_mesh" EXPECTED_RESOURCE_ID="workspace:kmac-m4" EXPECTED_GITHUB_STATUS_RUNNER_ID="$GITHUB_STATUS_RUNNER_ID" EXPECTED_RUNTIME_BUN="$EXPECTED_RUNTIME_BUN" EXPECTED_GITHUB_HOME="$HOME" EXPECTED_GITHUB_PATH="$EXPECTED_GITHUB_PATH" EXPECTED_RELEASE_ROOT="$AGENTLINK_BASE/releases/" /opt/homebrew/bin/bun -e '
+    try {
+      const c = await Bun.file(process.env.CONFIG).json();
+      const resources = Array.isArray(c?.resources) ? c.resources : [];
+      const runners = Array.isArray(c?.runners) ? c.runners : [];
+      const resource = resources.find((entry) => entry?.id === process.env.EXPECTED_RESOURCE_ID);
+      const runner = runners.find((entry) => entry?.id === "kmac-status-v1");
+      const github = runners.find((entry) => entry?.id === process.env.EXPECTED_GITHUB_STATUS_RUNNER_ID);
+      const statusArg = Array.isArray(runner?.fixedArgs) && runner.fixedArgs.length === 1
+        && typeof runner.fixedArgs[0] === "string" ? runner.fixedArgs[0] : "";
+      const statusMarker = "/deploy/kmac-workspace-status.ts";
+      const candidateRelease = statusArg.endsWith(statusMarker)
+        ? statusArg.slice(0, -statusMarker.length) : "";
+      const releaseRoot = process.env.EXPECTED_RELEASE_ROOT ?? "";
+      const releaseId = candidateRelease.startsWith(releaseRoot)
+        ? candidateRelease.slice(releaseRoot.length) : "";
+      const expectedGithubArg = candidateRelease
+        ? candidateRelease + "/deploy/kmac-github-status.ts" : "";
+      const githubEnv = github?.env;
+      const expectedEnv = {
+        HOME: process.env.EXPECTED_GITHUB_HOME,
+        PATH: process.env.EXPECTED_GITHUB_PATH,
+      };
+      const githubEnvMatches = githubEnv !== null
+        && typeof githubEnv === "object"
+        && !Array.isArray(githubEnv)
+        && Object.keys(githubEnv).length === Object.keys(expectedEnv).length
+        && Object.entries(expectedEnv).every(([key, value]) => githubEnv[key] === value);
+      const valid = resource?.id === process.env.EXPECTED_RESOURCE_ID
+        && resource?.statusRunnerId === "kmac-status-v1"
+        && resource?.githubStatusRunnerId === process.env.EXPECTED_GITHUB_STATUS_RUNNER_ID
+        && runner?.executable === process.env.EXPECTED_RUNTIME_BUN
+        && runner?.purpose === "status"
+        && runner?.fixedArgs?.length === 1
+        && /^[A-Za-z0-9._-]{1,80}$/.test(releaseId)
+        && github?.resourceId === process.env.EXPECTED_RESOURCE_ID
+        && github?.purpose === "status"
+        && github?.executable === process.env.EXPECTED_RUNTIME_BUN
+        && github?.fixedArgs?.length === 1
+        && github.fixedArgs[0] === expectedGithubArg
+        && github?.workdir === "."
+        && github?.env !== undefined
+        && github?.maxRuntimeMs === 10000
+        && github?.maxOutputBytes === 8192
+        && github?.approvalRequired === false
+        && github?.allowDynamicArgs === false
+        && github?.allowInput === false
+        && Array.isArray(github?.workspaceCapabilities)
+        && github.workspaceCapabilities.length === 1
+        && github.workspaceCapabilities[0] === "read-only-status"
+        && github?.exposeDebugOutput === false
+        && githubEnvMatches;
+      console.log(valid ? "ready" : "invalid");
+    } catch {
+      console.log("invalid");
+    }
+  ' 2>/dev/null || true)"
   [[ "$prepared_status" == ready ]] && ok PREPARED_STATUS_RUNNER READY_NOT_ACTIVE || fail PREPARED_STATUS_RUNNER
   prepared_remote_codex_control="$(mesh_remote_codex_control_state "$prepared_mesh")"
   case "$prepared_remote_codex_control" in

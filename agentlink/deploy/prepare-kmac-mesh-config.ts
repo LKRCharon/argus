@@ -11,10 +11,10 @@ import {
   parseMeshConfig,
   type MeshConfig,
 } from "../packages/daemon/src/mesh/config";
+import { GITHUB_STATUS_RUNNER_ID } from "./kmac-github-status";
 
 const RESOURCE_ID = "workspace:kmac-m4";
 const RUNNER_ID = "kmac-status-v1";
-const GITHUB_RUNNER_ID = "kmac-github-status-v1";
 
 export interface KmacStatusRunnerOptions {
   runtimeBun: string;
@@ -55,9 +55,9 @@ export function withKmacStatusRunner(
   if (existing && (existing.resourceId !== RESOURCE_ID || existing.purpose !== "status")) {
     throw new Error(`${RUNNER_ID} is already bound to another capability`);
   }
-  const existingGithub = config.runners?.find((runner) => runner.id === GITHUB_RUNNER_ID);
+  const existingGithub = config.runners?.find((runner) => runner.id === GITHUB_STATUS_RUNNER_ID);
   if (existingGithub && (existingGithub.resourceId !== RESOURCE_ID || existingGithub.purpose !== "status")) {
-    throw new Error(`${GITHUB_RUNNER_ID} is already bound to another capability`);
+    throw new Error(`${GITHUB_STATUS_RUNNER_ID} is already bound to another capability`);
   }
 
   const runner = {
@@ -100,7 +100,7 @@ export function withKmacStatusRunner(
     exposeDebugOutput: false,
   };
   const githubRunner = {
-    id: GITHUB_RUNNER_ID,
+    id: GITHUB_STATUS_RUNNER_ID,
     resourceId: RESOURCE_ID,
     purpose: "status" as const,
     executable: options.runtimeBun,
@@ -137,9 +137,9 @@ export function withKmacStatusRunner(
     ...config,
     ...(options.enableRemoteCodexControl === true ? { remoteCodexControl: true } : {}),
     resources: config.resources.map((entry) => entry.id === RESOURCE_ID
-      ? { ...entry, statusRunnerId: RUNNER_ID, githubStatusRunnerId: GITHUB_RUNNER_ID }
+      ? { ...entry, statusRunnerId: RUNNER_ID, githubStatusRunnerId: GITHUB_STATUS_RUNNER_ID }
       : entry),
-    runners: [...(config.runners ?? []).filter((entry) => entry.id !== RUNNER_ID && entry.id !== GITHUB_RUNNER_ID), runner, githubRunner],
+    runners: [...(config.runners ?? []).filter((entry) => entry.id !== RUNNER_ID && entry.id !== GITHUB_STATUS_RUNNER_ID), runner, githubRunner],
   });
 }
 
@@ -182,7 +182,7 @@ function main(args: string[]): void {
     ok: true,
     resourceId: RESOURCE_ID,
     statusRunnerId: RUNNER_ID,
-    githubStatusRunnerId: GITHUB_RUNNER_ID,
+    githubStatusRunnerId: GITHUB_STATUS_RUNNER_ID,
     remoteCodexControl: prepared.remoteCodexControl,
     inputSha256: sha256(source),
     outputSha256: sha256(serialized),

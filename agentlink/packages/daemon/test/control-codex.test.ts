@@ -75,6 +75,49 @@ describe("CodexPeerGateway", () => {
     expect(gateway.listEvents("mac-node", 0, 100, "thread-a").events).toHaveLength(1);
   });
 
+  test("reports filtered cursor pages without treating session gaps as cursor loss", () => {
+    const gateway = new CodexPeerGateway(async () => undefined, { maxEventsPerPeer: 10 });
+    for (const sessionId of ["thread-a", "thread-b", "thread-a", "thread-b"]) {
+      gateway.handlePayload("mac-node", {
+        kind: "codex-event",
+        sessionId,
+        type: "text",
+      });
+    }
+
+    const first = gateway.listEvents("mac-node", 0, 1, "thread-a");
+    expect(first.events.map((event) => event.seq)).toEqual([1]);
+    expect(first).toMatchObject({
+      nextSeq: 1,
+      hasMore: true,
+      cursorGap: false,
+      truncatedEvents: 1,
+    });
+
+    const terminal = gateway.listEvents("mac-node", first.nextSeq, 1, "thread-a");
+    expect(terminal.events.map((event) => event.seq)).toEqual([3]);
+    expect(terminal).toMatchObject({
+      nextSeq: 3,
+      hasMore: false,
+      cursorGap: false,
+      truncatedEvents: 0,
+    });
+
+    const retainedGapGateway = new CodexPeerGateway(async () => undefined, { maxEventsPerPeer: 2 });
+    for (const sessionId of ["thread-a", "thread-b", "thread-a"]) {
+      retainedGapGateway.handlePayload("mac-node", {
+        kind: "codex-event",
+        sessionId,
+        type: "text",
+      });
+    }
+    expect(retainedGapGateway.listEvents("mac-node", 0, 10, "thread-a")).toMatchObject({
+      cursorGap: true,
+      truncated: true,
+      truncatedEvents: 0,
+    });
+  });
+
   test("requires an observed approval and removes it only after target acknowledgement", async () => {
     const sent: Record<string, unknown>[] = [];
     const gateway = new CodexPeerGateway(async (_targetNodeId, payload) => {
