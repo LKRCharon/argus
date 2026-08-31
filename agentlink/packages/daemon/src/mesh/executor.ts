@@ -42,6 +42,8 @@ export interface LocalMeshResource {
   root: string;
   /** Owner-configured read-only probe used for status discovery. */
   statusRunnerId?: string;
+  /** Owner-configured read-only GitHub authentication probe. */
+  githubStatusRunnerId?: string;
   /** Optional per-resource restriction within the target's trusted groups. */
   allowedGroupIds?: string[];
 }

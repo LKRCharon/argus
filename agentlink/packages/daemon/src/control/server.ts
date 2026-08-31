@@ -542,6 +542,7 @@ function discoveryView(overview: ControllerOverview): Record<string, unknown> {
       defaultGroupId: resource.defaultGroupId,
       runnerIds: resource.runnerIds,
       statusRunnerId: resource.statusRunnerId,
+      githubStatusRunnerId: resource.githubStatusRunnerId,
       runners: (resource.runners ?? []).slice(0, 32).map((runner) => ({
         runnerId: runner.runnerId,
         title: runner.title,
@@ -582,6 +583,7 @@ function discoveryResourceStatus(status: NonNullable<ControllerOverview["resourc
         checkedAt: status.workspace.checkedAt,
       },
     } : {}),
+    ...(status.github ? { github: status.github } : {}),
   };
 }
 

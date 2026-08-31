@@ -49,7 +49,6 @@ describe("KMac readiness probes", () => {
         stdout: "Logged in to github.com account octocat (keyring)\nToken: ghp_fake-token-value\n",
         stderr: "",
       },
-      { status: 0, stdout: "octocat\n", stderr: "" },
       { status: 0, stdout: "deadbeef\tHEAD\n", stderr: "" },
     ]);
     const secret = "ghp_fake-token-value";
@@ -67,7 +66,13 @@ describe("KMac readiness probes", () => {
 
     expect(result).toEqual({
       provider: "github",
-      credentialSource: "env",
+      status: {
+        status: "authenticated",
+        login: "octocat",
+        source: "keychain",
+        checkedAt: expect.any(String),
+      },
+      credentialSource: "keychain",
       identity: { login: "octocat" },
       gitSsh: { reachable: true, state: "reachable" },
       api: { classification: "authenticated" },
@@ -75,18 +80,17 @@ describe("KMac readiness probes", () => {
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(commands.calls.map((call) => call.args)).toEqual([
       ["auth", "status", "--hostname", "github.com"],
-      ["api", "user", "--hostname", "github.com", "--jq", ".login"],
       ["-c", "core.askPass=", "ls-remote", "--heads", "git@github.com:owner/repo.git"],
     ]);
     expect(commands.calls.flatMap((call) => call.args)).not.toContain("--show-token");
-    expect(commands.calls[0].env.GH_TOKEN).toBe(secret);
-    expect(commands.calls[2].env.GH_TOKEN).toBeUndefined();
+    expect(commands.calls[0].env.GH_TOKEN).toBeUndefined();
+    expect(commands.calls[0].env.GITHUB_TOKEN).toBeUndefined();
+    expect(commands.calls[1].env.GH_TOKEN).toBeUndefined();
   });
 
   test("classifies keychain, auth, and transport outcomes without raw diagnostics", () => {
     const keychain = commandSequence([
       { status: 0, stdout: "Logged in to github.com account octocat (keyring)", stderr: "" },
-      { status: 1, stdout: "", stderr: "HTTP 401: Bad credentials" },
       { status: 1, stdout: "", stderr: "Permission denied (publickey)." },
     ]);
     expect(probeGitHubReadiness({
@@ -96,14 +100,14 @@ describe("KMac readiness probes", () => {
       commandRunner: keychain.runner,
     })).toMatchObject({
       credentialSource: "keychain",
+      status: { status: "authenticated" },
       identity: { login: "octocat" },
-      api: { classification: "unauthenticated" },
+      api: { classification: "authenticated" },
       gitSsh: { reachable: false, state: "unreachable" },
     });
 
     const forbidden = commandSequence([
       { status: 1, stdout: "", stderr: "not logged in" },
-      { status: 1, stdout: "", stderr: "HTTP 403: Forbidden" },
       { status: 1, stdout: "", stderr: "network unreachable" },
     ]);
     expect(probeGitHubReadiness({
@@ -113,8 +117,9 @@ describe("KMac readiness probes", () => {
       commandRunner: forbidden.runner,
     })).toMatchObject({
       credentialSource: "none",
+      status: { status: "unauthenticated" },
       identity: null,
-      api: { classification: "forbidden" },
+      api: { classification: "unauthenticated" },
       gitSsh: { state: "unreachable" },
     });
   });
@@ -221,6 +226,9 @@ describe("KMac readiness probes", () => {
     const readiness = readFileSync(join(import.meta.dir, "../deploy/kmac-readiness.sh"), "utf8");
     expect(readiness).toContain("kmac-readiness-probes.ts");
     expect(readiness).toContain("READINESS_PROBES");
+    expect(readiness).toContain("GITHUB_AUTH");
+    expect(readiness).toContain("kmac-github-status-v1");
+    expect(readiness).not.toContain("NONINTERACTIVE_GH");
     expect(readiness).not.toContain("adb devices");
     expect(readiness).not.toContain("adb start-server");
     expect(readiness).not.toContain("--licenses");

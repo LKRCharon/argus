@@ -351,7 +351,7 @@ describe("ReconnectSupervisor", () => {
     expect(connects).toBe(3);
   });
 
-  test("terminates with a fixed error when custom sleep fails", async () => {
+  test("terminates with an explicit failure when custom sleep fails", async () => {
     let connects = 0;
     const statuses: string[] = [];
     const supervisor = new ReconnectSupervisor<string>({
@@ -368,8 +368,106 @@ describe("ReconnectSupervisor", () => {
     supervisor.start();
     await flush();
     expect(connects).toBe(1);
-    expect(supervisor.currentStatus).toMatchObject({ state: "backoff", retryable: false, errorCode: "sleep_failed" });
+    expect(supervisor.currentStatus).toMatchObject({
+      state: "failed",
+      retryable: false,
+      errorCode: "sleep_failed",
+    });
+    expect(supervisor.currentStatus.nextRetryAt).toBeUndefined();
     expect(statuses).not.toContain("backoff:raw sleep failure");
+    await supervisor.stop();
+  });
+
+  test("enters a terminal failure state after retry exhaustion", async () => {
+    const delays: number[] = [];
+    let connects = 0;
+    const supervisor = new ReconnectSupervisor<string>({
+      connect: async () => {
+        connects++;
+        throw new Error("offline");
+      },
+      validateHandshake: () => true,
+      baseBackoffMs: 10,
+      maxBackoffMs: 100,
+      maxAttempts: 2,
+      random: () => 1,
+      sleep: async (milliseconds, signal) => {
+        delays.push(milliseconds);
+        await new Promise<void>(resolve => {
+          if (signal.aborted) return resolve();
+          signal.addEventListener("abort", () => resolve(), { once: true });
+          setTimeout(resolve, 0);
+        });
+      },
+    });
+    supervisor.start();
+    await flush();
+    await Bun.sleep(5);
+    await flush();
+    expect(connects).toBe(2);
+    expect(delays).toEqual([10]);
+    expect(supervisor.currentStatus).toMatchObject({
+      state: "failed",
+      retryable: false,
+      errorCode: "retry_exhausted",
+      attempt: 2,
+    });
+    expect(supervisor.currentStatus.nextRetryAt).toBeUndefined();
+    await supervisor.stop();
+  });
+
+  test("supports a clean stop/start cycle with a new generation", async () => {
+    const first = fakeUpstream("first");
+    const second = fakeUpstream("second");
+    let connects = 0;
+    const supervisor = new ReconnectSupervisor<string>({
+      connect: async () => (++connects === 1 ? first : second),
+      validateHandshake: () => true,
+      baseBackoffMs: 1,
+      maxBackoffMs: 2,
+    });
+
+    supervisor.start();
+    await flush();
+    expect(supervisor.currentStatus).toMatchObject({ state: "ready", generation: 1 });
+    await supervisor.stop();
+    expect(first.closeCount()).toBe(1);
+
+    supervisor.start();
+    await flush();
+    expect(supervisor.currentStatus).toMatchObject({ state: "ready", generation: 2 });
+    expect(supervisor.currentCatalog).toBe("second");
+    await supervisor.stop();
+    expect(second.closeCount()).toBe(1);
+  });
+
+  test("does not let a stale connect child win a queued stop/start race", async () => {
+    let resolveStale!: (upstream: FakeUpstream) => void;
+    const staleConnect = new Promise<FakeUpstream>(resolve => { resolveStale = resolve; });
+    const stale = fakeUpstream("stale");
+    const current = fakeUpstream("current");
+    let connects = 0;
+    const supervisor = new ReconnectSupervisor<string>({
+      connect: async () => {
+        connects++;
+        return connects === 1 ? staleConnect : current;
+      },
+      validateHandshake: () => true,
+      baseBackoffMs: 1,
+      maxBackoffMs: 2,
+    });
+
+    supervisor.start();
+    await flush();
+    const stopping = supervisor.stop();
+    supervisor.start();
+    resolveStale(stale);
+    await stopping;
+    await flush();
+
+    expect(stale.closeCount()).toBe(1);
+    expect(supervisor.currentCatalog).toBe("current");
+    expect(supervisor.currentStatus).toMatchObject({ state: "ready", generation: 1 });
     await supervisor.stop();
   });
 

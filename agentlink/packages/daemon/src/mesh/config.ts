@@ -41,6 +41,7 @@ const MeshConfigSchema = z.object({
     displayName: MeshIdSchema,
     root: z.string().refine(isAbsolute, "resource root must be absolute"),
     statusRunnerId: MeshRunnerIdSchema.optional(),
+    githubStatusRunnerId: MeshRunnerIdSchema.optional(),
     allowedGroupIds: z.array(MeshGroupIdSchema).max(32).optional(),
   })),
   runners: z.array(z.object({

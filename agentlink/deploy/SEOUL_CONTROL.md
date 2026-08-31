@@ -101,14 +101,15 @@ as runnable work. Request-provided arguments are rejected unless that exact
 task runner opts into `allowDynamicArgs`; stdin is separately gated by
 `allowInput`. Both default to false.
 
-For `workspace:kmac-m4`, configure a dedicated fixed status runner such as
-`kmac-status-v1` with `purpose: "status"`, `approvalRequired: false`, no dynamic
-arguments or stdin, and only the `read-only-status` workspace capability. Its
-JSON result contains only connection state, watcher/Codex app-server
-availability, the explicit `remoteCodexControl` policy bit, active job count,
-workspace revision, last success/error stage, and check time. Executable paths,
-fixed arguments, environment, and arbitrary commands remain target-local and
-are not published by discovery.
+For `workspace:kmac-m4`, configure the fixed `kmac-status-v1` workspace probe
+and the fixed `kmac-github-status-v1` GitHub probe with `purpose: "status"`,
+`approvalRequired: false`, no dynamic arguments or stdin, and only the
+`read-only-status` workspace capability. The GitHub runner hard-codes
+`/opt/homebrew/bin/gh auth status --hostname github.com`, strips credential and
+configuration overrides, and returns only `status`, `login`, `source`,
+`checkedAt`, and an optional bounded `errorCode`. Executable paths, fixed
+arguments, environment, and arbitrary commands remain target-local and are not
+published by discovery.
 
 Resource discovery publishes `allowedGroupIds`, `defaultGroupId` only when a
 single trusted group is available, `allowedOperations`, and safe runner metadata.

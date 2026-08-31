@@ -315,7 +315,7 @@ export class MeshController {
       const discovered = await resources;
       await Promise.allSettled(
         discovered
-          .filter((resource) => Boolean(resource.statusRunnerId))
+          .filter((resource) => Boolean(resource.statusRunnerId || resource.githubStatusRunnerId))
           .map((resource) => this.requestResourceStatus(peerId, resource.id)),
       );
       return discovered;

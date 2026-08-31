@@ -3,6 +3,7 @@ export type ReconnectState =
   | "connecting"
   | "ready"
   | "backoff"
+  | "failed"
   | "incompatible"
   | "stopped";
 
@@ -16,6 +17,8 @@ export type ReconnectErrorCode =
   | "connect_failed"
   | "handshake_invalid"
   | "catalog_load_failed"
+  | "retry_exhausted"
+  | "retry_failed"
   | "sleep_failed";
 
 export type ReconnectStatus = {
@@ -48,6 +51,8 @@ export type ReconnectSupervisorOptions<
   validateHandshake(handshake: Handshake): boolean;
   baseBackoffMs: number;
   maxBackoffMs: number;
+  /** Maximum connection attempts before entering the terminal failed state. */
+  maxAttempts?: number;
   random?: () => number;
   now?: () => number;
   sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
@@ -79,6 +84,7 @@ export const __defaultReconnectSleep = defaultSleep;
 type Generation<Catalog, Upstream extends ReconnectUpstream<Catalog>> = {
   upstream: Upstream;
   number: number;
+  owner: number;
   closed: boolean;
   unsubscribe?: () => void;
 };
@@ -90,6 +96,7 @@ type ResolvedReconnectSupervisorOptions<
   random: () => number;
   now: () => number;
   sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  maxAttempts: number;
 };
 
 export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Catalog> = ReconnectUpstream<Catalog>> {
@@ -105,8 +112,12 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
     stage: "idle",
   };
   private loop: Promise<void> | undefined;
+  private loopOwner: number | undefined;
   private stopPromise: Promise<void> | undefined;
+  private stopInProgress = false;
+  private startAfterStop = false;
   private stopped = false;
+  private lifecycle = 0;
   private runController: AbortController | undefined;
   private activeGeneration: Generation<Catalog, Upstream> | undefined;
   private catalog: Catalog | undefined;
@@ -118,6 +129,7 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
       random: options.random ?? Math.random,
       now: options.now ?? Date.now,
       sleep: options.sleep ?? defaultSleep,
+      maxAttempts: boundedMaxAttempts(options.maxAttempts),
     };
   }
 
@@ -130,20 +142,40 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
   }
 
   start(): void {
-    if (this.stopped || this.loop) return;
-    const runPromise = Promise.resolve().then(() => this.run());
-    this.loop = runPromise.finally(() => {
-      this.loop = undefined;
+    if (this.stopInProgress) {
+      this.startAfterStop = true;
+      return;
+    }
+    if (this.loop) return;
+    if (this.stopPromise) {
+      this.stopPromise = undefined;
+    }
+    this.stopped = false;
+    this.attempt = 0;
+    const owner = ++this.lifecycle;
+    const runPromise = Promise.resolve().then(() => this.run(owner));
+    let trackedLoop!: Promise<void>;
+    trackedLoop = runPromise.finally(() => {
+      if (this.loop === trackedLoop && this.loopOwner === owner) {
+        this.loop = undefined;
+        this.loopOwner = undefined;
+      }
     });
+    this.loop = trackedLoop;
+    this.loopOwner = owner;
   }
 
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
 
     let resolveStop!: () => void;
-    this.stopPromise = new Promise<void>(resolve => {
+    const stopPromise = new Promise<void>(resolve => {
       resolveStop = resolve;
     });
+    this.stopPromise = stopPromise;
+    this.stopInProgress = true;
+    const owner = this.lifecycle;
+    this.lifecycle++;
     this.stopped = true;
     this.runController?.abort();
     this.publish({
@@ -161,12 +193,20 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
         // Shutdown must still close the active generation after an unexpected loop failure.
       }
       try {
-        await this.closeActive();
+        await this.closeActive(owner);
       } finally {
+        if (this.stopPromise === stopPromise) {
+          this.stopInProgress = false;
+          if (this.startAfterStop) {
+            this.startAfterStop = false;
+            this.stopPromise = undefined;
+            this.start();
+          }
+        }
         resolveStop();
       }
     })();
-    return this.stopPromise;
+    return stopPromise;
   }
 
   close(): Promise<void> {
@@ -186,13 +226,15 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
     return { ok: true, generation: generation.number };
   }
 
-  private async run(): Promise<void> {
-    while (!this.stopped) {
-      this.runController = new AbortController();
-      const signal = this.runController.signal;
+  private async run(owner: number): Promise<void> {
+    while (this.isOwner(owner)) {
+      const controller = new AbortController();
+      this.runController = controller;
+      const signal = controller.signal;
       let stage = "connect";
       let upstream: Upstream | undefined;
       try {
+        if (!this.isOwner(owner)) return;
         this.publish({
           state: "connecting",
           attempt: this.attempt,
@@ -201,9 +243,9 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
           stage,
         });
         upstream = await this.options.connect(signal);
-        if (signal.aborted || this.stopped) {
+        if (!this.isOwner(owner) || signal.aborted) {
           await this.closeOnce(upstream);
-          break;
+          return;
         }
 
         stage = "handshake";
@@ -231,19 +273,20 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
             stage,
             errorCode: "handshake_invalid",
           });
-          break;
+          return;
         }
 
         stage = "catalog";
         const candidateCatalog = await upstream.loadCatalog(signal);
-        if (signal.aborted || this.stopped) {
+        if (!this.isOwner(owner) || signal.aborted) {
           await this.closeOnce(upstream);
-          break;
+          return;
         }
 
         const candidate: Generation<Catalog, Upstream> = {
           upstream,
           number: this.generation + 1,
+          owner,
           closed: false,
         };
         let closeNotified = false;
@@ -260,15 +303,15 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
           candidate.unsubscribe = upstream.onClose(notifyClose);
         } catch {
           await this.closeOnce(upstream);
-          if (this.stopped || signal.aborted) break;
-          if (!(await this.backoff("catalog", "catalog_load_failed"))) break;
+          if (!this.isOwner(owner) || signal.aborted) return;
+          if (!(await this.backoff(owner, "catalog", "catalog_load_failed"))) return;
           continue;
         }
 
-        if (candidate.closed || signal.aborted || this.stopped) {
+        if (candidate.closed || signal.aborted || !this.isOwner(owner)) {
           await this.endGeneration(candidate);
-          if (this.stopped) break;
-          if (!(await this.backoff("closed"))) break;
+          if (!this.isOwner(owner)) return;
+          if (!(await this.backoff(owner, "closed"))) return;
           continue;
         }
 
@@ -288,21 +331,21 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
 
         // A ready observer may synchronously stop or invalidate this generation.
         if (
-          this.stopped ||
+          !this.isOwner(owner) ||
           candidate.closed ||
           this.activeGeneration !== candidate ||
           this.state !== "ready"
         ) {
           await this.endGeneration(candidate);
-          if (this.stopped) break;
-          if (!(await this.backoff("closed"))) break;
+          if (!this.isOwner(owner)) return;
+          if (!(await this.backoff(owner, "closed"))) return;
           continue;
         }
         this.safeCall(this.options.onCatalogChanged, candidateCatalog);
 
         let onGenerationAbort: (() => void) | undefined;
         await new Promise<void>(resolve => {
-          if (this.stopped || candidate.closed || signal.aborted) {
+          if (!this.isOwner(owner) || candidate.closed || signal.aborted) {
             resolve();
             return;
           }
@@ -313,20 +356,32 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
         if (onGenerationAbort) signal.removeEventListener("abort", onGenerationAbort);
         releaseGenerationWait = undefined;
         await this.endGeneration(candidate);
-        if (this.stopped) break;
-        if (!(await this.backoff("closed"))) break;
+        if (!this.isOwner(owner)) return;
+        if (!(await this.backoff(owner, "closed"))) return;
       } catch {
         if (upstream) await this.closeOnce(upstream);
-        if (this.stopped || signal.aborted) break;
-        if (!(await this.backoff(stage === "catalog" ? "catalog" : "backoff", stage === "catalog" ? "catalog_load_failed" : "connect_failed"))) break;
+        if (!this.isOwner(owner) || signal.aborted) return;
+        if (!(await this.backoff(owner, stage === "catalog" ? "catalog" : "backoff", stage === "catalog" ? "catalog_load_failed" : "connect_failed"))) return;
       } finally {
-        this.runController = undefined;
+        if (this.runController === controller) this.runController = undefined;
       }
     }
   }
 
-  private async backoff(stage: string, errorCode?: ReconnectErrorCode): Promise<boolean> {
+  private async backoff(owner: number, stage: string, errorCode?: ReconnectErrorCode): Promise<boolean> {
+    if (!this.isOwner(owner)) return false;
     this.attempt++;
+    if (this.attempt >= this.options.maxAttempts) {
+      this.publish({
+        state: "failed",
+        attempt: this.attempt,
+        generation: this.generation,
+        retryable: false,
+        stage,
+        errorCode: "retry_exhausted",
+      });
+      return false;
+    }
     const exponential = Math.min(
       this.options.maxBackoffMs,
       this.options.baseBackoffMs * 2 ** Math.max(0, this.attempt - 1),
@@ -339,6 +394,21 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
     }
     jitter = Math.max(0, Math.min(1, Number.isFinite(jitter) ? jitter : 0));
     const delay = Math.min(this.options.maxBackoffMs, exponential * jitter);
+    let nextRetryAt: number;
+    try {
+      nextRetryAt = this.options.now() + delay;
+    } catch {
+      this.publish({
+        state: "failed",
+        attempt: this.attempt,
+        generation: this.generation,
+        retryable: false,
+        stage: "backoff",
+        errorCode: "retry_failed",
+      });
+      return false;
+    }
+    if (!this.isOwner(owner)) return false;
     this.publish({
       state: "backoff",
       attempt: this.attempt,
@@ -346,17 +416,30 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
       retryable: true,
       stage,
       errorCode,
-      nextRetryAt: this.options.now() + delay,
+      nextRetryAt,
     });
     const signal = this.runController?.signal;
-    if (!signal) return true;
+    if (!signal || !this.isOwner(owner)) {
+      if (this.isOwner(owner)) {
+        this.publish({
+          state: "failed",
+          attempt: this.attempt,
+          generation: this.generation,
+          retryable: false,
+          stage: "backoff",
+          errorCode: "retry_failed",
+        });
+      }
+      return false;
+    }
     try {
       await this.options.sleep(delay, signal);
+      if (!this.isOwner(owner) || signal.aborted) return false;
       return true;
     } catch {
-      if (this.stopped || signal.aborted) return true;
+      if (!this.isOwner(owner) || signal.aborted) return false;
       this.publish({
-        state: "backoff",
+        state: "failed",
         attempt: this.attempt,
         generation: this.generation,
         retryable: false,
@@ -365,6 +448,10 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
       });
       return false;
     }
+  }
+
+  private isOwner(owner: number): boolean {
+    return !this.stopped && this.lifecycle === owner;
   }
 
   private publish(status: ReconnectStatus): void {
@@ -394,9 +481,11 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
     await this.closeOnce(generation.upstream);
   }
 
-  private async closeActive(): Promise<void> {
+  private async closeActive(owner?: number): Promise<void> {
     const generation = this.activeGeneration;
-    if (generation) await this.endGeneration(generation);
+    if (generation && (owner === undefined || generation.owner === owner)) {
+      await this.endGeneration(generation);
+    }
   }
 
   private async closeOnce(upstream: Upstream): Promise<void> {
@@ -408,4 +497,12 @@ export class ReconnectSupervisor<Catalog, Upstream extends ReconnectUpstream<Cat
       // Shutdown errors are deliberately hidden.
     }
   }
+}
+
+function boundedMaxAttempts(value: number | undefined): number {
+  if (value === undefined) return Number.POSITIVE_INFINITY;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error("maxAttempts must be a positive integer");
+  }
+  return value;
 }

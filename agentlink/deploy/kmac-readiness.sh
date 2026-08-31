@@ -48,17 +48,15 @@ else
 fi
 
 path_probe="$(/usr/bin/env -i HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" SHELL=/bin/zsh PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/zsh -lc \
-  'printf "%s\n" "$(command -v codex 2>/dev/null || true)" "$(command -v gh 2>/dev/null || true)" "$(command -v bun 2>/dev/null || true)"')"
+  'printf "%s\n" "$(command -v codex 2>/dev/null || true)" "$(command -v bun 2>/dev/null || true)"')"
 path_codex="$(printf '%s\n' "$path_probe" | /usr/bin/sed -n '1p')"
-path_gh="$(printf '%s\n' "$path_probe" | /usr/bin/sed -n '2p')"
-path_bun="$(printf '%s\n' "$path_probe" | /usr/bin/sed -n '3p')"
+path_bun="$(printf '%s\n' "$path_probe" | /usr/bin/sed -n '2p')"
 if [[ "$path_codex" == "$HOME/.local/bin/codex" ]]; then
   codex_version="$($path_codex --version 2>/dev/null | /usr/bin/head -1)"
   [[ -n "$codex_version" ]] && ok NONINTERACTIVE_CODEX "$codex_version" || fail NONINTERACTIVE_CODEX
 else
   fail NONINTERACTIVE_CODEX
 fi
-[[ "$path_gh" == /opt/homebrew/bin/gh ]] && ok NONINTERACTIVE_GH "$path_gh" || fail NONINTERACTIVE_GH
 [[ "$path_bun" == /opt/homebrew/bin/bun ]] && ok NONINTERACTIVE_BUN "$path_bun" || fail NONINTERACTIVE_BUN
 
 probe_bun="${path_bun:-/opt/homebrew/bin/bun}"
@@ -66,11 +64,28 @@ if [[ -x "$probe_bun" ]]; then
   readiness_probes="$($probe_bun "$SCRIPT_DIR/kmac-readiness-probes.ts" --json 2>/dev/null || true)"
   if [[ "$readiness_probes" == \{*\} ]]; then
     ok READINESS_PROBES "$readiness_probes"
+    github_auth_state="$(GITHUB_PROBES="$readiness_probes" "$probe_bun" -e '
+      try {
+        const value = JSON.parse(process.env.GITHUB_PROBES ?? "{}");
+        const status = value?.github?.status?.status;
+        process.stdout.write(["authenticated", "unauthenticated", "unavailable", "error"].includes(status) ? status : "unavailable");
+      } catch {
+        process.stdout.write("unavailable");
+      }
+    ' 2>/dev/null || printf 'unavailable')"
+    case "$github_auth_state" in
+      authenticated) ok GITHUB_AUTH AUTHENTICATED ;;
+      unauthenticated) warn GITHUB_AUTH UNAUTHENTICATED ;;
+      unavailable) warn GITHUB_AUTH UNAVAILABLE ;;
+      *) fail GITHUB_AUTH ERROR ;;
+    esac
   else
     warn READINESS_PROBES TOOLING_MISSING
+    warn GITHUB_AUTH UNAVAILABLE
   fi
 else
   warn READINESS_PROBES TOOLING_MISSING
+  warn GITHUB_AUTH UNAVAILABLE
 fi
 
 if [[ -d "$REPO_ROOT" ]]; then
@@ -135,7 +150,10 @@ prepared_mesh="$PREPARED_ROOT/mesh.json"
 if [[ -f "$live_mesh" ]]; then
   live_status="$(CONFIG="$live_mesh" /opt/homebrew/bin/bun -e \
     'const c=await Bun.file(process.env.CONFIG).json(); const r=(c.resources??[]).find((x)=>x.id==="workspace:kmac-m4"); console.log(r?.statusRunnerId??"missing");' 2>/dev/null || true)"
-  ok LIVE_STATUS_RUNNER "$live_status"
+  [[ "$live_status" == kmac-status-v1 ]] && ok LIVE_STATUS_RUNNER "$live_status" || fail LIVE_STATUS_RUNNER
+  live_github_status="$(CONFIG="$live_mesh" /opt/homebrew/bin/bun -e \
+    'const c=await Bun.file(process.env.CONFIG).json(); const r=(c.resources??[]).find((x)=>x.id==="workspace:kmac-m4"); console.log(r?.githubStatusRunnerId??"missing");' 2>/dev/null || true)"
+  [[ "$live_github_status" == kmac-github-status-v1 ]] && ok LIVE_GITHUB_STATUS_RUNNER "$live_github_status" || fail LIVE_GITHUB_STATUS_RUNNER
   live_remote_codex_control="$(mesh_remote_codex_control_state "$live_mesh")"
   case "$live_remote_codex_control" in
     enabled) ok LIVE_REMOTE_CODEX_CONTROL ENABLED ;;
@@ -148,7 +166,7 @@ else
 fi
 if [[ -f "$prepared_mesh" ]]; then
   prepared_status="$(CONFIG="$prepared_mesh" /opt/homebrew/bin/bun -e \
-    'const c=await Bun.file(process.env.CONFIG).json(); const resource=(c.resources??[]).find((x)=>x.id==="workspace:kmac-m4"); const runner=(c.runners??[]).find((x)=>x.id==="kmac-status-v1"); const valid=resource?.statusRunnerId==="kmac-status-v1"&&runner?.purpose==="status"&&runner?.approvalRequired===false&&runner?.allowDynamicArgs===false&&runner?.allowInput===false; console.log(valid?"ready":"invalid");' 2>/dev/null || true)"
+    'const c=await Bun.file(process.env.CONFIG).json(); const resource=(c.resources??[]).find((x)=>x.id==="workspace:kmac-m4"); const runner=(c.runners??[]).find((x)=>x.id==="kmac-status-v1"); const github=(c.runners??[]).find((x)=>x.id==="kmac-github-status-v1"); const valid=resource?.statusRunnerId==="kmac-status-v1"&&resource?.githubStatusRunnerId==="kmac-github-status-v1"&&runner?.purpose==="status"&&runner?.approvalRequired===false&&runner?.allowDynamicArgs===false&&runner?.allowInput===false&&github?.purpose==="status"&&github?.approvalRequired===false&&github?.allowDynamicArgs===false&&github?.allowInput===false; console.log(valid?"ready":"invalid");' 2>/dev/null || true)"
   [[ "$prepared_status" == ready ]] && ok PREPARED_STATUS_RUNNER READY_NOT_ACTIVE || fail PREPARED_STATUS_RUNNER
   prepared_remote_codex_control="$(mesh_remote_codex_control_state "$prepared_mesh")"
   case "$prepared_remote_codex_control" in

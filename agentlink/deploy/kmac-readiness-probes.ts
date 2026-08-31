@@ -2,20 +2,26 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import {
+  redactGitHubOutput,
+  runKmacGitHubStatus,
+} from "./kmac-github-status";
 
-export type CredentialSourceKind = "keychain" | "env" | "none";
+export type CredentialSourceKind = "keychain" | "config" | "env" | "none";
 
 export type GitHubApiClassification =
   | "authenticated"
   | "unauthenticated"
   | "forbidden"
   | "unreachable"
+  | "error"
   | "tooling-missing";
 
 export type GitSshState = "reachable" | "unreachable" | "tooling-missing";
 
 export interface GitHubReadiness {
   provider: "github";
+  status: ReturnType<typeof runKmacGitHubStatus>;
   credentialSource: CredentialSourceKind;
   identity: { login: string } | null;
   gitSsh: {
@@ -86,6 +92,7 @@ export interface ReadinessProbeOptions {
   env?: Readonly<Record<string, string | undefined>>;
   home?: string;
   platform?: string;
+  /** Deprecated compatibility field; GitHub readiness always uses the fixed runner path. */
   ghPath?: string;
   gitPath?: string;
   gitRemote?: string;
@@ -100,24 +107,10 @@ const COMMAND_TIMEOUT_MS = 8_000;
 const MAX_COMMAND_OUTPUT_BYTES = 32 * 1024;
 const DEFAULT_GIT_REMOTE = "git@github-argus-clash:LKRCharon/argus.git";
 const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
-const SECRET_ENV_KEYS = [
-  "GH_TOKEN",
-  "GITHUB_TOKEN",
-  "GH_ENTERPRISE_TOKEN",
-  "GITHUB_ENTERPRISE_TOKEN",
-] as const;
 
 /** Redact command diagnostics before they can be inspected for classification. */
 export function redactProbeText(input: string, maxLength = MAX_COMMAND_OUTPUT_BYTES): string {
-  return input
-    .slice(0, maxLength)
-    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]*PRIVATE KEY-----/gi, "[REDACTED]")
-    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*/gi, "[REDACTED]")
-    .replace(/\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]+\b/gi, "[REDACTED]")
-    .replace(/\bBearer\s+[^\s]+/gi, "Bearer [REDACTED]")
-    .replace(/\bAuthorization\s*:\s*[^\s]+(?:\s+[^\s]+)?/gi, "Authorization: [REDACTED]")
-    .replace(/\b(token|secret|password|private[_ -]?key)\s*[:=]\s*[^\s]+/gi, "$1=[REDACTED]")
-    .slice(0, maxLength);
+  return redactGitHubOutput(input, maxLength);
 }
 
 function defaultCommandRunner(
@@ -170,10 +163,7 @@ function nonEmpty(value: string | undefined): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function commandEnvironment(
-  env: Readonly<Record<string, string | undefined>>,
-  includeGitHubCredentials: boolean,
-): Record<string, string> {
+function commandEnvironment(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
   const selected: Record<string, string> = {
     GH_PROMPT_DISABLED: "1",
     GIT_TERMINAL_PROMPT: "0",
@@ -182,11 +172,6 @@ function commandEnvironment(
   };
   for (const key of ["GH_CONFIG_DIR", "SSH_AUTH_SOCK"] as const) {
     if (nonEmpty(env[key])) selected[key] = env[key];
-  }
-  if (includeGitHubCredentials) {
-    for (const key of SECRET_ENV_KEYS) {
-      if (nonEmpty(env[key])) selected[key] = env[key];
-    }
   }
   return selected;
 }
@@ -254,34 +239,6 @@ function parseLogin(value: string): { login: string } | null {
   return GITHUB_LOGIN.test(login) ? { login } : null;
 }
 
-function parseAuthStatusLogin(value: string): { login: string } | null {
-  for (const line of value.split(/\r?\n/)) {
-    const match = /\baccount\s+([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)\b/i.exec(line);
-    if (match && GITHUB_LOGIN.test(match[1])) return { login: match[1] };
-  }
-  return null;
-}
-
-function hasEnvironmentCredential(env: Readonly<Record<string, string | undefined>>): boolean {
-  return SECRET_ENV_KEYS.some((key) => nonEmpty(env[key]));
-}
-
-function authStatusLooksAuthenticated(result: ProbeCommandResult): boolean {
-  return result.status === 0;
-}
-
-function classifyApiFailure(result: ProbeCommandResult): GitHubApiClassification {
-  const text = redactProbeText(`${result.stdout}\n${result.stderr}`);
-  if (/\b403\b|forbidden|rate limit/i.test(text)) return "forbidden";
-  if (/\b401\b|unauthori[sz]ed|bad credentials|not logged in|authentication|invalid token/i.test(text)) {
-    return "unauthenticated";
-  }
-  if (result.timedOut || /could not resolve|connection|network|proxy|tls|timeout|timed out|unreachable/i.test(text)) {
-    return "unreachable";
-  }
-  return result.status === null ? "unreachable" : "unauthenticated";
-}
-
 function safeGitRemote(value: string): boolean {
   return value.length <= 512 && /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]*$/.test(value);
 }
@@ -290,13 +247,6 @@ export function probeGitHubReadiness(options: ReadinessProbeOptions = {}): GitHu
   const env = options.env ?? process.env;
   const executable = options.isExecutable ?? isExecutable;
   const runner = options.commandRunner ?? defaultCommandRunner;
-  const gh = commandPath(
-    "gh",
-    options.ghPath,
-    env,
-    executable,
-    ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"],
-  );
   const git = commandPath(
     "git",
     options.gitPath,
@@ -304,26 +254,20 @@ export function probeGitHubReadiness(options: ReadinessProbeOptions = {}): GitHu
     executable,
     ["/usr/bin/git"],
   );
-  const ghCommandEnv = commandEnvironment(env, true);
-  const gitCommandEnv = commandEnvironment(env, false);
-  let credentialSource: CredentialSourceKind = hasEnvironmentCredential(env) ? "env" : "none";
-  let identity: { login: string } | null = null;
-  let apiClassification: GitHubApiClassification = "tooling-missing";
-
-  if (gh) {
-    const authStatus = commandResult(runner, gh, ["auth", "status", "--hostname", "github.com"], ghCommandEnv);
-    identity = parseAuthStatusLogin(redactProbeText(`${authStatus.stdout}\n${authStatus.stderr}`));
-    if (credentialSource === "none" && authStatusLooksAuthenticated(authStatus)) credentialSource = "keychain";
-
-    const api = commandResult(runner, gh, ["api", "user", "--hostname", "github.com", "--jq", ".login"], ghCommandEnv);
-    const apiLogin = api.status === 0 ? parseLogin(api.stdout) : null;
-    if (apiLogin) {
-      identity = apiLogin;
-      apiClassification = "authenticated";
-    } else {
-      apiClassification = api.status === 0 ? "unauthenticated" : classifyApiFailure(api);
-    }
-  }
+  const githubStatus = runKmacGitHubStatus({
+    env,
+    isExecutable: executable,
+    commandRunner: (command, args, commandOptions) => commandResult(runner, command, args, commandOptions.env),
+  });
+  const credentialSource: CredentialSourceKind = githubStatus.source;
+  const identity = githubStatus.login ? { login: githubStatus.login } : null;
+  const apiClassification: GitHubApiClassification = githubStatus.status === "authenticated"
+    ? "authenticated"
+    : githubStatus.status === "unauthenticated"
+      ? "unauthenticated"
+      : githubStatus.status === "unavailable"
+        ? githubStatus.errorCode === "gh-missing" ? "tooling-missing" : "unreachable"
+        : "error";
 
   let gitSshState: GitSshState = "tooling-missing";
   const remote = options.gitRemote ?? DEFAULT_GIT_REMOTE;
@@ -334,12 +278,13 @@ export function probeGitHubReadiness(options: ReadinessProbeOptions = {}): GitHu
       "ls-remote",
       "--heads",
       remote,
-    ], gitCommandEnv);
+    ], commandEnvironment(env));
     gitSshState = gitResult.status === 0 ? "reachable" : "unreachable";
   }
 
   return {
     provider: "github",
+    status: githubStatus,
     credentialSource,
     identity,
     gitSsh: {

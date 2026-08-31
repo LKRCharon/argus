@@ -28,6 +28,11 @@ export interface RemoteCodexEventsPage {
   targetNodeId: string;
   events: RemoteCodexEvent[];
   nextSeq: number;
+  oldestSeq: number;
+  latestSeq: number;
+  totalEvents: number;
+  hasMore: boolean;
+  truncated: boolean;
 }
 
 export interface CodexPeerGatewayOptions {
@@ -157,15 +162,26 @@ export class CodexPeerGateway {
     sessionId?: string,
   ): RemoteCodexEventsPage {
     const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
-    const rows = (this.events.get(targetNodeId) ?? [])
+    const stored = this.events.get(targetNodeId) ?? [];
+    const filtered = stored
       .filter((event) => event.seq > afterSeq)
-      .filter((event) => !sessionId || payloadSessionId(event.payload) === sessionId)
-      .slice(0, safeLimit);
-    const latest = Math.max(afterSeq, this.events.get(targetNodeId)?.at(-1)?.seq ?? 0);
+      .filter((event) => !sessionId || payloadSessionId(event.payload) === sessionId);
+    const rows = filtered.slice(0, safeLimit);
+    const oldestSeq = stored[0]?.seq ?? 0;
+    const latestSeq = Math.max(afterSeq, stored.at(-1)?.seq ?? 0);
+    const cursorGap = stored.length > 0 && afterSeq < oldestSeq - 1;
+    const hasMore = filtered.length > rows.length;
     return {
       targetNodeId,
       events: rows,
-      nextSeq: rows.at(-1)?.seq ?? latest,
+      nextSeq: rows.at(-1)?.seq ?? Math.max(afterSeq, latestSeq),
+      oldestSeq,
+      latestSeq,
+      totalEvents: sessionId
+        ? stored.filter((event) => payloadSessionId(event.payload) === sessionId).length
+        : stored.length,
+      hasMore,
+      truncated: cursorGap || hasMore,
     };
   }
 

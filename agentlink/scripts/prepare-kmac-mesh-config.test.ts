@@ -30,7 +30,8 @@ describe("KMac Mesh config preparation", () => {
   test("adds only a fixed read-only status capability", () => {
     const prepared = withKmacStatusRunner(base, options);
     expect(prepared.resources[0]?.statusRunnerId).toBe("kmac-status-v1");
-    expect(prepared.runners).toHaveLength(1);
+    expect(prepared.resources[0]?.githubStatusRunnerId).toBe("kmac-github-status-v1");
+    expect(prepared.runners).toHaveLength(2);
     expect(prepared.runners?.[0]).toMatchObject({
       id: "kmac-status-v1",
       resourceId: "workspace:kmac-m4",
@@ -44,6 +45,26 @@ describe("KMac Mesh config preparation", () => {
     expect(prepared.runners?.[0]?.resultSchema).toMatchObject({
       required: expect.arrayContaining(["remoteCodexControl"]),
     });
+    expect(prepared.runners?.[1]).toMatchObject({
+      id: "kmac-github-status-v1",
+      resourceId: "workspace:kmac-m4",
+      purpose: "status",
+      approvalRequired: false,
+      allowDynamicArgs: false,
+      allowInput: false,
+      fixedArgs: ["/opt/agentlink/releases/release/deploy/kmac-github-status.ts"],
+      env: {
+        HOME: expect.any(String),
+        PATH: "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      },
+      resultSchema: {
+        additionalProperties: false,
+        required: ["status", "login", "source", "checkedAt"],
+      },
+      workspaceCapabilities: ["read-only-status"],
+    });
+    expect(JSON.stringify(prepared.runners?.[1])).not.toContain("GH_TOKEN");
+    expect(JSON.stringify(prepared.runners?.[1])).not.toContain("GITHUB_TOKEN");
   });
 
   test("is idempotent and preserves existing policy", () => {

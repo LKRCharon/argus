@@ -579,6 +579,196 @@ describe("Seoul Codex MCP gateway", () => {
     }
   });
 
+  test("keeps a large Mesh job response concise and truthful", async () => {
+    const responseBody = JSON.stringify({
+      taskId: "task-large-job",
+      targetNodeId: "node-kmac",
+      resourceId: "repo:workspace",
+      groupId: "group-alpha",
+      operation: "run",
+      status: "completed",
+      result: { output: "o".repeat(160_000) },
+    });
+    expect(Buffer.byteLength(responseBody, "utf8")).toBeGreaterThan(64 * 1024);
+    const fetchImpl: ControlFetch = async () => new Response(responseBody, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const result = await mcp.client.callTool({
+        name: "mesh_get_job",
+        arguments: { taskId: "task-large-job" },
+      });
+      expect(result.isError).not.toBe(true);
+      const summary = JSON.parse(textContent(result)) as Record<string, unknown>;
+      expect(summary.resultTruncated).toBe(true);
+      expect((summary.result as { output: string }).output.length).toBeLessThanOrEqual(1_024);
+      expect(Buffer.byteLength(textContent(result), "utf8")).toBeLessThan(48 * 1024);
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  test("pages oversized Codex events without losing sequence continuity", async () => {
+    const events = Array.from({ length: 120 }, (_, index) => ({
+      seq: index + 1,
+      receivedAt: index + 1,
+      payload: {
+        kind: "codex-event",
+        type: "text",
+        sessionId: "thread-events",
+        text: "e".repeat(1_500),
+      },
+    }));
+    const base = { kind: "codex-events", totalEvents: events.length, oldestSeq: 1, latestSeq: events.length, events };
+    const responseBody = JSON.stringify(base);
+    expect(Buffer.byteLength(responseBody, "utf8")).toBeGreaterThan(64 * 1024);
+    const fetchImpl: ControlFetch = async (input) => {
+      const afterSeq = Number(new URL(input instanceof Request ? input.url : String(input)).searchParams.get("afterSeq"));
+      return Response.json({
+        ...base,
+        nextSeq: Math.min(afterSeq + 50, events.length),
+        hasMore: afterSeq + 50 < events.length,
+        truncated: false,
+      });
+    };
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const first = await mcp.client.callTool({
+        name: "remote_codex_get_events",
+        arguments: { targetNodeId: "node-kmac", afterSeq: 0, limit: 50 },
+      });
+      expect(first.isError).not.toBe(true);
+      const firstPage = JSON.parse(textContent(first)) as {
+        events: Array<{ seq: number }>;
+        totalEvents: number;
+        nextSeq: number;
+        nextCursor: number | null;
+        hasMore: boolean;
+        truncated: boolean;
+      };
+      expect(firstPage.events.map((event) => event.seq)).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+      expect(firstPage).toMatchObject({ totalEvents: 120, nextSeq: 50, nextCursor: 50, hasMore: true, truncated: true });
+
+      const second = await mcp.client.callTool({
+        name: "remote_codex_get_events",
+        arguments: { targetNodeId: "node-kmac", afterSeq: firstPage.nextCursor, limit: 50 },
+      });
+      expect(second.isError).not.toBe(true);
+      const secondPage = JSON.parse(textContent(second)) as { events: Array<{ seq: number }>; nextSeq: number };
+      expect(secondPage.events.map((event) => event.seq)).toEqual(Array.from({ length: 50 }, (_, index) => index + 51));
+      expect(secondPage.nextSeq).toBe(100);
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  test("pages oversized Codex history and keeps raw payload opt-in", async () => {
+    const events = Array.from({ length: 120 }, (_, index) => ({
+      kind: "codex-event",
+      type: "text",
+      sessionId: "thread-history",
+      text: "h".repeat(1_500),
+    }));
+    const responseBody = JSON.stringify({
+      kind: "codex-resumed",
+      sessionId: "thread-history",
+      cwd: "/workspace",
+      canAcceptDirectInput: true,
+      events,
+    });
+    expect(Buffer.byteLength(responseBody, "utf8")).toBeGreaterThan(64 * 1024);
+    const fetchImpl: ControlFetch = async () => new Response(responseBody, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const first = await mcp.client.callTool({
+        name: "remote_codex_read_thread",
+        arguments: { targetNodeId: "node-kmac", sessionId: "thread-history", limit: 50 },
+      });
+      expect(first.isError).not.toBe(true);
+      const firstPage = JSON.parse(textContent(first)) as {
+        events: Array<{ text?: string }>;
+        totalEvents: number;
+        nextSeq: number;
+        nextCursor: number | null;
+        hasMore: boolean;
+        raw: boolean;
+      };
+      expect(firstPage.events).toHaveLength(50);
+      expect(firstPage).toMatchObject({ totalEvents: 120, nextSeq: 50, nextCursor: 50, hasMore: true, raw: false });
+      expect(firstPage.events[0]?.text?.length).toBeLessThanOrEqual(2_000);
+
+      const raw = await mcp.client.callTool({
+        name: "remote_codex_read_thread",
+        arguments: { targetNodeId: "node-kmac", sessionId: "thread-history", limit: 1, raw: true },
+      });
+      expect(raw.isError).not.toBe(true);
+      expect(JSON.parse(textContent(raw))).toMatchObject({ raw: true, events: [{ kind: "codex-event" }] });
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  test("returns verified artifact metadata when optional file bodies do not fit", async () => {
+    const content = Buffer.alloc(200_000, 7);
+    const file = {
+      type: "file" as const,
+      path: "src/large.bin",
+      mode: 0o644,
+      size: content.byteLength,
+      sha256: createHash("sha256").update(content).digest("hex"),
+      contentBase64: content.toString("base64"),
+    };
+    const identity = {
+      version: 1 as const,
+      kind: "result" as const,
+      baseArtifactId: `sha256:${"b".repeat(64)}`,
+      taskId: "task-large-artifact",
+      changed: [file],
+      deleted: ["old.txt"],
+    };
+    const sha256 = meshArtifactSha256(identity);
+    const manifest = { ...identity, artifactId: `sha256:${sha256}`, sha256 };
+    const responseBody = JSON.stringify({
+      kind: "mesh-artifact",
+      requestId: "artifact-request-large",
+      targetNodeId: "node-kmac",
+      taskId: identity.taskId,
+      manifest,
+    });
+    expect(Buffer.byteLength(responseBody, "utf8")).toBeGreaterThan(64 * 1024);
+    const fetchImpl: ControlFetch = async () => new Response(responseBody, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const mcp = await connectMcp(fetchImpl);
+    try {
+      const result = await mcp.client.callTool({
+        name: "mesh_get_result_artifact",
+        arguments: { taskId: identity.taskId },
+      });
+      expect(result.isError).not.toBe(true);
+      const text = textContent(result);
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(240 * 1024);
+      const envelope = JSON.parse(text) as {
+        manifest: { changed: Array<Record<string, unknown>>; deleted: string[]; sha256: string };
+        integrity: { verified: boolean; complete: boolean; truncated: boolean; bodies: { omittedFiles: number } };
+      };
+      expect(envelope.manifest).toMatchObject({ sha256, deleted: ["old.txt"] });
+      expect(envelope.manifest.changed[0]).toMatchObject({ path: file.path, size: file.size, sha256: file.sha256 });
+      expect(envelope.manifest.changed[0]).not.toHaveProperty("contentBase64");
+      expect(envelope.integrity).toMatchObject({ verified: true, complete: false, truncated: true });
+      expect(envelope.integrity.bodies.omittedFiles).toBe(1);
+      expect(text).not.toContain(file.contentBase64);
+    } finally {
+      await mcp.close();
+    }
+  });
+
   test("redacts API error details and never returns response blobs", async () => {
     let oversized = false;
     const fetchImpl: ControlFetch = async () => {

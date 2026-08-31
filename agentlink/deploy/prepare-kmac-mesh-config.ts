@@ -5,7 +5,8 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import {
   parseMeshConfig,
   type MeshConfig,
@@ -13,12 +14,15 @@ import {
 
 const RESOURCE_ID = "workspace:kmac-m4";
 const RUNNER_ID = "kmac-status-v1";
+const GITHUB_RUNNER_ID = "kmac-github-status-v1";
 
 export interface KmacStatusRunnerOptions {
   runtimeBun: string;
   statusScript: string;
   stateDir: string;
   codexLauncher: string;
+  githubStatusScript?: string;
+  githubHome?: string;
   relayPort?: number;
   enableRemoteCodexControl?: boolean;
 }
@@ -35,6 +39,11 @@ export function withKmacStatusRunner(
   requireAbsolute(options.statusScript, "statusScript");
   requireAbsolute(options.stateDir, "stateDir");
   requireAbsolute(options.codexLauncher, "codexLauncher");
+  const githubStatusScript = options.githubStatusScript
+    ?? join(dirname(options.statusScript), "kmac-github-status.ts");
+  requireAbsolute(githubStatusScript, "githubStatusScript");
+  const githubHome = options.githubHome ?? process.env.HOME ?? homedir();
+  requireAbsolute(githubHome, "githubHome");
   const relayPort = options.relayPort ?? 28787;
   if (!Number.isInteger(relayPort) || relayPort < 1 || relayPort > 65_535) {
     throw new Error("relayPort is invalid");
@@ -45,6 +54,10 @@ export function withKmacStatusRunner(
   const existing = config.runners?.find((runner) => runner.id === RUNNER_ID);
   if (existing && (existing.resourceId !== RESOURCE_ID || existing.purpose !== "status")) {
     throw new Error(`${RUNNER_ID} is already bound to another capability`);
+  }
+  const existingGithub = config.runners?.find((runner) => runner.id === GITHUB_RUNNER_ID);
+  if (existingGithub && (existingGithub.resourceId !== RESOURCE_ID || existingGithub.purpose !== "status")) {
+    throw new Error(`${GITHUB_RUNNER_ID} is already bound to another capability`);
   }
 
   const runner = {
@@ -86,14 +99,47 @@ export function withKmacStatusRunner(
     workspaceCapabilities: ["read-only-status" as const],
     exposeDebugOutput: false,
   };
+  const githubRunner = {
+    id: GITHUB_RUNNER_ID,
+    resourceId: RESOURCE_ID,
+    purpose: "status" as const,
+    executable: options.runtimeBun,
+    fixedArgs: [githubStatusScript],
+    workdir: ".",
+    env: {
+      HOME: githubHome,
+      PATH: "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    },
+    maxRuntimeMs: 10_000,
+    maxOutputBytes: 8_192,
+    allowDynamicArgs: false,
+    allowInput: false,
+    title: "KMac GitHub authentication readiness",
+    inputSchema: { type: "null" },
+    resultSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "login", "source", "checkedAt"],
+      properties: {
+        status: { enum: ["authenticated", "unauthenticated", "unavailable", "error"] },
+        login: { type: ["string", "null"] },
+        source: { enum: ["keychain", "config", "none"] },
+        checkedAt: { type: "string" },
+        errorCode: { type: "string" },
+      },
+    },
+    approvalRequired: false,
+    workspaceCapabilities: ["read-only-status" as const],
+    exposeDebugOutput: false,
+  };
 
   return parseMeshConfig({
     ...config,
     ...(options.enableRemoteCodexControl === true ? { remoteCodexControl: true } : {}),
     resources: config.resources.map((entry) => entry.id === RESOURCE_ID
-      ? { ...entry, statusRunnerId: RUNNER_ID }
+      ? { ...entry, statusRunnerId: RUNNER_ID, githubStatusRunnerId: GITHUB_RUNNER_ID }
       : entry),
-    runners: [...(config.runners ?? []).filter((entry) => entry.id !== RUNNER_ID), runner],
+    runners: [...(config.runners ?? []).filter((entry) => entry.id !== RUNNER_ID && entry.id !== GITHUB_RUNNER_ID), runner, githubRunner],
   });
 }
 
@@ -121,6 +167,10 @@ function main(args: string[]): void {
     statusScript: flag(args, "--status-script"),
     stateDir: flag(args, "--state-dir"),
     codexLauncher: flag(args, "--codex-launcher"),
+    githubStatusScript: args.includes("--github-status-script")
+      ? flag(args, "--github-status-script")
+      : undefined,
+    githubHome: args.includes("--github-home") ? flag(args, "--github-home") : undefined,
     enableRemoteCodexControl: args.includes("--enable-remote-codex-control"),
   });
   const serialized = `${JSON.stringify(prepared, null, 2)}\n`;
@@ -132,6 +182,7 @@ function main(args: string[]): void {
     ok: true,
     resourceId: RESOURCE_ID,
     statusRunnerId: RUNNER_ID,
+    githubStatusRunnerId: GITHUB_RUNNER_ID,
     remoteCodexControl: prepared.remoteCodexControl,
     inputSha256: sha256(source),
     outputSha256: sha256(serialized),

@@ -8,6 +8,7 @@
  */
 
 import {
+  MeshGitHubStatusSchema,
   MeshTaskRequestPayloadSchema,
   MeshTaskRequestSchema,
   MeshCapabilityGrantSchema,
@@ -24,6 +25,7 @@ import {
   type MeshApproval,
   type MeshArtifactPayload,
   type MeshCapabilityGrant,
+  type MeshGitHubStatus,
   type MeshResource,
   type MeshResourceListPayload,
   type MeshResourceStatusPayload,
@@ -105,10 +107,12 @@ export class MeshService {
     for (const resource of options.resources ?? []) this.registerResource(resource);
     this.runners = new MeshRunnerRegistry(this.executor, options.runners);
     for (const resource of this.resources.values()) {
-      if (!resource.statusRunnerId) continue;
-      const statusRunner = this.runners.get(resource.statusRunnerId);
-      if (!statusRunner || statusRunner.resourceId !== resource.id || statusRunner.purpose !== "status") {
-        throw new Error(`资源 ${resource.id} 的 statusRunnerId 未绑定只读 status runner`);
+      for (const runnerId of [resource.statusRunnerId, resource.githubStatusRunnerId]) {
+        if (!runnerId) continue;
+        const statusRunner = this.runners.get(runnerId);
+        if (!statusRunner || statusRunner.resourceId !== resource.id || statusRunner.purpose !== "status") {
+          throw new Error(`资源 ${resource.id} 的 status runner 未绑定只读 status runner`);
+        }
       }
     }
     this.unattendedRuns = options.unattendedRuns ? {
@@ -193,6 +197,7 @@ export class MeshService {
       runnerIds: this.runners.forResource(resource.id),
       runners: this.runners.metadataForResource(resource.id),
       ...(resource.statusRunnerId ? { statusRunnerId: resource.statusRunnerId } : {}),
+      ...(resource.githubStatusRunnerId ? { githubStatusRunnerId: resource.githubStatusRunnerId } : {}),
       };
     });
   }
@@ -216,6 +221,7 @@ export class MeshService {
 
     const observedAt = new Date().toISOString();
     let status;
+    let github: MeshGitHubStatus | undefined;
     if (!resource.statusRunnerId) {
       status = resource.kind === "gpu"
         ? failedGpuStatus("资源未配置只读 GPU 状态探针", observedAt)
@@ -236,12 +242,25 @@ export class MeshService {
           : failedWorkspaceStatus("workspace 状态探针不可用", observedAt);
       }
     }
+    if (resource.githubStatusRunnerId) {
+      try {
+        const runner = await this.runners.runStatus(resource.githubStatusRunnerId, resource.id);
+        github = runner.status === "completed"
+          ? parseGitHubStatus(runner.resultSummary, observedAt)
+          : failedGitHubStatus("runner-unavailable", observedAt);
+      } catch {
+        github = failedGitHubStatus("runner-unavailable", observedAt);
+      }
+    }
     return {
       kind: "mesh-resource-status",
       requestId,
       nodeId: this.nodeId,
       resourceId,
-      status,
+      status: {
+        ...status,
+        ...(github ? { github } : {}),
+      },
     };
   }
 
@@ -817,6 +836,28 @@ export class MeshService {
 
 function isTerminal(status: MeshTaskLifecycleStatus): boolean {
   return ["completed", "denied", "failed", "cancelled"].includes(status);
+}
+
+function failedGitHubStatus(
+  errorCode: "runner-unavailable" | "invalid-output",
+  checkedAt: string,
+): MeshGitHubStatus {
+  return MeshGitHubStatusSchema.parse({
+    status: errorCode === "runner-unavailable" ? "unavailable" : "error",
+    login: null,
+    source: "none",
+    checkedAt,
+    errorCode,
+  });
+}
+
+function parseGitHubStatus(stdout: string, observedAt: string): MeshGitHubStatus {
+  try {
+    const parsed = MeshGitHubStatusSchema.safeParse(JSON.parse(stdout));
+    return parsed.success ? parsed.data : failedGitHubStatus("invalid-output", observedAt);
+  } catch {
+    return failedGitHubStatus("invalid-output", observedAt);
+  }
 }
 
 function truncateUtf8(value: string, maxBytes: number): { value: string; truncated: boolean } {

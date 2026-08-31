@@ -22,9 +22,16 @@ import { validateResultArtifactManifest } from "../mesh/artifact-store";
 const DEFAULT_CONTROL_URL = "http://127.0.0.1:8790";
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_HTTP_RESPONSE_BYTES = 64 * 1024;
-const MAX_ARTIFACT_HTTP_RESPONSE_BYTES = 12 * 1024 * 1024;
-const MAX_LIST_HTTP_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_JOB_HTTP_RESPONSE_BYTES = 512 * 1024;
+const MAX_CODEX_LIST_HTTP_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_CODEX_HISTORY_HTTP_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_CODEX_EVENTS_HTTP_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_CODEX_OPERATION_HTTP_RESPONSE_BYTES = 256 * 1024;
+const MAX_CODEX_APPROVAL_HTTP_RESPONSE_BYTES = 512 * 1024;
+const MAX_ARTIFACT_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_ARTIFACT_MCP_RESPONSE_BYTES = 240 * 1024;
 const MAX_TOOL_TEXT_CHARS = 256 * 1024;
+const MAX_JOB_RESULT_BYTES = 48 * 1024;
 const MAX_ERROR_TEXT_CHARS = 512;
 const MAX_PEERS = 32;
 const MAX_RESOURCES = 64;
@@ -70,6 +77,11 @@ const RemoteTargetInputSchema = z.object({
 const RemoteThreadInputSchema = RemoteTargetInputSchema.extend({
   sessionId: MeshThreadIdSchema,
 }).strip();
+const RemoteHistoryInputSchema = RemoteThreadInputSchema.extend({
+  afterSeq: z.number().int().min(0).optional().default(0),
+  limit: z.number().int().min(1).max(100).optional().default(100),
+  raw: z.boolean().optional().default(false),
+}).strip();
 const RemoteStartInputSchema = RemoteTargetInputSchema.extend({
   text: z.string().max(64 * 1024).refine((value) => value.trim().length > 0, "text 不能为空"),
   cwd: z.string().max(4_096).optional(),
@@ -83,6 +95,7 @@ const RemoteEventsInputSchema = RemoteTargetInputSchema.extend({
   afterSeq: z.number().int().min(0).optional().default(0),
   limit: z.number().int().min(1).max(100).optional().default(50),
   sessionId: MeshThreadIdSchema.optional(),
+  raw: z.boolean().optional().default(false),
 }).strip();
 const RemoteApprovalInputSchema = RemoteTargetInputSchema.extend({
   requestId: MeshRequestIdSchema,
@@ -132,7 +145,9 @@ export class ControlApiClient {
   }
 
   async listDevices(): Promise<unknown> {
-    return this.request("GET", "/api/discovery");
+    return this.request("GET", "/api/discovery", undefined, {
+      maxResponseBytes: MAX_HTTP_RESPONSE_BYTES,
+    });
   }
 
   async submitJob(input: MeshSubmitJobInput): Promise<unknown> {
@@ -154,7 +169,9 @@ export class ControlApiClient {
         ...(input.baseArtifact ? { baseArtifactId: input.baseArtifact.artifactId } : {}),
       },
     } : common;
-    return this.request("POST", "/api/tasks", body);
+    return this.request("POST", "/api/tasks", body, {
+      maxResponseBytes: MAX_JOB_HTTP_RESPONSE_BYTES,
+    });
   }
 
   async listJobs(input: z.infer<typeof ListJobsInputSchema>): Promise<unknown> {
@@ -166,16 +183,20 @@ export class ControlApiClient {
     if (input.createdAfter !== undefined) query.set("createdAfter", String(input.createdAfter));
     if (input.cursor) query.set("cursor", input.cursor);
     return this.request("GET", `/api/tasks?${query}`, undefined, {
-      maxResponseBytes: MAX_LIST_HTTP_RESPONSE_BYTES,
+      maxResponseBytes: MAX_JOB_HTTP_RESPONSE_BYTES,
     });
   }
 
   async getJob(taskId: string): Promise<unknown> {
-    return this.request("GET", `/api/tasks/${encodePathSegment(taskId)}`);
+    return this.request("GET", `/api/tasks/${encodePathSegment(taskId)}`, undefined, {
+      maxResponseBytes: MAX_JOB_HTTP_RESPONSE_BYTES,
+    });
   }
 
   async cancelJob(taskId: string): Promise<unknown> {
-    return this.request("POST", `/api/tasks/${encodePathSegment(taskId)}/cancel`);
+    return this.request("POST", `/api/tasks/${encodePathSegment(taskId)}/cancel`, undefined, {
+      maxResponseBytes: MAX_JOB_HTTP_RESPONSE_BYTES,
+    });
   }
 
   async getResultArtifact(taskId: string): Promise<unknown> {
@@ -188,13 +209,16 @@ export class ControlApiClient {
   async listCodexThreads(targetNodeId: string, deadlineMs: number): Promise<unknown> {
     const query = new URLSearchParams({ targetNodeId, deadlineMs: String(deadlineMs) });
     return this.request("GET", `/api/codex/threads?${query}`, undefined, {
-      maxResponseBytes: MAX_LIST_HTTP_RESPONSE_BYTES,
+      maxResponseBytes: MAX_CODEX_LIST_HTTP_RESPONSE_BYTES,
       timeoutMs: deadlineMs + 2_000,
     });
   }
 
   async readCodexThread(targetNodeId: string, sessionId: string, deadlineMs: number): Promise<unknown> {
-    return this.request("POST", "/api/codex/read", { targetNodeId, sessionId, deadlineMs }, { timeoutMs: deadlineMs + 2_000 });
+    return this.request("POST", "/api/codex/read", { targetNodeId, sessionId, deadlineMs }, {
+      maxResponseBytes: MAX_CODEX_HISTORY_HTTP_RESPONSE_BYTES,
+      timeoutMs: deadlineMs + 2_000,
+    });
   }
 
   async startCodexThread(
@@ -214,7 +238,9 @@ export class ControlApiClient {
   }
 
   async getCodexOperation(operationId: string): Promise<unknown> {
-    return this.request("GET", `/api/codex/operations/${encodePathSegment(operationId)}`);
+    return this.request("GET", `/api/codex/operations/${encodePathSegment(operationId)}`, undefined, {
+      maxResponseBytes: MAX_CODEX_OPERATION_HTTP_RESPONSE_BYTES,
+    });
   }
 
   async listCodexOperations(input: z.infer<typeof RemoteOperationListInputSchema>): Promise<unknown> {
@@ -223,15 +249,23 @@ export class ControlApiClient {
     if (input.status) query.set("status", input.status);
     if (input.createdAfter !== undefined) query.set("createdAfter", String(input.createdAfter));
     if (input.cursor) query.set("cursor", input.cursor);
-    return this.request("GET", `/api/codex/operations?${query}`);
+    return this.request("GET", `/api/codex/operations?${query}`, undefined, {
+      maxResponseBytes: MAX_CODEX_OPERATION_HTTP_RESPONSE_BYTES,
+    });
   }
 
   async sendCodexInput(targetNodeId: string, sessionId: string, text: string, deadlineMs: number): Promise<unknown> {
-    return this.request("POST", "/api/codex/input", { targetNodeId, sessionId, text, deadlineMs }, { timeoutMs: deadlineMs + 2_000 });
+    return this.request("POST", "/api/codex/input", { targetNodeId, sessionId, text, deadlineMs }, {
+      maxResponseBytes: MAX_CODEX_APPROVAL_HTTP_RESPONSE_BYTES,
+      timeoutMs: deadlineMs + 2_000,
+    });
   }
 
   async interruptCodexThread(targetNodeId: string, sessionId: string, deadlineMs: number): Promise<unknown> {
-    return this.request("POST", "/api/codex/interrupt", { targetNodeId, sessionId, deadlineMs }, { timeoutMs: deadlineMs + 2_000 });
+    return this.request("POST", "/api/codex/interrupt", { targetNodeId, sessionId, deadlineMs }, {
+      maxResponseBytes: MAX_CODEX_APPROVAL_HTTP_RESPONSE_BYTES,
+      timeoutMs: deadlineMs + 2_000,
+    });
   }
 
   async listCodexEvents(
@@ -246,11 +280,15 @@ export class ControlApiClient {
       limit: String(limit),
     });
     if (sessionId) query.set("sessionId", sessionId);
-    return this.request("GET", `/api/codex/events?${query}`);
+    return this.request("GET", `/api/codex/events?${query}`, undefined, {
+      maxResponseBytes: MAX_CODEX_EVENTS_HTTP_RESPONSE_BYTES,
+    });
   }
 
   async listCodexApprovals(targetNodeId: string): Promise<unknown> {
-    return this.request("GET", `/api/codex/approvals?targetNodeId=${encodeURIComponent(targetNodeId)}`);
+    return this.request("GET", `/api/codex/approvals?targetNodeId=${encodeURIComponent(targetNodeId)}`, undefined, {
+      maxResponseBytes: MAX_CODEX_APPROVAL_HTTP_RESPONSE_BYTES,
+    });
   }
 
   async respondCodexApproval(
@@ -258,7 +296,9 @@ export class ControlApiClient {
     requestId: string,
     optionId: "allow" | "deny",
   ): Promise<unknown> {
-    return this.request("POST", "/api/codex/approval", { targetNodeId, requestId, optionId });
+    return this.request("POST", "/api/codex/approval", { targetNodeId, requestId, optionId }, {
+      maxResponseBytes: MAX_CODEX_APPROVAL_HTTP_RESPONSE_BYTES,
+    });
   }
 
   private endpoint(path: string): URL {
@@ -420,15 +460,21 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
   server.registerTool("remote_codex_read_thread", {
     title: "Read remote Codex thread",
     description: "续接并读取指定远端 Codex 线程的有界历史；不会发送新消息。",
-    inputSchema: RemoteThreadInputSchema,
+    inputSchema: RemoteHistoryInputSchema,
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async ({ targetNodeId, sessionId, deadlineMs }) => toolCall(async () => (
-    summarizeCodexThread(await api.readCodexThread(targetNodeId, sessionId, deadlineMs), targetNodeId)
+  }, async ({ targetNodeId, sessionId, deadlineMs, afterSeq, limit, raw }) => toolCall(async () => (
+    summarizeCodexThread(
+      await api.readCodexThread(targetNodeId, sessionId, deadlineMs),
+      targetNodeId,
+      afterSeq,
+      limit,
+      raw,
+    )
   )));
 
   server.registerTool("remote_codex_start_thread", {
@@ -517,10 +563,13 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async ({ targetNodeId, afterSeq, limit, sessionId }) => toolCall(async () => (
+  }, async ({ targetNodeId, afterSeq, limit, sessionId, raw }) => toolCall(async () => (
     summarizeCodexEvents(
       await api.listCodexEvents(targetNodeId, afterSeq, limit, sessionId),
       targetNodeId,
+      afterSeq,
+      limit,
+      raw,
     )
   )));
 
@@ -586,10 +635,7 @@ async function artifactToolCall(load: () => Promise<unknown>): Promise<CallToolR
     if (payload.manifest.sha256 !== digest || payload.manifest.artifactId !== `sha256:${digest}`) {
       throw new GatewayError("result artifact 完整性校验失败");
     }
-    const text = JSON.stringify(payload, null, 2);
-    if (Buffer.byteLength(text, "utf8") > MAX_ARTIFACT_HTTP_RESPONSE_BYTES) {
-      throw new GatewayError("result artifact 超过 MCP 安全上限");
-    }
+    const text = JSON.stringify(boundArtifactPayload(payload, manifest), null, 2);
     return textResult(text);
   } catch (error) {
     return {
@@ -597,6 +643,81 @@ async function artifactToolCall(load: () => Promise<unknown>): Promise<CallToolR
       content: [{ type: "text", text: safeGatewayError(error) }],
     };
   }
+}
+
+function boundArtifactPayload(
+  payload: z.infer<typeof MeshArtifactPayloadSchema>,
+  manifest: z.infer<typeof MeshArtifactPayloadSchema>["manifest"],
+): Record<string, unknown> {
+  const changedMetadata = manifest.changed.map(({ contentBase64: _contentBase64, ...metadata }) => metadata);
+  const deletedMetadata = [...manifest.deleted];
+  let changed = [...changedMetadata];
+  let deleted = [...deletedMetadata];
+  let includedBodies = new Set<string>();
+  let includedBodyBytes = 0;
+
+  const envelope = (): Record<string, unknown> => {
+    const omittedFiles = manifest.changed.length + manifest.deleted.length - changed.length - deleted.length;
+    const totalBodyBytes = manifest.changed.reduce((total, file) => total + file.size, 0);
+    const omittedBodyFiles = manifest.changed.length - includedBodies.size;
+    const omittedBodyBytes = totalBodyBytes - includedBodyBytes;
+    const truncated = omittedFiles > 0 || omittedBodyFiles > 0;
+    const changedWithBodies = changed.map((file) => {
+      const source = manifest.changed.find((candidate) => candidate.path === file.path);
+      return source && includedBodies.has(source.path)
+        ? { ...file, contentBase64: source.contentBase64 }
+        : file;
+    });
+    return {
+      kind: payload.kind,
+      requestId: payload.requestId,
+      targetNodeId: payload.targetNodeId,
+      taskId: payload.taskId,
+      manifest: {
+        version: manifest.version,
+        kind: manifest.kind,
+        artifactId: manifest.artifactId,
+        sha256: manifest.sha256,
+        baseArtifactId: manifest.baseArtifactId,
+        taskId: manifest.taskId,
+        changed: changedWithBodies,
+        deleted,
+      },
+      integrity: {
+        verified: true,
+        complete: !truncated,
+        truncated,
+        files: {
+          changed: { total: manifest.changed.length, returned: changed.length },
+          deleted: { total: manifest.deleted.length, returned: deleted.length },
+        },
+        bodies: {
+          totalBytes: totalBodyBytes,
+          includedBytes: includedBodyBytes,
+          includedFiles: includedBodies.size,
+          omittedFiles: omittedBodyFiles,
+          omittedBytes: omittedBodyBytes,
+        },
+      },
+    };
+  };
+
+  while (Buffer.byteLength(JSON.stringify(envelope(), null, 2), "utf8") > MAX_ARTIFACT_MCP_RESPONSE_BYTES) {
+    if (changed.length >= deleted.length && changed.length > 0) changed.pop();
+    else if (deleted.length > 0) deleted.pop();
+    else break;
+  }
+
+  for (const file of manifest.changed) {
+    if (!changed.some((candidate) => candidate.path === file.path)) continue;
+    includedBodies.add(file.path);
+    includedBodyBytes += file.size;
+    if (Buffer.byteLength(JSON.stringify(envelope(), null, 2), "utf8") > MAX_ARTIFACT_MCP_RESPONSE_BYTES) {
+      includedBodies.delete(file.path);
+      includedBodyBytes -= file.size;
+    }
+  }
+  return envelope();
 }
 
 function textResult(text: string): CallToolResult {
@@ -692,6 +813,7 @@ function summarizeResource(value: unknown): Record<string, unknown> {
     defaultGroupId: idField(resource, "defaultGroupId", MeshGroupIdSchema),
     runnerIds: typedStringArray(resource?.runnerIds, 32, MeshRunnerIdSchema),
     statusRunnerId: idField(resource, "statusRunnerId", MeshRunnerIdSchema),
+    githubStatusRunnerId: idField(resource, "githubStatusRunnerId", MeshRunnerIdSchema),
     runners: runners.slice(0, 32).map((item) => {
       const runner = record(item);
       return {
@@ -793,13 +915,24 @@ function summarizeJobPage(value: unknown): Record<string, unknown> {
   };
 }
 
-function summarizeLegacyTaskResult(value: unknown): { result: unknown } {
+function summarizeLegacyTaskResult(value: unknown): { result: unknown; resultTruncated?: boolean } {
   const safe = safeUnknownTracked(value, 0);
   const output = record(safe.value);
   if (output && Object.hasOwn(output, "integrity")) {
     output.integrity = gatewayIntegrity(record(value)?.integrity, safe.truncated);
   }
-  return { result: output ?? safe.value };
+  const result = output ?? safe.value;
+  if (Buffer.byteLength(JSON.stringify(result) ?? "null", "utf8") <= MAX_JOB_RESULT_BYTES) {
+    return safe.truncated ? { result, resultTruncated: true } : { result };
+  }
+  return {
+    result: {
+      message: "job result body omitted from this bounded summary",
+      truncated: true,
+      integrity: gatewayIntegrity(record(value)?.integrity, true),
+    },
+    resultTruncated: true,
+  };
 }
 
 function gatewayIntegrity(value: unknown, gatewayTruncated: boolean): Record<string, unknown> {
@@ -850,26 +983,52 @@ function summarizeCodexThreadList(value: unknown, targetNodeId: string): Record<
     throw new GatewayError("控制 API 返回的 Codex 线程列表格式无效");
   }
   const threads = array(payload.threads);
+  const totalThreads = boundedTotal(payload.totalThreads ?? payload.total, threads.length);
+  const upstreamTruncated = payload.truncated === true || boundedNonnegative(payload.truncatedThreads) > 0;
+  const returned = threads.slice(0, MAX_CODEX_THREADS);
+  const truncatedThreads = Math.max(0, totalThreads - returned.length);
   return {
     targetNodeId,
-    threads: threads.slice(0, MAX_CODEX_THREADS).map(summarizeCodexThreadRow),
-    truncatedThreads: Math.max(0, threads.length - MAX_CODEX_THREADS),
+    totalThreads,
+    threads: returned.map(summarizeCodexThreadRow),
+    truncated: upstreamTruncated || truncatedThreads > 0,
+    truncatedThreads,
+    nextCursor: cursorField(payload.nextCursor),
   };
 }
 
-function summarizeCodexThread(value: unknown, targetNodeId: string): Record<string, unknown> {
+function summarizeCodexThread(
+  value: unknown,
+  targetNodeId: string,
+  afterSeq = 0,
+  limit = 100,
+  raw = false,
+): Record<string, unknown> {
   const payload = record(value);
   if (!payload || payload.kind !== "codex-resumed") {
     throw new GatewayError("控制 API 返回的 Codex 线程历史格式无效");
   }
-  const events = array(payload.events);
+  const page = pageCodexEvents(payload, afterSeq, limit);
+  const formatted = page.rows.map((row) => boundedCodexEvent(row.payload, raw));
+  const truncatedRecords = formatted.filter((row) => row.truncated).length;
   return {
     targetNodeId,
     sessionId: idField(payload, "sessionId", MeshThreadIdSchema),
     cwd: textField(payload, "cwd", 4_096),
     canAcceptDirectInput: payload.canAcceptDirectInput === true,
-    events: events.slice(-MAX_CODEX_EVENTS).map(summarizeCodexEventPayload),
-    truncatedEvents: Math.max(0, events.length - MAX_CODEX_EVENTS),
+    raw,
+    events: formatted.map((row) => row.value),
+    totalEvents: page.totalEvents,
+    returnedEvents: page.rows.length,
+    oldestSeq: page.oldestSeq,
+    latestSeq: page.latestSeq,
+    nextSeq: page.nextSeq,
+    nextCursor: page.nextCursor,
+    hasMore: page.hasMore,
+    cursorGap: page.cursorGap,
+    truncated: page.truncated || truncatedRecords > 0,
+    truncatedEvents: page.truncatedEvents,
+    truncatedRecords,
   };
 }
 
@@ -888,22 +1047,47 @@ function summarizeCodexAck(value: unknown, targetNodeId: string): Record<string,
   };
 }
 
-function summarizeCodexEvents(value: unknown, targetNodeId: string): Record<string, unknown> {
+function summarizeCodexEvents(
+  value: unknown,
+  targetNodeId: string,
+  afterSeq = 0,
+  limit = MAX_CODEX_EVENTS,
+  raw = false,
+): Record<string, unknown> {
   const payload = record(value);
   if (!payload) throw new GatewayError("控制 API 返回的 Codex 事件格式无效");
-  const events = array(payload.events);
+  const page = pageCodexEvents(payload, afterSeq, limit);
+  const formatted = page.rows.map((row) => boundedCodexEvent(row.payload, raw));
+  const truncatedRecords = formatted.filter((row) => row.truncated).length;
+  const upstreamNextSeq = sequenceField(payload.nextSeq) ?? page.nextSeq;
+  const upstreamHasMore = payload.hasMore === true;
+  const upstreamOldestSeq = sequenceField(payload.oldestSeq) ?? page.oldestSeq;
+  const upstreamLatestSeq = sequenceField(payload.latestSeq) ?? page.latestSeq;
+  const upstreamTotalEvents = boundedTotal(payload.totalEvents, page.totalEvents);
+  const upstreamTruncated = payload.truncated === true || boundedNonnegative(payload.truncatedEvents) > 0;
+  const hasMore = upstreamHasMore || page.hasMore;
   return {
     targetNodeId,
-    nextSeq: numberField(payload, "nextSeq"),
-    events: events.slice(0, MAX_CODEX_EVENTS).map((item) => {
-      const event = record(item);
+    raw,
+    events: formatted.map((row, index) => {
+      const event = record(page.rows[index]?.source);
       return {
-        seq: numberField(event, "seq"),
+        seq: page.rows[index]?.seq ?? null,
         receivedAt: numberField(event, "receivedAt"),
-        event: summarizeCodexEventPayload(event?.payload),
+        event: row.value,
       };
     }),
-    truncatedEvents: Math.max(0, events.length - MAX_CODEX_EVENTS),
+    totalEvents: upstreamTotalEvents,
+    returnedEvents: page.rows.length,
+    oldestSeq: upstreamOldestSeq,
+    latestSeq: upstreamLatestSeq,
+    nextSeq: upstreamNextSeq,
+    nextCursor: hasMore ? upstreamNextSeq : null,
+    hasMore,
+    cursorGap: page.cursorGap,
+    truncated: page.truncated || upstreamTruncated || truncatedRecords > 0,
+    truncatedEvents: Math.max(page.truncatedEvents, boundedNonnegative(payload.truncatedEvents)),
+    truncatedRecords,
   };
 }
 
@@ -967,9 +1151,112 @@ function summarizeCodexEventPayload(value: unknown): Record<string, unknown> {
     message: textField(event, "message", 2_000),
     reason: textField(event, "reason", 256),
     note: textField(event, "note", 512),
-    ...(Object.hasOwn(event, "event") ? { event: safeUnknown(event.event, 0) } : {}),
-    ...(Object.hasOwn(event, "params") ? { params: safeUnknown(event.params, 0) } : {}),
   };
+}
+
+type SequencedCodexEvent = {
+  seq: number;
+  payload: unknown;
+  source: unknown;
+};
+
+type CodexEventPage = {
+  rows: SequencedCodexEvent[];
+  totalEvents: number;
+  oldestSeq: number;
+  latestSeq: number;
+  nextSeq: number;
+  nextCursor: number | null;
+  hasMore: boolean;
+  cursorGap: boolean;
+  truncated: boolean;
+  truncatedEvents: number;
+};
+
+function pageCodexEvents(
+  payload: Record<string, unknown>,
+  afterSeq: number,
+  limit: number,
+): CodexEventPage {
+  const source = array(payload.events);
+  const rows = source.map((item, index) => {
+    const event = record(item);
+    const hasSequence = event !== undefined && Object.hasOwn(event, "seq");
+    const sequence = hasSequence ? sequenceField(event?.seq) : index + 1;
+    if (sequence === null) throw new GatewayError("控制 API 返回的 Codex 事件序列无效");
+    return {
+      seq: sequence,
+      payload: event && Object.hasOwn(event, "payload") ? event.payload : item,
+      source: item,
+    };
+  });
+  for (let index = 1; index < rows.length; index++) {
+    if (rows[index - 1]!.seq >= rows[index]!.seq) {
+      throw new GatewayError("控制 API 返回的 Codex 事件序列不连续");
+    }
+  }
+
+  const safeAfterSeq = sequenceField(afterSeq) ?? 0;
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), MAX_CODEX_EVENTS);
+  const oldestSeq = rows[0]?.seq ?? 0;
+  const latestSeq = Math.max(rows.at(-1)?.seq ?? 0, safeAfterSeq);
+  const cursorGap = rows.length > 0 && safeAfterSeq < oldestSeq - 1;
+  const available = rows.filter((row) => row.seq > safeAfterSeq);
+  const pageRows = available.slice(0, safeLimit);
+  const hasMore = available.length > pageRows.length;
+  const upstreamTotal = boundedTotal(payload.totalEvents ?? payload.total, rows.length);
+  const upstreamTruncated = payload.truncated === true || boundedNonnegative(payload.truncatedEvents) > 0;
+  const skipped = rows.filter((row) => row.seq <= safeAfterSeq).length;
+  const truncatedEvents = Math.max(0, upstreamTotal - skipped - pageRows.length);
+  const nextSeq = pageRows.at(-1)?.seq ?? safeAfterSeq;
+  return {
+    rows: pageRows,
+    totalEvents: upstreamTotal,
+    oldestSeq,
+    latestSeq,
+    nextSeq,
+    nextCursor: hasMore ? nextSeq : null,
+    hasMore,
+    cursorGap,
+    truncated: cursorGap || hasMore || upstreamTruncated || truncatedEvents > 0,
+    truncatedEvents,
+  };
+}
+
+function boundedCodexEvent(value: unknown, raw: boolean): { value: unknown; truncated: boolean } {
+  const candidate = raw ? safeUnknown(value, 0) : summarizeCodexEventPayload(value);
+  const serialized = JSON.stringify(candidate) ?? "null";
+  if (Buffer.byteLength(serialized, "utf8") <= 2 * 1024) {
+    return { value: candidate, truncated: false };
+  }
+  return {
+    value: {
+      type: "event",
+      message: "event payload omitted from this bounded page",
+      truncated: true,
+    },
+    truncated: true,
+  };
+}
+
+function boundedTotal(value: unknown, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new GatewayError("控制 API 返回的总数格式无效");
+  }
+  return Math.max(fallback, value);
+}
+
+function boundedNonnegative(value: unknown): number {
+  if (value === undefined) return 0;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new GatewayError("控制 API 返回的截断计数格式无效");
+  }
+  return value;
+}
+
+function sequenceField(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 async function readBoundedJson(response: Response, maxBytes: number): Promise<unknown> {
@@ -1022,7 +1309,7 @@ function safeGatewayError(error: unknown): string {
 
 function safeJsonText(value: unknown): string {
   const text = JSON.stringify(value, null, 2) ?? "null";
-  if (text.length <= MAX_TOOL_TEXT_CHARS) return text;
+  if (text.length <= MAX_TOOL_TEXT_CHARS && Buffer.byteLength(text, "utf8") <= MAX_TOOL_TEXT_CHARS) return text;
   return JSON.stringify({
     message: "MCP output exceeded its bounded response size; retry with a smaller page limit",
     gatewayTruncated: true,

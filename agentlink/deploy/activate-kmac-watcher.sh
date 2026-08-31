@@ -22,6 +22,7 @@ readonly CONTROLLER_URL="${ARGUS_CONTROLLER_URL:-http://127.0.0.1:8790}"
 readonly PEER_NAME="${ARGUS_PEER_NAME:-k Mac}"
 readonly RESOURCE_ID="workspace:kmac-m4"
 readonly RUNNER_ID="kmac-status-v1"
+readonly GITHUB_STATUS_RUNNER_ID="kmac-github-status-v1"
 readonly GATES_MODULE="$SCRIPT_DIR/kmac-activation-gates.ts"
 readonly WATCHER_READINESS_ATTEMPTS=10
 readonly WATCHER_READINESS_INTERVAL_SECONDS=1
@@ -188,6 +189,7 @@ verify_candidate_config() {
     const parsed = parseMeshConfig(config);
     const resource = parsed.resources.find((entry) => entry.id === "workspace:kmac-m4");
     const runner = parsed.runners?.find((entry) => entry.id === "kmac-status-v1");
+    const githubRunner = parsed.runners?.find((entry) => entry.id === "kmac-github-status-v1");
     const expectedEnv = {
       PATH: process.env.EXPECTED_STATUS_PATH,
       ARGUS_STATUS_STATE_DIR: process.env.EXPECTED_STATE_DIR,
@@ -200,6 +202,7 @@ verify_candidate_config() {
       && Object.keys(env).length === Object.keys(expectedEnv).length
       && Object.entries(expectedEnv).every(([key, value]) => env[key] === value);
     if (resource?.statusRunnerId !== "kmac-status-v1"
+      || resource?.githubStatusRunnerId !== "kmac-github-status-v1"
       || runner?.resourceId !== "workspace:kmac-m4"
       || runner?.purpose !== "status"
       || runner?.executable !== process.env.EXPECTED_RUNTIME_BUN
@@ -213,6 +216,11 @@ verify_candidate_config() {
       || runner?.workspaceCapabilities?.length !== 1
       || runner.workspaceCapabilities[0] !== "read-only-status"
       || runner?.exposeDebugOutput !== false
+      || githubRunner?.purpose !== "status"
+      || githubRunner?.approvalRequired !== false
+      || githubRunner?.allowDynamicArgs !== false
+      || githubRunner?.allowInput !== false
+      || githubRunner?.exposeDebugOutput !== false
       || !envMatches
       || !remoteCodexControlIsEnabled(parsed)
       || runner?.fixedArgs?.[0] !== `${process.env.RELEASE}/deploy/kmac-workspace-status.ts`) process.exit(1);

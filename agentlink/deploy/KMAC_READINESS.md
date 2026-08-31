@@ -41,24 +41,26 @@ later package-manager shim from changing the watcher binary. This remains a
 normal Codex CLI entry point; see the
 [official Codex CLI documentation](https://developers.openai.com/codex/cli/).
 
-GitHub CLI readiness is a capability check, not an account verdict. The
-readiness probe runs `gh auth status` with output suppressed; a
-Keychain-invisible command context reports a coarse unavailable or
-unauthenticated state, never “account invalid”.
+GitHub authentication readiness is provided by the owner-configured
+`kmac-github-status-v1` named status runner. It invokes the exact
+`/opt/homebrew/bin/gh auth status --hostname github.com` operation and rejects
+all caller arguments, stdin, host/repository selection, and environment input.
+The child environment is an allowlist containing only the intended `HOME`, a
+fixed `PATH`, and `GH_PROMPT_DISABLED`; `GH_TOKEN`, `GITHUB_TOKEN`, enterprise
+variants, `GH_CONFIG_DIR`, and other override variables are removed before
+`gh` starts. The runner parses its own output and emits only the typed status,
+login, source, check time, and bounded error code.
 Git fetch and push always use the repository's GitHub SSH-over-Clash alias.
-GitHub API and PR work default to the Windows commander. Only a user-authorized
-single task may provide a short-lived `GH_TOKEN`; it is never persisted,
-printed, or included in a readiness result. The probe only checks whether a
-credential variable is present and passes it to the bounded `gh` command.
+GitHub API and PR work default to the Windows commander. The readiness path
+never accepts or forwards a process token.
 
 The readiness command also emits one `READINESS_PROBES=<json>` record from
-`deploy/kmac-readiness-probes.ts`. Its GitHub object contains only the provider,
-`credentialSource` (`keychain`, `env`, or `none`), a validated login, Git SSH
-reachability, and a coarse API classification (`authenticated`,
-`unauthenticated`, `forbidden`, `unreachable`, or `tooling-missing`). The probe
-uses command-scoped environments, never requests `gh auth status --show-token`,
-and does not include command output, token values, private keys, or
-Authorization headers in its result.
+`deploy/kmac-readiness-probes.ts`. Its GitHub object includes the safe runner
+result and compatibility transport fields only. The runner status is one of
+`authenticated`, `unauthenticated`, `unavailable`, or `error`; the shell
+readiness output distinguishes those states without exposing diagnostics.
+Command output, token values, private keys, Authorization headers, paths, and
+environment values never enter the result.
 
 The repository-specific Git transport must read back as:
 
@@ -120,6 +122,12 @@ environment variables, or credential state. `workspaceRevision` comes from
 the immutable release manifest; a development checkout falls back to its Git
 HEAD.
 
+The same resource is also bound to `kmac-github-status-v1`. Its public result
+is the strict `status`, `login`, `source`, `checkedAt`, and optional `errorCode`
+envelope. Mesh discovery publishes the runner name and resource status only;
+the executable, fixed arguments, environment, and raw process streams remain
+target-local.
+
 Prepare an immutable watcher release from a clean reviewed commit. The
 functional manifest is generated in the Git checkout and copied into the
 archive because release directories intentionally contain no `.git` data:
@@ -151,14 +159,17 @@ bun run agentlink/deploy/prepare-kmac-mesh-config.ts -- \
   --status-script "$release_dir/deploy/kmac-workspace-status.ts" \
   --state-dir "$agentlink_base/state" \
   --codex-launcher "$HOME/.local/bin/codex" \
+  --github-status-script "$release_dir/deploy/kmac-github-status.ts" \
+  --github-home "$HOME" \
   --enable-remote-codex-control
 ```
 
-The preparer binds `workspace:kmac-m4` to `kmac-status-v1` with
-`purpose: "status"`, local approval disabled, dynamic arguments and stdin
-disabled, and only the `read-only-status` capability. The final flag is an
-explicit candidate-only opt-in; omitting it preserves `remoteCodexControl:
-false`. No new task runner or shell surface is created.
+The preparer binds `workspace:kmac-m4` to both `kmac-status-v1` and
+`kmac-github-status-v1`. Both use `purpose: "status"`, local approval
+disabled, dynamic arguments and stdin disabled, and only the
+`read-only-status` capability. The final flag is an explicit candidate-only
+opt-in; omitting it preserves `remoteCodexControl: false`. No new task runner
+or shell surface is created.
 
 ## Phase-three release workflow
 

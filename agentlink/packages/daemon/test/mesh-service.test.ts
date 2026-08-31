@@ -183,6 +183,52 @@ describe.serial("MeshService", () => {
     expect(text).not.toContain("env");
   });
 
+  test("publishes only the strict result from the fixed GitHub status runner", async () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-github-status-"));
+    const root = join(base, "workspace");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const checkedAt = new Date().toISOString();
+    const github = {
+      status: "authenticated",
+      login: "octocat",
+      source: "keychain",
+      checkedAt,
+    } as const;
+    const value = new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      auditSink: () => {},
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{
+        id: "workspace:github-status",
+        ownerNodeId: "node-b",
+        kind: "directory",
+        displayName: "workspace github status",
+        root,
+        githubStatusRunnerId: "github:status",
+      }],
+      runners: [{
+        id: "github:status",
+        resourceId: "workspace:github-status",
+        purpose: "status",
+        executable: process.execPath,
+        fixedArgs: ["-e", `console.log(${JSON.stringify(JSON.stringify(github))}); console.error("ghp_hostile-token");`],
+        exposeDebugOutput: false,
+      }],
+    });
+
+    const result = await value.resourceStatus("github-status-1", "workspace:github-status");
+    expect(result.status.github).toEqual(github);
+    expect(JSON.stringify(result)).not.toContain("ghp_hostile-token");
+    expect(value.listResources()[0]).toMatchObject({
+      githubStatusRunnerId: "github:status",
+      runners: [{ runnerId: "github:status", purpose: "status", approvalRequired: false }],
+    });
+  });
+
   test("handles read-only inspect without exposing local paths", async () => {
     const { value } = service();
     const progress: MeshTaskProgressPayload[] = [];

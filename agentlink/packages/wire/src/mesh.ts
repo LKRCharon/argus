@@ -128,6 +128,8 @@ export const MeshResourceSchema = z.object({
   runners: z.array(MeshRunnerMetadataSchema).max(64).optional(),
   /** Optional owner-configured, read-only status probe. */
   statusRunnerId: MeshRunnerIdSchema.optional(),
+  /** Optional second status probe for target-local GitHub authentication. */
+  githubStatusRunnerId: MeshRunnerIdSchema.optional(),
 }).strict();
 export type MeshResource = z.infer<typeof MeshResourceSchema>;
 
@@ -264,6 +266,28 @@ export const MeshWorkspaceStatusSchema = z.object({
 }).strict();
 export type MeshWorkspaceStatus = z.infer<typeof MeshWorkspaceStatusSchema>;
 
+const GITHUB_LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+
+/** Safe, target-local GitHub authentication readiness; no command diagnostics cross the wire. */
+export const MeshGitHubStatusSchema = z.object({
+  status: z.enum(["authenticated", "unauthenticated", "unavailable", "error"]),
+  login: z.string().max(39).regex(GITHUB_LOGIN_PATTERN).nullable(),
+  source: z.enum(["keychain", "config", "none"]),
+  checkedAt: MeshTimestampSchema,
+  errorCode: z.enum([
+    "gh-missing",
+    "timeout",
+    "spawn-failed",
+    "output-limit",
+    "not-authenticated",
+    "network-unavailable",
+    "invalid-output",
+    "command-failed",
+    "runner-unavailable",
+  ]).optional(),
+}).strict();
+export type MeshGitHubStatus = z.infer<typeof MeshGitHubStatusSchema>;
+
 export const MeshResourceStatusSchema = z.object({
   state: z.enum(["ready", "degraded", "error", "unknown"]),
   summary: z.string().max(512),
@@ -273,6 +297,7 @@ export const MeshResourceStatusSchema = z.object({
     devices: z.array(MeshGpuDeviceStatusSchema).max(64),
   }).strict().optional(),
   workspace: MeshWorkspaceStatusSchema.optional(),
+  github: MeshGitHubStatusSchema.optional(),
 }).strict();
 export type MeshResourceStatus = z.infer<typeof MeshResourceStatusSchema>;
 
