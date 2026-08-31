@@ -10,6 +10,10 @@ body,
   overscroll-behavior: none;
 }
 
+.mesh-console {
+  overflow-x: hidden;
+}
+
 /* 隐藏滚动条但保持可滚动 */
 .scrollbar-thin::-webkit-scrollbar {
   width: 4px;
@@ -21,6 +25,9 @@ body,
 
 .input,
 .code-input {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
   width: 100%;
   border: 1px solid rgb(203 213 225);
   border-radius: 0.75rem;

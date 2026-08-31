@@ -189,13 +189,13 @@ export default function MeshConsole() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f5f5f7] text-slate-950">
-      <header className="border-b border-slate-200/80 bg-white/90 px-6 py-5 backdrop-blur lg:px-10">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
-          <div>
+    <div className="mesh-console min-h-screen w-full min-w-0 overflow-x-hidden bg-[#f5f5f7] text-slate-950">
+      <header className="border-b border-slate-200/80 bg-white/90 px-4 py-4 backdrop-blur sm:px-6 sm:py-5 lg:px-10">
+        <div className="mx-auto flex min-w-0 max-w-7xl items-center justify-between gap-4">
+          <div className="min-w-0">
             <div className="flex items-center gap-3">
               <span className="h-2.5 w-2.5 rounded-full bg-[#007aff]" />
-              <h1 className="text-xl font-semibold tracking-tight">Argus Mesh</h1>
+              <h1 className="truncate text-xl font-semibold tracking-tight">Argus Mesh</h1>
             </div>
             <p className="mt-1 text-sm text-slate-500">Seoul 控制台</p>
           </div>
@@ -203,31 +203,31 @@ export default function MeshConsole() {
             type="button"
             onClick={() => void refresh()}
             disabled={refreshing}
-            className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-500 disabled:cursor-wait disabled:opacity-50"
+            className="min-h-11 shrink-0 rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007aff]/40 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-50"
           >
             {refreshing ? "刷新中" : "刷新"}
           </button>
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-8 lg:px-10">
-        {error && <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+      <main className="mx-auto min-w-0 max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-10">
+        {error && <div role="alert" className="mb-6 break-words rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
-        <section className="mb-8 flex flex-wrap items-end justify-between gap-5">
-          <div>
-            <p className="text-3xl font-semibold tracking-tight">设备状态</p>
-            <p className="mt-2 text-sm text-slate-500">
+        <section className="mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-end sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-2xl font-semibold tracking-tight sm:text-3xl">设备状态</p>
+            <p className="mt-2 max-w-full break-words text-sm leading-6 text-slate-500">
               {onlineCount} 台在线 · {overview?.resources.length ?? 0} 个资源 · {runningCount} 个任务运行中 · 状态约每 60 秒刷新
             </p>
           </div>
-          <div className="text-right text-xs text-slate-400">
+          <div className="shrink-0 text-left text-xs text-slate-400 sm:text-right">
             控制节点<br />{shortId(overview?.controllerNodeId ?? "—")}
           </div>
         </section>
 
-        <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="space-y-6">
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <section className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,21.25rem)]">
+          <div className="min-w-0 space-y-5">
+            <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white">
               <div className="border-b border-slate-200 px-5 py-4">
                 <h2 className="font-semibold">节点</h2>
               </div>
@@ -237,13 +237,14 @@ export default function MeshConsole() {
                     key={peer.fingerprint}
                     type="button"
                     onClick={() => setTargetNodeId(peer.fingerprint)}
-                    className={`flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-slate-50 ${targetNodeId === peer.fingerprint ? "bg-blue-50/60" : ""}`}
+                    aria-pressed={targetNodeId === peer.fingerprint}
+                    className={`flex min-w-0 w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#007aff]/50 ${targetNodeId === peer.fingerprint ? "bg-blue-50/60" : ""}`}
                   >
                     <span className="flex min-w-0 items-center gap-3">
                       <StatusDot status={peer.status} />
                       <span className="min-w-0">
                         <span className="block truncate font-medium">{peer.deviceName}</span>
-                        <span className="mt-1 block text-xs text-slate-500">{peer.platform} · {shortId(peer.fingerprint)}</span>
+                        <span className="mt-1 block truncate text-xs text-slate-500">{peer.platform} · {shortId(peer.fingerprint)}</span>
                       </span>
                     </span>
                     <span className="shrink-0 text-sm text-slate-500">{peer.resources.length} 个资源</span>
@@ -253,21 +254,21 @@ export default function MeshConsole() {
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-                <h2 className="font-semibold">资源</h2>
-                <span className="text-sm text-slate-500">{target ? target.deviceName : "全部节点"}</span>
+            <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-200 px-5 py-4">
+                <h2 className="shrink-0 font-semibold">资源</h2>
+                <span className="min-w-0 flex-1 truncate text-left text-sm text-slate-500 sm:text-right">{target ? target.deviceName : "全部节点"}</span>
               </div>
               <div className="divide-y divide-slate-100">
                 {targetResources.map((resource) => (
-                  <div key={`${resource.nodeId}:${resource.id}`} className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
+                  <div key={`${resource.nodeId}:${resource.id}`} className="flex min-w-0 flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <div className="min-w-0">
                       <p className="truncate font-medium">{resource.displayName}</p>
-                      <p className="mt-1 text-xs text-slate-500">{resource.kind} · {resource.id}</p>
+                      <p className="mt-1 break-all text-xs text-slate-500">{resource.kind} · {resource.id}</p>
                     </div>
-                    <div className="text-right text-xs text-slate-500">
-                      <p>{resource.capabilities?.join(" · ") || "无能力声明"}</p>
-                      {resource.runnerIds?.length ? <p className="mt-1 text-slate-400">runner {resource.runnerIds.join(", ")}</p> : null}
+                    <div className="min-w-0 max-w-full text-left text-xs text-slate-500 sm:max-w-[55%] sm:text-right">
+                      <p className="break-words">{resource.capabilities?.join(" · ") || "无能力声明"}</p>
+                      {resource.runnerIds?.length ? <p className="mt-1 break-words text-slate-400">runner {resource.runnerIds.join(", ")}</p> : null}
                     </div>
                   </div>
                 ))}
@@ -329,11 +330,11 @@ function GpuStatusPanel({
   const status = resource.status;
   const devices = status?.gpu?.devices ?? [];
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
-        <div>
+    <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+        <div className="min-w-0 flex-1">
           <h2 className="font-semibold">GPU 状态</h2>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 break-words text-sm text-slate-500">
             {status ? `${status.summary} · ${formatObservedAt(status.observedAt)}` : "等待第一次状态读取"}
           </p>
         </div>
@@ -341,7 +342,7 @@ function GpuStatusPanel({
           type="button"
           onClick={onRefresh}
           disabled={refreshing}
-          className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-slate-500 disabled:cursor-wait disabled:opacity-50"
+          className="min-h-11 shrink-0 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007aff]/40 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-50"
         >
           {refreshing ? "刷新中" : "刷新 GPU"}
         </button>
@@ -350,7 +351,7 @@ function GpuStatusPanel({
       {status && devices.length > 0 && (
         <div className="divide-y divide-slate-100">
           {devices.map((device) => (
-            <div key={`${device.index}-${device.name}`} className="grid gap-3 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_110px_140px_120px] sm:items-center">
+            <div key={`${device.index}-${device.name}`} className="grid min-w-0 gap-3 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_110px_140px_120px] sm:items-center">
               <div className="flex min-w-0 items-center gap-3">
                 <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${status.state === "ready" ? "bg-emerald-500" : "bg-amber-400"}`} />
                 <div className="min-w-0">
@@ -373,9 +374,9 @@ function GpuStatusPanel({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div>
+    <div className="min-w-0">
       <p className="text-xs text-slate-500">{label}</p>
-      <p className="mt-1 text-sm font-medium text-slate-800">{value}</p>
+      <p className="mt-1 whitespace-nowrap text-sm font-medium text-slate-800">{value}</p>
     </div>
   );
 }
@@ -403,13 +404,13 @@ function TaskComposer(props: {
 }) {
   const hasRunner = (props.selectedResource?.runnerIds?.length ?? 0) > 0;
   return (
-    <aside className="h-fit rounded-2xl border border-slate-200 bg-white p-5 lg:sticky lg:top-6">
+    <aside className="h-fit min-w-0 rounded-2xl border border-slate-200 bg-white p-5 xl:sticky xl:top-6">
       <div className="flex items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0 flex-1">
           <h2 className="font-semibold">提交任务</h2>
-          <p className="mt-1 text-sm text-slate-500">先选节点，再选本地资源。</p>
+          <p className="mt-1 break-words text-sm text-slate-500">先选节点，再选本地资源。</p>
         </div>
-        <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-[#007aff]">typed</span>
+        <span className="shrink-0 whitespace-nowrap rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-[#007aff]">typed</span>
       </div>
 
       <div className="mt-6 space-y-4">
@@ -436,7 +437,7 @@ function TaskComposer(props: {
         </Field>
         {props.operation === "run" && (
           <div className="space-y-3 border-t border-slate-100 pt-4">
-            <p className="text-sm text-amber-700">提交后由目标设备所有者在本机确认一次。</p>
+            <p className="break-words text-sm text-amber-700">提交后由目标设备所有者在本机确认一次。</p>
             <Field label="Runner">
               <select value={props.runnerId} onChange={(event) => props.setRunnerId(event.target.value)} className="input">
                 {(props.selectedResource?.runnerIds ?? []).map((id) => <option key={id} value={id}>{id}</option>)}
@@ -467,7 +468,7 @@ function TaskComposer(props: {
           type="button"
           onClick={props.onSubmit}
           disabled={props.submitting || !props.targetNodeId || !props.resourceId}
-          className="w-full rounded-xl bg-[#007aff] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#006de0] disabled:cursor-not-allowed disabled:opacity-40"
+          className="min-h-11 w-full rounded-xl bg-[#007aff] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#006de0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007aff]/50 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {props.submitting ? "提交中" : "提交任务"}
         </button>
@@ -489,26 +490,26 @@ function TaskList({
 }) {
   const names = useMemo(() => new Map(peers.map((peer) => [peer.fingerprint, peer.deviceName])), [peers]);
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-      <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-        <h2 className="font-semibold">任务</h2>
-        <span className="text-sm text-slate-500">最近 100 条</span>
+    <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-200 px-5 py-4">
+        <h2 className="shrink-0 font-semibold">任务</h2>
+        <span className="shrink-0 text-sm text-slate-500">最近 100 条</span>
       </div>
       <div className="divide-y divide-slate-100">
         {tasks.map((task) => (
-          <div key={task.taskId} className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
-            <div className="min-w-0">
+          <div key={task.taskId} className="flex min-w-0 flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+            <div className="min-w-0 flex-1">
               <p className="truncate font-medium">{task.operation} · {task.resourceId}</p>
               <p className="mt-1 truncate text-xs text-slate-500">{names.get(task.targetNodeId) ?? shortId(task.targetNodeId)} · {shortId(task.taskId)}</p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex min-h-11 w-full min-w-0 items-center justify-between gap-3 sm:w-auto sm:justify-end">
               <span className={`status status-${task.status}`}>{statusText[task.status] ?? task.status}</span>
               {["queued", "running", "approval-required"].includes(task.status) && (
                 <button
                   type="button"
                   onClick={() => onCancel(task.taskId)}
                   disabled={cancellingTaskId === task.taskId}
-                  className="text-sm font-medium text-slate-500 transition hover:text-red-600 disabled:cursor-wait disabled:opacity-50"
+                  className="inline-flex min-h-11 min-w-14 shrink-0 items-center justify-center rounded-lg px-2 text-sm font-medium text-slate-500 transition hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007aff]/40 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-50"
                 >
                   {cancellingTaskId === task.taskId ? "取消中" : "取消"}
                 </button>
@@ -523,12 +524,17 @@ function TaskList({
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">{label}</span>{children}</label>;
+  return <label className="block min-w-0"><span className="mb-2 block text-sm font-medium text-slate-700">{label}</span>{children}</label>;
 }
 
 function StatusDot({ status }: { status: PeerStatus }) {
   const color = status === "online" ? "bg-emerald-500" : status === "error" ? "bg-red-500" : status === "connecting" ? "bg-amber-400" : "bg-slate-300";
-  return <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${color}`} />;
+  return (
+    <>
+      <span aria-hidden="true" className={`h-2.5 w-2.5 shrink-0 rounded-full ${color}`} />
+      <span className="sr-only">{statusText[status]}</span>
+    </>
+  );
 }
 
 function Empty({ text }: { text: string }) {
