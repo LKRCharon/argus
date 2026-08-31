@@ -281,6 +281,35 @@ documents the read-only checks, fixed GitHub runner, candidate config, and
 release workflow. It does not activate a watcher, replace live state, or claim
 that a deployment succeeded.
 
+From `agentlink/`, prepare a release with the installed AgentLink runtime rather
+than a PATH-selected Bun or a hand-built archive:
+
+```bash
+agentlink_base="$HOME/Library/Application Support/AgentLink"
+runtime_bun="$agentlink_base/runtime/bun-1.3.14/bin/bun"
+reviewed_commit="$(git rev-parse HEAD)"
+release_id="$(/bin/date -u +%Y%m%d-%H%M%S)-$(git rev-parse --short=8 HEAD)"
+
+"$runtime_bun" run release:workflow -- prepare \
+  --base-path "$agentlink_base" \
+  --candidate "$agentlink_base/releases/$release_id" --git-root "$PWD" \
+  --reviewed-commit "$reviewed_commit" --operation-id "kmac-$release_id" \
+  --executor hardened-kmac --runtime-bun "$runtime_bun" --json
+
+(cd "$agentlink_base/releases/$release_id" && \
+  "$runtime_bun" run --no-install --no-env-file packages/daemon/src/index.ts >/dev/null)
+```
+
+The workflow installs the frozen lockfile in private staging and probes real
+daemon module loading with automatic installation and `.env` loading disabled
+before writing the functional manifest and sealing the tree. `node_modules`
+remains outside the manifest contract; only relative dependency links that
+resolve inside the same release are allowed, and the complete tree is scanned
+twice. Installation, load, or link validation failure does not publish the
+named candidate. The second command repeats the load probe against the sealed
+candidate. It prepares only; it does not switch `current`, replace Mesh state,
+restart the watcher, or prove deployment health.
+
 Watcher activation always verifies the fixed GitHub status-runner binding and
 its typed observation, but GitHub authentication is not a default deployment
 gate. Add `--require-github-auth` only when the deployment operation itself

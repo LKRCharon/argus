@@ -444,6 +444,53 @@ export function atomicRenameDirectory(source: string, destination: string, stage
   }
 }
 
+export function atomicRenameImmutableDirectory(source: string, destination: string, stage: FailureStage): void {
+  let fd = -1;
+  let moved = false;
+  try {
+    const sourceStat = lstatSync(source);
+    if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) fail(stage, "staging_directory_invalid");
+    if ((sourceStat.mode & 0o222) !== 0) fail(stage, "staging_directory_mutable");
+    if (pathExists(destination)) fail("candidate_exists", "candidate_exists");
+    fd = openSync(source, constants.O_RDONLY | NOFOLLOW);
+    const opened = fstatSync(fd);
+    if (opened.dev !== sourceStat.dev || opened.ino !== sourceStat.ino) fail(stage, "staging_directory_changed");
+    fchmodSync(fd, 0o700);
+    renameSync(source, destination);
+    moved = true;
+    fchmodSync(fd, 0o555);
+    fsyncSync(fd);
+    fsyncDirectory(dirname(destination), stage);
+  } catch (error) {
+    if (fd >= 0) {
+      try {
+        fchmodSync(fd, 0o700);
+      } catch {
+        // The fixed-stage failure below remains authoritative.
+      }
+    }
+    if (moved) {
+      try {
+        renameSync(destination, source);
+        moved = false;
+        fsyncDirectory(dirname(destination), stage);
+      } catch {
+        fail(stage, "directory_rename_rollback_failed");
+      }
+    }
+    if (error instanceof WorkflowError) throw error;
+    fail(stage, "directory_rename_failed");
+  } finally {
+    if (fd >= 0) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Preserve the fixed-stage failure.
+      }
+    }
+  }
+}
+
 export function readBounded(path: string, maxBytes: number, stage: FailureStage): string {
   return readBoundedBytes(path, maxBytes, stage).toString("utf8");
 }

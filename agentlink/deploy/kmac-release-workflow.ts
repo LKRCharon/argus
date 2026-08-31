@@ -5,7 +5,7 @@ import {
   rmSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import {
   AUDIT_SCHEMA,
   MAX_CHILD_OUTPUT_BYTES,
@@ -34,7 +34,7 @@ import { failureFrom, fail, WorkflowError } from "./kmac-release-workflow-error"
 import {
   appendAudit,
   acquireLock,
-  atomicRenameDirectory,
+  atomicRenameImmutableDirectory,
   atomicSymlinkSwitch,
   atomicWrite,
   canonicalExistingFile,
@@ -59,11 +59,13 @@ import {
 } from "./kmac-release-workflow-storage";
 import {
   archiveGitTree,
+  assertArchivedTreeSafe,
   checkRelease,
   evaluatePreflight,
   identityMatchesDirectory,
   inspectCleanGitManifest,
   makeImmutableTree,
+  makeStagingTreeRemovable,
   releaseCheckIsUsable,
   requireReleaseCheck,
 } from "./kmac-release-workflow-manifest";
@@ -77,6 +79,16 @@ const FUNCTIONAL_MANIFEST_FILE = ".argus-functional-manifest.json";
 const FIXED_ACTIVATION_SCRIPT = "deploy/activate-kmac-watcher.sh";
 const FIXED_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 const MAX_MESH_CONFIG_BYTES = 16 * 1024 * 1024;
+const DEPENDENCY_INSTALL_TIMEOUT_MS = 180_000;
+const CANDIDATE_PROBE_TIMEOUT_MS = 30_000;
+const DEPENDENCY_INSTALL_ARGS = Object.freeze([
+  "install",
+  "--frozen-lockfile",
+  "--ignore-scripts",
+  "--backend=copyfile",
+  "--no-progress",
+  "--no-summary",
+]);
 
 function result(
   phase: WorkflowPhase,
@@ -288,10 +300,71 @@ function stagingPathIsSafe(staging: string, releasesRoot: string): boolean {
 function removeStaging(staging: string, releasesRoot: string): void {
   if (!stagingPathIsSafe(staging, releasesRoot)) return;
   try {
+    makeStagingTreeRemovable(staging);
+  } catch {
+    // A failed install normally leaves a writable tree; removal still gets a chance.
+  }
+  try {
     rmSync(staging, { recursive: true, force: true });
   } catch {
-    // The final result remains bounded; an orphaned private staging tree is inert.
+    // The private staging name is never published as a candidate.
   }
+}
+
+function runtimePathIsFixed(base: string, runtimeBun: string): boolean {
+  const path = relative(join(base, "runtime"), runtimeBun);
+  const parts = path.split(sep);
+  return parts.length === 3
+    && /^bun-[0-9]+\.[0-9]+\.[0-9]+$/.test(parts[0]!)
+    && parts[1] === "bin"
+    && parts[2] === "bun";
+}
+
+function validatePrepareRuntime(paths: BasePaths, executor: WorkflowExecutor, value: unknown): string {
+  const runtimeBun = canonicalExistingFile(value, paths.allowTemporaryRoots);
+  if ((fileMode(runtimeBun) & 0o111) === 0) fail("path_validation", "runtime_not_executable");
+  if (executor === "hardened-kmac" && !runtimePathIsFixed(paths.base, runtimeBun)) {
+    fail("path_validation", "runtime_outside_allowlist");
+  }
+  return runtimeBun;
+}
+
+function fixedPrepareEnvironment(): NodeJS.ProcessEnv {
+  return {
+    PATH: FIXED_PATH,
+    HOME: homedir(),
+    CI: "1",
+    NO_COLOR: "1",
+  };
+}
+
+function installFrozenDependencies(runtimeBun: string, staging: string): void {
+  const child = spawnSync(runtimeBun, [...DEPENDENCY_INSTALL_ARGS], {
+    cwd: staging,
+    env: fixedPrepareEnvironment(),
+    shell: false,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: DEPENDENCY_INSTALL_TIMEOUT_MS,
+    maxBuffer: MAX_CHILD_OUTPUT_BYTES,
+  });
+  if (child.error || child.status !== 0) fail("candidate_write", "dependency_install_failed");
+}
+
+function probeCandidateRuntime(runtimeBun: string, staging: string): void {
+  const child = spawnSync(runtimeBun, [
+    "run",
+    "--no-install",
+    "--no-env-file",
+    "packages/daemon/src/index.ts",
+  ], {
+    cwd: staging,
+    env: fixedPrepareEnvironment(),
+    shell: false,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: CANDIDATE_PROBE_TIMEOUT_MS,
+    maxBuffer: MAX_CHILD_OUTPUT_BYTES,
+  });
+  if (child.error || child.status !== 0) fail("candidate_content", "candidate_runtime_probe_failed");
 }
 
 function verifyPreparedCandidate(
@@ -334,6 +407,7 @@ export function prepareRelease(options: PrepareOptions): WorkflowResult {
     }
     const target = resolvePrepareTarget(options);
     paths = ensureActivationDirectories(target.base);
+    const runtimeBun = validatePrepareRuntime(paths, executor, options.runtimeBun);
     lock = acquireLock(paths, operationId, reviewedCommit, target.candidate, null);
 
     const existing = readOperationState(paths, operationId);
@@ -382,6 +456,9 @@ export function prepareRelease(options: PrepareOptions): WorkflowResult {
         staging = mkdtempSync(join(paths.releasesRoot, `.kmac-prepare-${operationId}-`));
         if (!stagingPathIsSafe(staging, paths.releasesRoot)) fail("candidate_write", "staging_path_invalid");
         archiveGitTree(options.gitRoot, reviewedCommit, staging);
+        assertArchivedTreeSafe(staging);
+        installFrozenDependencies(runtimeBun, staging);
+        probeCandidateRuntime(runtimeBun, staging);
         atomicWrite(
           join(staging, FUNCTIONAL_MANIFEST_FILE),
           `${JSON.stringify(gitManifest, null, 2)}\n`,
@@ -401,9 +478,20 @@ export function prepareRelease(options: PrepareOptions): WorkflowResult {
           || compareFunctionalManifests(gitManifest, stagedVerified.manifest).length !== 0) {
           fail("candidate_manifest", "candidate_manifest_mismatch");
         }
-        atomicRenameDirectory(staging, target.candidate, "candidate_write");
+        makeImmutableTree(staging);
+        const immutableStaged = identityAt(checkReleaseAt(
+          staging,
+          true,
+          "candidate_manifest",
+          "candidate_content",
+          "candidate_mutability",
+        ), "candidate_manifest", true);
+        if (immutableStaged.identity.gitCommit !== gitManifest.gitCommit
+          || compareFunctionalManifests(gitManifest, immutableStaged.manifest).length !== 0) {
+          fail("candidate_manifest", "candidate_manifest_mismatch");
+        }
+        atomicRenameImmutableDirectory(staging, target.candidate, "candidate_write");
         staging = null;
-        makeImmutableTree(target.candidate);
         verified = verifyPreparedCandidate(target.candidate, gitManifest);
       }
       candidate = verified.identity;
@@ -524,8 +612,7 @@ function validateHardenedKmac(
   }
   const runtimeBun = canonicalExistingFile(hardened.runtimeBun, false);
   if ((fileMode(runtimeBun) & 0o111) === 0) fail("activation_script", "runtime_not_executable");
-  const runtimeRoot = `${paths.base}/runtime/`;
-  if (!runtimeBun.startsWith(runtimeRoot)) fail("path_validation", "runtime_outside_allowlist");
+  if (!runtimePathIsFixed(paths.base, runtimeBun)) fail("path_validation", "runtime_outside_allowlist");
   const candidateConfig = canonicalExistingFile(hardened.candidateConfig, false);
   const preparedRoot = `${paths.base}/prepared/`;
   if (!candidateConfig.startsWith(preparedRoot)) {
@@ -1085,7 +1172,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     fail("usage", "unknown_command");
   }
   const allowed = command === "prepare"
-    ? new Set(["base-path", "candidate", "git-root", "reviewed-commit", "operation-id", "executor", "json"])
+    ? new Set(["base-path", "candidate", "git-root", "reviewed-commit", "operation-id", "executor", "runtime-bun", "json"])
     : command === "preflight"
       ? new Set(["base-path", "candidate", "active", "git-root", "reviewed-commit", "json"])
       : command === "activate"
@@ -1168,6 +1255,7 @@ export function runCli(argv: readonly string[]): { exitCode: number; output: str
           candidatePath: required(values, "candidate"),
           gitRoot: required(values, "git-root"),
           reviewedCommit: required(values, "reviewed-commit"),
+          runtimeBun: required(values, "runtime-bun"),
           operationId: optional(values, "operation-id"),
           executor: optional(values, "executor") as WorkflowExecutor | undefined,
         });

@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { lstatSync, readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { lstatSync, readlinkSync, readdirSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   buildFunctionalManifest,
   buildGitFunctionalManifest,
@@ -15,6 +15,7 @@ import {
 import {
   COMMIT_PATTERN,
   MAX_MANIFEST_BYTES,
+  MAX_PATH_LENGTH,
   MAX_PUBLIC_DIFFERENCES,
   MAX_RELEASE_FILES,
   type Bounded,
@@ -40,9 +41,13 @@ import {
 } from "./kmac-release-workflow-storage";
 
 interface TreeEntry {
-  kind: "file" | "directory";
+  kind: "file" | "directory" | "symlink";
   identity: DirectoryIdentity;
   mode: number;
+  linkTarget: string | null;
+  resolvedTarget: string | null;
+  targetIdentity: DirectoryIdentity | null;
+  targetKind: "file" | "directory" | null;
 }
 
 interface TreeScan {
@@ -65,29 +70,82 @@ function emptyCheck(failureStage: FailureStage): ReleaseCheck {
   };
 }
 
-function scanTree(root: string): TreeScan {
+function isWithinRelease(root: string, candidate: string): boolean {
+  const path = relative(root, candidate);
+  return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
+}
+
+function isDependencySymlink(path: string): boolean {
+  return path.startsWith("node_modules/") || path.includes("/node_modules/");
+}
+
+function scanTree(root: string, stage: FailureStage, allowDependencySymlinks = true): TreeScan {
+  const releaseRoot = resolve(root);
   const entries = new Map<string, TreeEntry>();
-  const stack = [{ path: root, relative: "" }];
+  const stack = [{ path: releaseRoot, relative: "" }];
   let immutable = true;
   while (stack.length > 0) {
     const item = stack.pop()!;
     const stat = lstatSync(item.path);
-    if (stat.isSymbolicLink()) fail("candidate_content", "release_symlink");
-    if (stat.isDirectory()) {
+    if (stat.isSymbolicLink()) {
+      if (!allowDependencySymlinks || !isDependencySymlink(item.relative)) fail(stage, "release_symlink");
+      let linkTarget: string;
+      let finalTarget: string;
+      try {
+        linkTarget = readlinkSync(item.path);
+        if (linkTarget.length === 0
+          || linkTarget.length > MAX_PATH_LENGTH
+          || linkTarget.includes("\n")
+          || linkTarget.includes("\r")
+          || isAbsolute(linkTarget)) {
+          fail(stage, "release_symlink_target_invalid");
+        }
+        const lexicalTarget = resolve(dirname(item.path), linkTarget);
+        if (!isWithinRelease(releaseRoot, lexicalTarget)) fail(stage, "release_symlink_escape");
+        finalTarget = realpathSync(item.path);
+        if (!isWithinRelease(releaseRoot, finalTarget)) fail(stage, "release_symlink_escape");
+      } catch (error) {
+        if (error instanceof WorkflowError) throw error;
+        fail(stage, "release_symlink_target_invalid");
+      }
+      const targetStat = lstatSync(finalTarget!);
+      if (!targetStat.isDirectory() && !targetStat.isFile()) fail(stage, "release_symlink_target_invalid");
+      if (targetStat.isDirectory()
+        && (finalTarget! === releaseRoot || item.path.startsWith(`${finalTarget!}${sep}`))) {
+        fail(stage, "release_symlink_cycle");
+      }
+      entries.set(item.relative, {
+        kind: "symlink",
+        identity: { device: stat.dev, inode: stat.ino },
+        mode: stat.mode,
+        linkTarget: linkTarget!,
+        resolvedTarget: relative(releaseRoot, finalTarget!).split(sep).join("/"),
+        targetIdentity: { device: targetStat.dev, inode: targetStat.ino },
+        targetKind: targetStat.isDirectory() ? "directory" : "file",
+      });
+    } else if (stat.isDirectory()) {
       entries.set(item.relative, {
         kind: "directory",
         identity: { device: stat.dev, inode: stat.ino },
         mode: stat.mode,
+        linkTarget: null,
+        resolvedTarget: null,
+        targetIdentity: null,
+        targetKind: null,
       });
       if ((stat.mode & 0o222) !== 0) immutable = false;
       const children = readdirSync(item.path, { withFileTypes: true });
-      if (entries.size + children.length > MAX_RELEASE_FILES) fail("candidate_content", "release_file_limit");
+      if (entries.size + stack.length + children.length > MAX_RELEASE_FILES) fail(stage, "release_file_limit");
       for (const child of children) {
         const childPath = join(item.path, child.name);
         const childRelative = item.relative.length === 0 ? child.name : `${item.relative}/${child.name}`;
         const childStat = lstatSync(childPath);
-        if (child.isSymbolicLink() || childStat.isSymbolicLink()) fail("candidate_content", "release_symlink");
-        if (!childStat.isDirectory() && !childStat.isFile()) fail("candidate_content", "release_special_file");
+        if (child.isSymbolicLink() !== childStat.isSymbolicLink()
+          || child.isDirectory() !== childStat.isDirectory()
+          || child.isFile() !== childStat.isFile()) fail(stage, "release_changed");
+        if (!childStat.isSymbolicLink() && !childStat.isDirectory() && !childStat.isFile()) {
+          fail(stage, "release_special_file");
+        }
         stack.push({ path: childPath, relative: childRelative });
       }
     } else if (stat.isFile()) {
@@ -95,13 +153,28 @@ function scanTree(root: string): TreeScan {
         kind: "file",
         identity: { device: stat.dev, inode: stat.ino },
         mode: stat.mode,
+        linkTarget: null,
+        resolvedTarget: null,
+        targetIdentity: null,
+        targetKind: null,
       });
       if ((stat.mode & 0o222) !== 0) immutable = false;
     } else {
-      fail("candidate_content", "release_special_file");
+      fail(stage, "release_special_file");
     }
   }
   return { entries, immutable };
+}
+
+function sameEntryIdentity(left: TreeEntry, right: TreeEntry): boolean {
+  return left.kind === right.kind
+    && left.identity.device === right.identity.device
+    && left.identity.inode === right.identity.inode
+    && left.linkTarget === right.linkTarget
+    && left.resolvedTarget === right.resolvedTarget
+    && left.targetIdentity?.device === right.targetIdentity?.device
+    && left.targetIdentity?.inode === right.targetIdentity?.inode
+    && left.targetKind === right.targetKind;
 }
 
 function sameTree(left: TreeScan, right: TreeScan): boolean {
@@ -109,9 +182,7 @@ function sameTree(left: TreeScan, right: TreeScan): boolean {
   for (const [path, before] of left.entries) {
     const after = right.entries.get(path);
     if (!after
-      || before.kind !== after.kind
-      || before.identity.device !== after.identity.device
-      || before.identity.inode !== after.identity.inode
+      || !sameEntryIdentity(before, after)
       || before.mode !== after.mode) return false;
   }
   return true;
@@ -121,10 +192,7 @@ function sameTreeShape(left: TreeScan, right: TreeScan): boolean {
   if (left.entries.size !== right.entries.size) return false;
   for (const [path, before] of left.entries) {
     const after = right.entries.get(path);
-    if (!after
-      || before.kind !== after.kind
-      || before.identity.device !== after.identity.device
-      || before.identity.inode !== after.identity.inode) return false;
+    if (!after || !sameEntryIdentity(before, after)) return false;
   }
   return true;
 }
@@ -147,7 +215,7 @@ export function checkRelease(
   const directoryIdentity: DirectoryIdentity = { device: rootStat.dev, inode: rootStat.ino };
   let before: TreeScan;
   try {
-    before = scanTree(root);
+    before = scanTree(root, options.contentStage);
   } catch (error) {
     return { ...emptyCheck(error instanceof WorkflowError ? error.stage : options.contentStage), directoryIdentity };
   }
@@ -166,7 +234,7 @@ export function checkRelease(
   let finalDigest: string;
   try {
     differences = verifyFunctionalManifest(root, manifest);
-    after = scanTree(root);
+    after = scanTree(root, options.contentStage);
     const secondDifferences = verifyFunctionalManifest(root, manifest);
     finalDigest = manifestDigest(root, options.contentStage);
     if (!sameTree(before, after)
@@ -399,7 +467,7 @@ export function evaluatePreflight(options: PreflightOptions): PreflightEvaluatio
 }
 
 export function makeImmutableTree(root: string): void {
-  const scan = scanTree(root);
+  const scan = scanTree(root, "candidate_content");
   const files = [...scan.entries.entries()]
     .filter(([, entry]) => entry.kind === "file")
     .sort(([left], [right]) => left.localeCompare(right));
@@ -412,8 +480,26 @@ export function makeImmutableTree(root: string): void {
   for (const [relative, entry] of directories) {
     chmodImmutable(relative.length === 0 ? root : join(root, relative), 0o555, entry.identity);
   }
-  const after = scanTree(root);
+  const after = scanTree(root, "candidate_content");
   if (!after.immutable || !sameTreeShape(scan, after)) fail("candidate_mutability", "release_not_immutable");
+}
+
+export function assertArchivedTreeSafe(root: string): void {
+  scanTree(root, "candidate_content", false);
+}
+
+export function makeStagingTreeRemovable(root: string): void {
+  const stack = [root];
+  let entries = 0;
+  while (stack.length > 0) {
+    const path = stack.pop()!;
+    const stat = lstatSync(path);
+    entries += 1;
+    if (entries > MAX_RELEASE_FILES) fail("candidate_write", "release_file_limit");
+    if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
+    chmodImmutable(path, 0o700, { device: stat.dev, inode: stat.ino });
+    for (const child of readdirSync(path)) stack.push(join(path, child));
+  }
 }
 
 function gitText(gitRoot: string, args: string[], maxBuffer = 16 * 1024): string {

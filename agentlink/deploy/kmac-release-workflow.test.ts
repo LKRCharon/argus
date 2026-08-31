@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   cpSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -52,6 +53,7 @@ interface Fixture {
 }
 
 const fixtureRoots: string[] = [];
+const TEST_RUNTIME_BUN = realpathSync(process.execPath);
 
 afterAll(() => {
   for (const root of fixtureRoots) {
@@ -107,12 +109,54 @@ function createFixture(label: string): Fixture {
   mkdirSync(basePath, { recursive: true, mode: 0o700 });
   chmodSync(gitRoot, 0o700);
   chmodSync(basePath, 0o700);
-  writeFixtureFile(gitRoot, "package.json", "{\"name\":\"workflow-fixture\"}\n");
+  writeFixtureFile(gitRoot, "package.json", `${JSON.stringify({
+    name: "workflow-fixture",
+    private: true,
+    type: "module",
+    workspaces: ["packages/*"],
+  }, null, 2)}\n`);
+  writeFixtureFile(gitRoot, "bun.lock", `${JSON.stringify({
+    lockfileVersion: 1,
+    configVersion: 1,
+    workspaces: {
+      "": { name: "workflow-fixture" },
+      "packages/daemon": {
+        name: "@fixture/daemon",
+        dependencies: { "@fixture/wire": "workspace:*" },
+      },
+      "packages/wire": { name: "@fixture/wire" },
+    },
+    packages: {
+      "@fixture/daemon": ["@fixture/daemon@workspace:packages/daemon"],
+      "@fixture/wire": ["@fixture/wire@workspace:packages/wire"],
+    },
+  }, null, 2)}\n`);
+  writeFixtureFile(gitRoot, "packages/daemon/package.json", `${JSON.stringify({
+    name: "@fixture/daemon",
+    private: true,
+    type: "module",
+    dependencies: { "@fixture/wire": "workspace:*" },
+  }, null, 2)}\n`);
+  writeFixtureFile(gitRoot, "packages/daemon/src/index.ts", [
+    "import { fixtureMarker } from \"@fixture/wire\";",
+    "if (process.argv.includes(\"--help\")) process.stdout.write(`fixture ${fixtureMarker}\\n`);",
+    "else if (process.argv.length === 2) process.stdout.write(`fixture ${fixtureMarker}\\n`);",
+    "else process.exitCode = 64;",
+    "",
+  ].join("\n"));
   writeFixtureFile(gitRoot, "packages/daemon/src/feature.ts", "export const feature = 1;\n");
+  writeFixtureFile(gitRoot, "packages/wire/package.json", `${JSON.stringify({
+    name: "@fixture/wire",
+    private: true,
+    type: "module",
+    exports: "./src/index.ts",
+  }, null, 2)}\n`);
+  writeFixtureFile(gitRoot, "packages/wire/src/index.ts", "export const fixtureMarker = 'dependency-loaded';\n");
+  writeFixtureFile(gitRoot, "deploy/release-marker.ts", "export const releaseMarker = true;\n");
   git(gitRoot, "init", "-q");
   git(gitRoot, "config", "user.name", "Argus workflow fixture");
   git(gitRoot, "config", "user.email", "argus-workflow@example.invalid");
-  git(gitRoot, "add", "package.json", "packages/daemon/src/feature.ts");
+  git(gitRoot, "add", ".");
   git(gitRoot, "commit", "-qm", "fixture release");
   const reviewedCommit = git(gitRoot, "rev-parse", "HEAD").toLowerCase();
   return {
@@ -135,11 +179,12 @@ function prepareFixture(fixture: Fixture): void {
     reviewedCommit: fixture.reviewedCommit,
     operationId: fixture.operationId,
     executor: "filesystem",
+    runtimeBun: TEST_RUNTIME_BUN,
     allowTemporaryRoots: true,
   });
   expect(prepared).toMatchObject({ ok: true, failureStage: "none" });
   expect(prepared.candidate?.path).toBe(fixture.candidatePath);
-  cpSync(fixture.candidatePath, fixture.activePath, { recursive: true });
+  cpSync(fixture.candidatePath, fixture.activePath, { recursive: true, verbatimSymlinks: true });
   symlinkSync(fixture.activePath, fixture.currentPath);
 }
 
@@ -167,6 +212,24 @@ describe("KMac release workflow", () => {
   test("prepares, preflights, activates, rolls back, and is idempotent", () => {
     const fixture = createFixture("success");
     prepareFixture(fixture);
+
+    const workspaceDependency = join(fixture.candidatePath, "packages", "daemon", "node_modules", "@fixture", "wire");
+    expect(lstatSync(workspaceDependency).isSymbolicLink()).toBe(true);
+    const probe = spawnSync(TEST_RUNTIME_BUN, [
+      "run",
+      "--no-install",
+      "--no-env-file",
+      "packages/daemon/src/index.ts",
+      "--help",
+    ], {
+      cwd: fixture.candidatePath,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+      maxBuffer: 16 * 1024,
+    });
+    expect(probe.status).toBe(0);
+    expect(probe.stdout).toBe("fixture dependency-loaded\n");
 
     const beforeActivation = preflightRelease({ ...workflowPaths(fixture), gitRoot: fixture.gitRoot });
     expect(beforeActivation).toMatchObject({
@@ -228,6 +291,7 @@ describe("KMac release workflow", () => {
       reviewedCommit: fixture.reviewedCommit,
       operationId: "kmac-lock-contender",
       executor: "filesystem",
+      runtimeBun: TEST_RUNTIME_BUN,
       allowTemporaryRoots: true,
     });
     expect(concurrent).toMatchObject({ ok: false, failureStage: "lock", errorCode: "deployment_lock_held" });
@@ -259,6 +323,7 @@ describe("KMac release workflow", () => {
       reviewedCommit: fixture.reviewedCommit,
       operationId: "kmac-stale-contender",
       executor: "filesystem",
+      runtimeBun: TEST_RUNTIME_BUN,
       allowTemporaryRoots: true,
     });
     expect(stale).toMatchObject({ ok: false, failureStage: "lock", errorCode: "stale_lock_owner" });
@@ -328,6 +393,144 @@ describe("KMac release workflow", () => {
     writeFileSync(fixture.currentPath, "current must remain a symlink\n");
     expect(() => atomicSymlinkSwitch(fixture.currentPath, fixture.candidatePath, "switch", fixture.activePath))
       .toThrow("current_link_invalid");
+  });
+
+  for (const [label, target] of [
+    ["absolute", "/etc/hosts"],
+    ["escaping", "../../../../outside-release"],
+    ["dangling", "missing-dependency"],
+  ] as const) {
+    test(`rejects ${label} dependency symlinks`, () => {
+      const fixture = createFixture(`dependency-link-${label}`);
+      prepareFixture(fixture);
+      const nodeModules = join(fixture.candidatePath, "node_modules");
+      chmodSync(nodeModules, 0o755);
+      symlinkSync(target, join(nodeModules, `malicious-${label}`));
+
+      expect(preflightRelease({ ...workflowPaths(fixture), gitRoot: fixture.gitRoot })).toMatchObject({
+        ok: false,
+        failureStage: "candidate_content",
+      });
+    });
+  }
+
+  test("rejects dependency symlink cycles", () => {
+    const fixture = createFixture("dependency-link-cycle");
+    prepareFixture(fixture);
+    const nodeModules = join(fixture.candidatePath, "node_modules");
+    chmodSync(nodeModules, 0o755);
+    symlinkSync("cycle-b", join(nodeModules, "cycle-a"));
+    symlinkSync("cycle-a", join(nodeModules, "cycle-b"));
+
+    expect(preflightRelease({ ...workflowPaths(fixture), gitRoot: fixture.gitRoot })).toMatchObject({
+      ok: false,
+      failureStage: "candidate_content",
+    });
+  });
+
+  test("rejects release symlinks outside node_modules", () => {
+    const fixture = createFixture("source-symlink");
+    prepareFixture(fixture);
+    const deploy = join(fixture.candidatePath, "deploy");
+    chmodSync(deploy, 0o755);
+    symlinkSync("../package.json", join(deploy, "unexpected-link"));
+
+    expect(preflightRelease({ ...workflowPaths(fixture), gitRoot: fixture.gitRoot })).toMatchObject({
+      ok: false,
+      failureStage: "candidate_content",
+    });
+  });
+
+  test("rejects a tracked deploy symlink before publishing the archive", () => {
+    const fixture = createFixture("archive-symlink");
+    symlinkSync("../package.json", join(fixture.gitRoot, "deploy", "tracked-link"));
+    git(fixture.gitRoot, "add", "deploy/tracked-link");
+    git(fixture.gitRoot, "commit", "-qm", "add tracked release symlink");
+    fixture.reviewedCommit = git(fixture.gitRoot, "rev-parse", "HEAD").toLowerCase();
+
+    const failed = prepareRelease({
+      basePath: fixture.basePath,
+      candidatePath: fixture.candidatePath,
+      gitRoot: fixture.gitRoot,
+      reviewedCommit: fixture.reviewedCommit,
+      operationId: fixture.operationId,
+      executor: "filesystem",
+      runtimeBun: TEST_RUNTIME_BUN,
+      allowTemporaryRoots: true,
+    });
+    expect(failed).toMatchObject({
+      ok: false,
+      phase: "prepare",
+      failureStage: "git_artifact",
+      errorCode: "git_artifact_invalid",
+    });
+    expect(existsSync(fixture.candidatePath)).toBe(false);
+  });
+
+  test("does not publish a candidate or retain staging when frozen install fails", () => {
+    const fixture = createFixture("install-failure");
+    const installSecret = `secret-${randomUUID()}`;
+    writeFixtureFile(fixture.gitRoot, "package.json", `${JSON.stringify({
+      name: "workflow-fixture",
+      private: true,
+      type: "module",
+      workspaces: ["packages/*"],
+      dependencies: { [`@fixture/${installSecret}`]: "workspace:*" },
+    }, null, 2)}\n`);
+    git(fixture.gitRoot, "add", "package.json");
+    git(fixture.gitRoot, "commit", "-qm", "make lockfile stale");
+    fixture.reviewedCommit = git(fixture.gitRoot, "rev-parse", "HEAD").toLowerCase();
+
+    const failed = prepareRelease({
+      basePath: fixture.basePath,
+      candidatePath: fixture.candidatePath,
+      gitRoot: fixture.gitRoot,
+      reviewedCommit: fixture.reviewedCommit,
+      operationId: fixture.operationId,
+      executor: "filesystem",
+      runtimeBun: TEST_RUNTIME_BUN,
+      allowTemporaryRoots: true,
+    });
+    expect(failed).toMatchObject({
+      ok: false,
+      phase: "prepare",
+      failureStage: "candidate_write",
+      errorCode: "dependency_install_failed",
+    });
+    expect(JSON.stringify(failed)).not.toContain(installSecret);
+    expect(existsSync(fixture.candidatePath)).toBe(false);
+    expect(readdirSync(join(fixture.basePath, "releases")).filter((name) => name.startsWith(".kmac-prepare-"))).toEqual([]);
+  });
+
+  test("does not publish a candidate when the no-install runtime probe fails", () => {
+    const fixture = createFixture("runtime-probe-failure");
+    writeFixtureFile(
+      fixture.gitRoot,
+      "packages/daemon/src/index.ts",
+      "import '@fixture/missing-runtime-dependency';\n",
+    );
+    git(fixture.gitRoot, "add", "packages/daemon/src/index.ts");
+    git(fixture.gitRoot, "commit", "-qm", "break candidate runtime loading");
+    fixture.reviewedCommit = git(fixture.gitRoot, "rev-parse", "HEAD").toLowerCase();
+
+    const failed = prepareRelease({
+      basePath: fixture.basePath,
+      candidatePath: fixture.candidatePath,
+      gitRoot: fixture.gitRoot,
+      reviewedCommit: fixture.reviewedCommit,
+      operationId: fixture.operationId,
+      executor: "filesystem",
+      runtimeBun: TEST_RUNTIME_BUN,
+      allowTemporaryRoots: true,
+    });
+    expect(failed).toMatchObject({
+      ok: false,
+      phase: "prepare",
+      failureStage: "candidate_content",
+      errorCode: "candidate_runtime_probe_failed",
+    });
+    expect(existsSync(fixture.candidatePath)).toBe(false);
+    expect(readdirSync(join(fixture.basePath, "releases")).filter((name) => name.startsWith(".kmac-prepare-"))).toEqual([]);
   });
 
   test("derives rollback state from a durable activating marker after interruption", () => {
@@ -433,6 +636,51 @@ describe("KMac release workflow", () => {
       ok: false,
       phase: "prepare",
       errorCode: "filesystem_executor_is_api_only",
+    });
+
+    const cliRoot = realpathSync(mkdtempSync(join(import.meta.dir, ".kmac-runtime-cli-")));
+    fixtureRoots.push(cliRoot);
+    const cliBase = join(cliRoot, "state");
+    mkdirSync(cliBase, { recursive: true, mode: 0o700 });
+    chmodSync(cliBase, 0o700);
+    const fakeRuntime = join(cliBase, "runtime", "bun-fake", "bin", "bun");
+    writeFixtureFile(cliBase, "runtime/bun-fake/bin/bun", "not an executable runtime\n");
+    const cliCandidate = join(cliBase, "releases", "candidate-cli");
+    const prepareArgs = [
+      "prepare",
+      "--base-path", cliBase,
+      "--candidate", cliCandidate,
+      "--git-root", cliRoot,
+      "--reviewed-commit", "0".repeat(40),
+      "--operation-id", "kmac-cli-runtime",
+      "--executor", "hardened-kmac",
+    ];
+    const missingRuntime = runCli(prepareArgs);
+    expect(missingRuntime.exitCode).toBe(64);
+    expect(JSON.parse(missingRuntime.output)).toMatchObject({
+      ok: false,
+      phase: "prepare",
+      failureStage: "usage",
+      errorCode: "missing_runtime_bun",
+    });
+
+    const forgedRuntime = runCli([...prepareArgs, "--runtime-bun", fakeRuntime]);
+    expect(forgedRuntime.exitCode).toBe(1);
+    expect(JSON.parse(forgedRuntime.output)).toMatchObject({
+      ok: false,
+      phase: "prepare",
+      failureStage: "path_validation",
+      errorCode: "runtime_not_executable",
+    });
+    expect(existsSync(cliCandidate)).toBe(false);
+
+    const outsideRuntime = runCli([...prepareArgs, "--runtime-bun", TEST_RUNTIME_BUN]);
+    expect(outsideRuntime.exitCode).toBe(1);
+    expect(JSON.parse(outsideRuntime.output)).toMatchObject({
+      ok: false,
+      phase: "prepare",
+      failureStage: "path_validation",
+      errorCode: "runtime_outside_allowlist",
     });
 
     const packageJson = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as {

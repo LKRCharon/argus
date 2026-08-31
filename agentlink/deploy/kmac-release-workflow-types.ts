@@ -205,6 +205,7 @@ export interface PrepareOptions {
   candidatePath: string;
   gitRoot: string;
   reviewedCommit: string;
+  runtimeBun: string;
   operationId?: string;
   executor?: WorkflowExecutor;
   allowTemporaryRoots?: boolean;

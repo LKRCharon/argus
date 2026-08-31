@@ -137,34 +137,58 @@ envelope. Mesh discovery publishes the runner name and resource status only;
 the executable, fixed arguments, environment, and raw process streams remain
 target-local.
 
-Prepare an immutable watcher release from a clean reviewed commit. The
-functional manifest is generated in the Git checkout and copied into the
-archive because release directories intentionally contain no `.git` data:
+Prepare an immutable watcher release from a clean reviewed commit with the
+hardened workflow. Run this from `agentlink/`; the AgentLink base must already
+exist with mode `0700`:
 
 ```bash
 agentlink_base="$HOME/Library/Application Support/AgentLink"
+runtime_bun="$agentlink_base/runtime/bun-1.3.14/bin/bun"
+reviewed_commit="$(git rev-parse HEAD)"
 release_id="$(/bin/date -u +%Y%m%d-%H%M%S)-$(git rev-parse --short=8 HEAD)"
 release_dir="$agentlink_base/releases/$release_id"
+operation_id="kmac-$release_id"
 
-/bin/mkdir -p "$release_dir"
-git archive HEAD:agentlink | /usr/bin/tar -x -C "$release_dir"
-(cd agentlink && bun run release:manifest write --root .)
-/bin/cp agentlink/.argus-functional-manifest.json "$release_dir/"
-(cd "$release_dir" && bun install --frozen-lockfile)
-(cd "$release_dir" && bun run release:manifest verify --release .)
+"$runtime_bun" run release:workflow -- prepare \
+  --base-path "$agentlink_base" \
+  --candidate "$release_dir" --git-root "$PWD" \
+  --reviewed-commit "$reviewed_commit" --operation-id "$operation_id" \
+  --executor hardened-kmac --runtime-bun "$runtime_bun" --json
+
+(cd "$release_dir" && \
+  "$runtime_bun" run --no-install --no-env-file packages/daemon/src/index.ts >/dev/null)
 ```
+
+`prepare` accepts only a canonical executable at
+`$agentlink_base/runtime/bun-X.Y.Z/bin/bun`. It archives the exact commit into a
+private staging directory, rejects archive symlinks, and invokes that runtime
+with a fixed, shell-free `bun install --frozen-lockfile --ignore-scripts`
+argument set. Stdin is closed, the environment and output are bounded, and
+child stdout/stderr are never included in the public result. Installation
+finishes before a fixed, side-effect-free daemon module/CLI load probe runs with
+Bun automatic installation and `.env` loading disabled. Only then is the
+manifest written and the tree made read-only. A failed install or probe leaves
+neither the named candidate nor a staging directory. The final command repeats
+that probe against the sealed candidate.
+
+The functional manifest deliberately continues to exclude `node_modules`.
+Installed dependency links are accepted only below `node_modules`, only when
+the link is relative and both its lexical and fully resolved targets remain in
+the same release. Absolute, escaping, dangling, cyclic, and all other release
+symlinks fail closed. Link text and resolved target identity participate in
+both tree scans, and immutable handling never follows a link.
 
 Then prepare a separate `0600` Mesh candidate. This command refuses an output
 path equal to the live input path:
 
 ```bash
-prepared="$agentlink_base/prepared/argus-infra-stage1-20260830"
+prepared="$agentlink_base/prepared/$release_id"
 /bin/mkdir -p "$prepared"
 
-bun run agentlink/deploy/prepare-kmac-mesh-config.ts -- \
+"$runtime_bun" run deploy/prepare-kmac-mesh-config.ts -- \
   --input "$agentlink_base/state/mesh.json" \
   --output "$prepared/mesh.json" \
-  --runtime-bun "$agentlink_base/runtime/bun-1.3.14/bin/bun" \
+  --runtime-bun "$runtime_bun" \
   --status-script "$release_dir/deploy/kmac-workspace-status.ts" \
   --state-dir "$agentlink_base/state" \
   --codex-launcher "$HOME/.local/bin/codex" \
@@ -182,30 +206,28 @@ or shell surface is created.
 
 ## Phase-three release workflow
 
-Phase three makes release activation an explicit, auditable sequence. Run it
-from the reviewed checkout with canonical absolute paths. The base must be the
-persistent AgentLink root; temporary roots are available only to the exported
-test API and are rejected by the CLI.
+Phase three makes release activation an explicit, auditable sequence. Continue
+in the same shell from the reviewed `agentlink/` checkout with canonical
+absolute paths. The base must be the persistent AgentLink root; temporary roots
+are available only to the exported test API and are rejected by the CLI.
 
 ```bash
-cd agentlink
-reviewed_commit="$(git rev-parse HEAD)"
-candidate="$HOME/Library/Application Support/AgentLink/releases/<release-id>"
+candidate="$release_dir"
 active="$HOME/Library/Application Support/AgentLink/releases/<active-release>"
 
-bun run release:workflow -- prepare \
-  --candidate "$candidate" --git-root "$PWD" \
-  --reviewed-commit "$reviewed_commit" --executor hardened-kmac --json
-
-bun run release:workflow -- preflight \
+"$runtime_bun" run release:workflow -- preflight \
+  --base-path "$agentlink_base" \
   --candidate "$candidate" --active "$active" --git-root "$PWD" \
   --reviewed-commit "$reviewed_commit" --json
 ```
 
-`prepare` archives the exact reviewed commit, writes the functional SHA-256
-manifest, verifies the complete tree, and makes the candidate non-writable
-before recording its operation ID. `preflight` is read-only: it creates no
-directories, lock, operation state, audit record, link, or Mesh/config file.
+The canonical `prepare` command is shown above and records the explicit
+`$operation_id`. It installs dependencies, writes the functional SHA-256
+manifest, verifies the complete tree twice, and makes the candidate
+non-writable before recording that operation. `preflight` and `status` accept
+the same validated internal dependency links. `preflight` is read-only: it
+creates no directories, lock, operation state, audit record, link, or
+Mesh/config file.
 Both commands reject path aliases, traversal, symlink escapes, dirty
 functional files, stale Git HEAD, and a candidate whose manifest does not
 match the reviewed artifact.
@@ -215,12 +237,13 @@ the explicit live and candidate Mesh hashes, the fixed runtime, repository,
 candidate config, and `--require-remote-codex-control`:
 
 ```bash
-bun run release:workflow -- activate \
+"$runtime_bun" run release:workflow -- activate \
+  --base-path "$agentlink_base" \
   --candidate "$candidate" --active "$active" --git-root "$PWD" \
-  --reviewed-commit "$reviewed_commit" --operation-id <operation-id> \
+  --reviewed-commit "$reviewed_commit" --operation-id "$operation_id" \
   --executor hardened-kmac \
-  --runtime-bun "$HOME/Library/Application Support/AgentLink/runtime/bun-1.3.14/bin/bun" \
-  --candidate-config "$HOME/Library/Application Support/AgentLink/prepared/<stage>/mesh.json" \
+  --runtime-bun "$runtime_bun" \
+  --candidate-config "$prepared/mesh.json" \
   --expected-live-mesh-sha256 <live-hash> \
   --expected-candidate-mesh-sha256 <candidate-hash> \
   --repository-root "$PWD" --require-remote-codex-control --json
