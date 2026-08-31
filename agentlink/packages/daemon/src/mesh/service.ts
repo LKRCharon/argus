@@ -562,15 +562,22 @@ export class MeshService {
         const workspace = payload.baseArtifact
           ? this.artifacts.materialize(task.taskId, payload.baseArtifact)
           : undefined;
-        // `run()` registers the child synchronously before returning its
-        // promise. Publish "running" only after that point so an immediate
-        // cancel request cannot race ahead of the runner registry.
-        const runnerPromise = this.runners.run(task, workspace?.workspace);
-        await this.emitProgress(task, "running", "任务正在目标设备执行", onProgress);
-        const runner = await runnerPromise;
-        const artifact = workspace && payload.baseArtifact
-          ? this.artifacts.captureResult(task.taskId, payload.baseArtifact, workspace.workspace)
-          : undefined;
+        let runner: MeshRunnerResult;
+        let artifact: ReturnType<MeshArtifactStore["captureResult"]> | undefined;
+        try {
+          // `run()` registers the child synchronously before returning its
+          // promise. Publish "running" only after that point so an immediate
+          // cancel request cannot race ahead of the runner registry.
+          const runnerPromise = this.runners.run(task, workspace?.workspace);
+          await this.emitProgress(task, "running", "任务正在目标设备执行", onProgress);
+          runner = await runnerPromise;
+          artifact = workspace && payload.baseArtifact
+            ? this.artifacts.captureResult(task.taskId, payload.baseArtifact, workspace.workspace)
+            : undefined;
+        } catch (error) {
+          if (workspace) this.artifacts.discardWorkspace(task.taskId);
+          throw error;
+        }
         const result = this.result(
           task,
           runner.status === "completed" ? "completed" : runner.status,

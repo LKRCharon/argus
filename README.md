@@ -211,11 +211,15 @@ the file is outside the default AgentLink state directory. A target resource
 must name its owner node, absolute local root, trusted groups, and any status or
 task runner. Runner executables and fixed environment values remain local.
 
-For KMac, the documented preparation flow creates the workspace status runner
-and the fixed `kmac-github-status-v1` runner. The latter invokes only GitHub's
-token-free structured status operation, strips process credential overrides,
-and returns the safe states `authenticated`, `unauthenticated`, `unavailable`,
-or `error`. See
+For KMac, the documented preparation flow creates the workspace status runner,
+the fixed `kmac-github-status-v1` runner, and the fixed `kmac-codex-v1` task
+runner. The GitHub runner invokes only GitHub's token-free structured status
+operation, strips process credential overrides, and returns the safe states
+`authenticated`, `unauthenticated`, `unavailable`, or `error`. The Codex runner
+requires a verified structured base artifact and target-owner approval,
+executes only in a fresh task-scoped workspace below the fixed AgentLink state
+root, and returns a content-addressed changed/deleted manifest bound to the
+task and base artifact. See
 [`agentlink/deploy/KMAC_READINESS.md`](agentlink/deploy/KMAC_READINESS.md).
 
 ## CLI and use cases

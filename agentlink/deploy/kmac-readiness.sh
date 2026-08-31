@@ -9,8 +9,11 @@ PREPARED_ROOT="$AGENTLINK_BASE/prepared/${ARGUS_BACKUP_TAG:-argus-infra-stage1-2
 EXPECTED_REMOTE="git@github-argus-clash:LKRCharon/argus.git"
 EXPECTED_FETCH='+refs/heads/*:refs/remotes/origin/*'
 readonly GITHUB_STATUS_RUNNER_ID="kmac-github-status-v1"
+readonly CODEX_TASK_RUNNER_ID="kmac-codex-v1"
 readonly EXPECTED_RUNTIME_BUN="$AGENTLINK_BASE/runtime/bun-1.3.14/bin/bun"
 readonly EXPECTED_GITHUB_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+readonly EXPECTED_CODEX_BIN="$HOME/.local/bin/codex"
+readonly EXPECTED_CODEX_PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 failures=0
 warnings=0
 
@@ -168,7 +171,7 @@ else
   fail LIVE_REMOTE_CODEX_CONTROL
 fi
 if [[ -f "$prepared_mesh" ]]; then
-  prepared_status="$(CONFIG="$prepared_mesh" EXPECTED_RESOURCE_ID="workspace:kmac-m4" EXPECTED_GITHUB_STATUS_RUNNER_ID="$GITHUB_STATUS_RUNNER_ID" EXPECTED_RUNTIME_BUN="$EXPECTED_RUNTIME_BUN" EXPECTED_GITHUB_HOME="$HOME" EXPECTED_GITHUB_PATH="$EXPECTED_GITHUB_PATH" EXPECTED_RELEASE_ROOT="$AGENTLINK_BASE/releases/" /opt/homebrew/bin/bun -e '
+  prepared_status="$(CONFIG="$prepared_mesh" EXPECTED_RESOURCE_ID="workspace:kmac-m4" EXPECTED_GITHUB_STATUS_RUNNER_ID="$GITHUB_STATUS_RUNNER_ID" EXPECTED_RUNTIME_BUN="$EXPECTED_RUNTIME_BUN" EXPECTED_GITHUB_HOME="$HOME" EXPECTED_GITHUB_PATH="$EXPECTED_GITHUB_PATH" EXPECTED_CODEX_BIN="$EXPECTED_CODEX_BIN" EXPECTED_CODEX_PATH="$EXPECTED_CODEX_PATH" EXPECTED_ARTIFACT_ROOT="$AGENTLINK_BASE/state/mesh-workspaces" EXPECTED_RELEASE_ROOT="$AGENTLINK_BASE/releases/" /opt/homebrew/bin/bun -e '
     try {
       const c = await Bun.file(process.env.CONFIG).json();
       const resources = Array.isArray(c?.resources) ? c.resources : [];
@@ -176,6 +179,7 @@ if [[ -f "$prepared_mesh" ]]; then
       const resource = resources.find((entry) => entry?.id === process.env.EXPECTED_RESOURCE_ID);
       const runner = runners.find((entry) => entry?.id === "kmac-status-v1");
       const github = runners.find((entry) => entry?.id === process.env.EXPECTED_GITHUB_STATUS_RUNNER_ID);
+      const codex = runners.find((entry) => entry?.id === "kmac-codex-v1");
       const statusArg = Array.isArray(runner?.fixedArgs) && runner.fixedArgs.length === 1
         && typeof runner.fixedArgs[0] === "string" ? runner.fixedArgs[0] : "";
       const statusMarker = "/deploy/kmac-workspace-status.ts";
@@ -196,7 +200,21 @@ if [[ -f "$prepared_mesh" ]]; then
         && !Array.isArray(githubEnv)
         && Object.keys(githubEnv).length === Object.keys(expectedEnv).length
         && Object.entries(expectedEnv).every(([key, value]) => githubEnv[key] === value);
-      const valid = resource?.id === process.env.EXPECTED_RESOURCE_ID
+      const codexEnv = codex?.env;
+      const expectedCodexEnv = {
+        HOME: process.env.EXPECTED_GITHUB_HOME,
+        PATH: process.env.EXPECTED_CODEX_PATH,
+      };
+      const codexEnvMatches = codexEnv !== null
+        && typeof codexEnv === "object"
+        && !Array.isArray(codexEnv)
+        && Object.keys(codexEnv).length === Object.keys(expectedCodexEnv).length
+        && Object.entries(expectedCodexEnv).every(([key, value]) => codexEnv[key] === value);
+      const codexArgs = ["exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "--color", "never", "-"];
+      const codexCapabilities = ["structured-artifact-input", "task-scoped-workspace", "changed-file-manifest"];
+      const codexResultKeys = ["runnerId", "exitCode", "signal", "timedOut", "durationMs", "resultSummary", "integrity", "baseArtifactId", "resultArtifactId", "resultArtifactSha256", "changedFiles", "deletedFiles"];
+      const valid = c?.artifactRoot === process.env.EXPECTED_ARTIFACT_ROOT
+        && resource?.id === process.env.EXPECTED_RESOURCE_ID
         && resource?.statusRunnerId === "kmac-status-v1"
         && resource?.githubStatusRunnerId === process.env.EXPECTED_GITHUB_STATUS_RUNNER_ID
         && runner?.executable === process.env.EXPECTED_RUNTIME_BUN
@@ -219,7 +237,25 @@ if [[ -f "$prepared_mesh" ]]; then
         && github.workspaceCapabilities.length === 1
         && github.workspaceCapabilities[0] === "read-only-status"
         && github?.exposeDebugOutput === false
-        && githubEnvMatches;
+        && githubEnvMatches
+        && codex?.resourceId === process.env.EXPECTED_RESOURCE_ID
+        && codex?.purpose === "task"
+        && codex?.executable === process.env.EXPECTED_CODEX_BIN
+        && JSON.stringify(codex?.fixedArgs) === JSON.stringify(codexArgs)
+        && codex?.workdir === "."
+        && codex?.maxRuntimeMs === 900000
+        && codex?.maxOutputBytes === 262144
+        && codex?.approvalRequired === true
+        && codex?.allowDynamicArgs === false
+        && codex?.allowInput === true
+        && codex?.inputSchema?.type === "string"
+        && codex?.inputSchema?.maxLength === 1048576
+        && codex?.resultSchema?.additionalProperties === false
+        && JSON.stringify(codex?.resultSchema?.required) === JSON.stringify(codexResultKeys)
+        && JSON.stringify(Object.keys(codex?.resultSchema?.properties ?? {})) === JSON.stringify(codexResultKeys)
+        && JSON.stringify(codex?.workspaceCapabilities) === JSON.stringify(codexCapabilities)
+        && codex?.exposeDebugOutput === false
+        && codexEnvMatches;
       console.log(valid ? "ready" : "invalid");
     } catch {
       console.log("invalid");

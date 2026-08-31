@@ -24,6 +24,7 @@ readonly PEER_NAME="${ARGUS_PEER_NAME:-k Mac}"
 readonly RESOURCE_ID="workspace:kmac-m4"
 readonly RUNNER_ID="kmac-status-v1"
 readonly GITHUB_STATUS_RUNNER_ID="kmac-github-status-v1"
+readonly CODEX_TASK_RUNNER_ID="kmac-codex-v1"
 readonly GATES_MODULE="$SCRIPT_DIR/kmac-activation-gates.ts"
 readonly WATCHER_READINESS_ATTEMPTS=10
 readonly WATCHER_READINESS_INTERVAL_SECONDS=1
@@ -181,6 +182,7 @@ verify_candidate_config() {
   env CONFIG="$CANDIDATE_CONFIG" RELEASE="$CANDIDATE_RELEASE" GATES_MODULE="$GATES_MODULE" \
     EXPECTED_RUNTIME_BUN="$BUN" \
     EXPECTED_STATE_DIR="$base_canonical/state" \
+    EXPECTED_ARTIFACT_ROOT="$base_canonical/state/mesh-workspaces" \
     EXPECTED_CODEX_BIN="$HOME/.local/bin/codex" \
     EXPECTED_STATUS_PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
     EXPECTED_GITHUB_STATUS_RUNNER_ID="$GITHUB_STATUS_RUNNER_ID" \
@@ -195,6 +197,7 @@ verify_candidate_config() {
     const runner = parsed.runners?.find((entry) => entry.id === "kmac-status-v1");
     const githubRunnerId = process.env.EXPECTED_GITHUB_STATUS_RUNNER_ID;
     const githubRunner = parsed.runners?.find((entry) => entry.id === githubRunnerId);
+    const codexRunner = parsed.runners?.find((entry) => entry.id === "kmac-codex-v1");
     const expectedEnv = {
       PATH: process.env.EXPECTED_STATUS_PATH,
       ARGUS_STATUS_STATE_DIR: process.env.EXPECTED_STATE_DIR,
@@ -214,7 +217,19 @@ verify_candidate_config() {
     const githubEnvMatches = githubEnv !== undefined
       && Object.keys(githubEnv).length === Object.keys(expectedGithubEnv).length
       && Object.entries(expectedGithubEnv).every(([key, value]) => githubEnv[key] === value);
-    if (resource?.statusRunnerId !== "kmac-status-v1"
+    const expectedCodexEnv = {
+      HOME: process.env.EXPECTED_GITHUB_HOME,
+      PATH: process.env.EXPECTED_STATUS_PATH,
+    };
+    const codexEnv = codexRunner?.env;
+    const codexEnvMatches = codexEnv !== undefined
+      && Object.keys(codexEnv).length === Object.keys(expectedCodexEnv).length
+      && Object.entries(expectedCodexEnv).every(([key, value]) => codexEnv[key] === value);
+    const codexArgs = ["exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "--color", "never", "-"];
+    const codexCapabilities = ["structured-artifact-input", "task-scoped-workspace", "changed-file-manifest"];
+    const codexResultKeys = ["runnerId", "exitCode", "signal", "timedOut", "durationMs", "resultSummary", "integrity", "baseArtifactId", "resultArtifactId", "resultArtifactSha256", "changedFiles", "deletedFiles"];
+    if (parsed.artifactRoot !== process.env.EXPECTED_ARTIFACT_ROOT
+      || resource?.statusRunnerId !== "kmac-status-v1"
       || resource?.githubStatusRunnerId !== githubRunnerId
       || runner?.resourceId !== "workspace:kmac-m4"
       || runner?.purpose !== "status"
@@ -243,8 +258,26 @@ verify_candidate_config() {
       || githubRunner?.workspaceCapabilities?.length !== 1
       || githubRunner.workspaceCapabilities[0] !== "read-only-status"
       || githubRunner?.exposeDebugOutput !== false
+      || codexRunner?.resourceId !== "workspace:kmac-m4"
+      || codexRunner?.purpose !== "task"
+      || codexRunner?.executable !== process.env.EXPECTED_CODEX_BIN
+      || JSON.stringify(codexRunner?.fixedArgs) !== JSON.stringify(codexArgs)
+      || codexRunner?.workdir !== "."
+      || codexRunner?.maxRuntimeMs !== 900000
+      || codexRunner?.maxOutputBytes !== 262144
+      || codexRunner?.approvalRequired !== true
+      || codexRunner?.allowDynamicArgs !== false
+      || codexRunner?.allowInput !== true
+      || codexRunner?.inputSchema?.type !== "string"
+      || codexRunner?.inputSchema?.maxLength !== 1048576
+      || codexRunner?.resultSchema?.additionalProperties !== false
+      || JSON.stringify(codexRunner?.resultSchema?.required) !== JSON.stringify(codexResultKeys)
+      || JSON.stringify(Object.keys(codexRunner?.resultSchema?.properties ?? {})) !== JSON.stringify(codexResultKeys)
+      || JSON.stringify(codexRunner?.workspaceCapabilities) !== JSON.stringify(codexCapabilities)
+      || codexRunner?.exposeDebugOutput !== false
       || !envMatches
       || !githubEnvMatches
+      || !codexEnvMatches
       || !remoteCodexControlIsEnabled(parsed)
       || runner?.fixedArgs?.[0] !== process.env.RELEASE + "/deploy/kmac-workspace-status.ts") process.exit(1);
   ' >/dev/null
@@ -263,7 +296,7 @@ controller_verify() {
       status="${snapshot%% *}"; seen="${snapshot##* }"
       if [[ "$status" == online && "$seen" =~ ^[0-9]+$ ]] && (( seen > minimum_seen )); then
         if /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 seoul \
-            "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/refresh\",{method:\"POST\"}); if(!r.ok) process.exit(1); const refresh=await r.json(); const d=await fetch(\"$CONTROLLER_URL/api/discovery\"); if(!d.ok) process.exit(1); const o=await d.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); const resource=(o.resources??[]).find((x)=>x.id===\"$RESOURCE_ID\"); const status=resource?.status; const github=status?.github; const githubObserved=github!==null && typeof github===\"object\" && [\"authenticated\",\"unauthenticated\",\"unavailable\",\"error\"].includes(github.status) && typeof github.checkedAt===\"string\"; const githubLogin=typeof github?.login===\"string\" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(github.login); const githubAuthenticated=github?.status===\"authenticated\" && githubLogin && (github.source===\"keychain\" || github.source===\"config\") && !Object.hasOwn(github,\"errorCode\"); const requireGithubAuth=\"$REQUIRE_GITHUB_AUTH\"===\"true\"; if(p?.status!==\"online\" || !Number.isInteger(p.lastSeen) || p.lastSeen<=${minimum_seen} || resource?.statusRunnerId!==\"$RUNNER_ID\" || resource?.githubStatusRunnerId!==\"$GITHUB_STATUS_RUNNER_ID\" || status?.state!==\"ready\" || status?.workspace?.workspaceRevision!==\"$REVIEWED_COMMIT\" || status?.workspace?.remoteCodexControl!==true || !githubObserved || (requireGithubAuth && !githubAuthenticated)) process.exit(1); process.stdout.write(\"ok\\n\")'" \
+            "/home/ubuntu/.bun/bin/bun -e 'const r=await fetch(\"$CONTROLLER_URL/api/refresh\",{method:\"POST\"}); if(!r.ok) process.exit(1); const refresh=await r.json(); const d=await fetch(\"$CONTROLLER_URL/api/discovery\"); if(!d.ok) process.exit(1); const o=await d.json(); const p=(o.peers??[]).find((x)=>x.deviceName===\"$PEER_NAME\"); const resource=(o.resources??[]).find((x)=>x.id===\"$RESOURCE_ID\"); const taskRunner=resource?.runners?.find((x)=>x.runnerId===\"$CODEX_TASK_RUNNER_ID\"); const expectedCapabilities=[\"structured-artifact-input\",\"task-scoped-workspace\",\"changed-file-manifest\"]; const status=resource?.status; const github=status?.github; const githubObserved=github!==null && typeof github===\"object\" && [\"authenticated\",\"unauthenticated\",\"unavailable\",\"error\"].includes(github.status) && typeof github.checkedAt===\"string\"; const githubLogin=typeof github?.login===\"string\" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(github.login); const githubAuthenticated=github?.status===\"authenticated\" && githubLogin && (github.source===\"keychain\" || github.source===\"config\") && !Object.hasOwn(github,\"errorCode\"); const requireGithubAuth=\"$REQUIRE_GITHUB_AUTH\"===\"true\"; if(p?.status!==\"online\" || !Number.isInteger(p.lastSeen) || p.lastSeen<=${minimum_seen} || resource?.statusRunnerId!==\"$RUNNER_ID\" || resource?.githubStatusRunnerId!==\"$GITHUB_STATUS_RUNNER_ID\" || !resource?.runnerIds?.includes(\"$CODEX_TASK_RUNNER_ID\") || taskRunner?.purpose!==\"task\" || taskRunner?.approvalRequired!==true || JSON.stringify(taskRunner?.workspaceCapabilities)!==JSON.stringify(expectedCapabilities) || status?.state!==\"ready\" || status?.workspace?.workspaceRevision!==\"$REVIEWED_COMMIT\" || status?.workspace?.remoteCodexControl!==true || !githubObserved || (requireGithubAuth && !githubAuthenticated)) process.exit(1); process.stdout.write(\"ok\\n\")'" \
             >/dev/null 2>/dev/null; then
           controller_verify_seen="$seen"
           return 0

@@ -545,6 +545,46 @@ describe.serial("MeshService", () => {
     })).toThrow("不受信任");
   });
 
+  test("rejects partial or misleading artifact capability declarations", () => {
+    const base = mkdtempSync(join(tmpdir(), "argus-artifact-capabilities-"));
+    const root = join(base, "workspace");
+    mkdirSync(root, { recursive: true });
+    tempRoots.push(base);
+    const allCapabilities = [
+      "structured-artifact-input",
+      "task-scoped-workspace",
+      "changed-file-manifest",
+    ] as const;
+    const construct = (workspaceCapabilities: Array<typeof allCapabilities[number]>) => () => new MeshService({
+      nodeId: "node-b",
+      trustedGroups: new Set(["group-alpha"]),
+      trustedRequesters: new Set(["node-a"]),
+      allowedRoots: [root],
+      auditSink: () => {},
+      signingKey: generateMeshSigningKeyPair(),
+      resources: [{
+        id: "workspace:fixture",
+        ownerNodeId: "node-b",
+        kind: "directory",
+        displayName: "workspace fixture",
+        root,
+      }],
+      runners: [{
+        id: "workspace:codex",
+        resourceId: "workspace:fixture",
+        executable: process.execPath,
+        workspaceCapabilities,
+      }],
+    });
+
+    for (const omitted of allCapabilities) {
+      expect(construct(allCapabilities.filter((capability) => capability !== omitted)))
+        .toThrow("必须完整声明");
+    }
+    expect(construct([...allCapabilities])).not.toThrow();
+    expect(construct([...allCapabilities, "task-scoped-workspace"])).toThrow("不允许重复");
+  });
+
   test("separates resultSummary from debug output and composes runner and service truncation", async () => {
     const base = mkdtempSync(join(tmpdir(), "argus-runner-result-"));
     const root = join(base, "workspace");

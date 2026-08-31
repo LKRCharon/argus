@@ -111,6 +111,14 @@ strips credential and configuration overrides, and returns only `status`,
 paths, fixed arguments, environment, and arbitrary commands remain target-local
 and are not published by discovery.
 
+The prepared KMac configuration also registers `kmac-codex-v1` as a task
+runner. It accepts no dynamic arguments, accepts only a bounded prompt on stdin,
+and uses a fixed `codex exec` command with the `workspace-write` sandbox. It
+requires target-owner approval plus a verified structured base artifact; Mesh
+selects a fresh task-owned cwd below the fixed AgentLink state root, removes its
+transient workspace after capture, and produces the changed/deleted manifest
+after the child process group has exited.
+
 Resource discovery publishes `allowedGroupIds`, `defaultGroupId` only when a
 single trusted group is available, `allowedOperations`, and safe runner metadata.
 The control API returns structured `GROUP_REQUIRED` and `GROUP_NOT_ALLOWED`

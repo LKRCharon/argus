@@ -1,6 +1,16 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -45,7 +55,7 @@ function baseArtifact(files: MeshArtifactFile[]): MeshBaseArtifactManifest {
 
 describe("Mesh structured artifacts", () => {
   test("materializes only relative canonical POSIX file paths", () => {
-    for (const path of ["../escape.txt", "/absolute.txt", "C:/drive.txt", "dir\\windows.txt", "a/./b"]) {
+    for (const path of ["../escape.txt", "/absolute.txt", "C:/drive.txt", "dir\\windows.txt", "a/./b", "nul\0byte"]) {
       const manifest = baseArtifact([artifactFile("safe.txt", "ok")]);
       const forged = { ...manifest, files: [{ ...manifest.files[0], path }] };
       expect(() => validateBaseArtifactManifest(forged)).toThrow();
@@ -64,8 +74,19 @@ describe("Mesh structured artifacts", () => {
     const wrongFileHash = baseArtifact([{ ...file, sha256: "0".repeat(64) }]);
     expect(() => validateBaseArtifactManifest(wrongFileHash)).toThrow("file hash mismatch");
 
+    const wrongFileSize = baseArtifact([{ ...file, size: file.size + 1 }]);
+    expect(() => validateBaseArtifactManifest(wrongFileSize)).toThrow("file size mismatch");
+
     const wrongOverallHash = { ...baseArtifact([file]), sha256: "0".repeat(64) };
     expect(() => validateBaseArtifactManifest(wrongOverallHash)).toThrow("manifest hash mismatch");
+
+    const wrongArtifactId = { ...baseArtifact([file]), artifactId: `sha256:${"0".repeat(64)}` };
+    expect(() => validateBaseArtifactManifest(wrongArtifactId)).toThrow("manifest hash mismatch");
+
+    expect(() => validateBaseArtifactManifest(baseArtifact([
+      artifactFile("src", "file"),
+      artifactFile("src/main.ts", "nested"),
+    ]))).toThrow("conflicts with a directory");
   });
 
   test("enforces file count, single-file, and total-size limits", () => {
@@ -103,17 +124,67 @@ describe("Mesh structured artifacts", () => {
     writeFileSync(join(workspace.workspace, "new.txt"), "new\n");
     const result = store.captureResult("task-artifact-a", base, workspace.workspace);
     expect(result.changed.map((file) => file.path)).toEqual(["new.txt", "README.md"].sort());
+    expect(existsSync(workspace.workspace)).toBe(false);
+    expect(readdirSync(workspace.taskDir).sort()).toEqual(["base.json", "result.json"]);
     expect(store.readResult("task-artifact-a", result.artifactId)).toEqual(result);
     expect(() => store.readResult("task-artifact-b", result.artifactId)).toThrow("not found");
     expect(() => store.readResult("task-artifact-a", `sha256:${"0".repeat(64)}`)).toThrow("does not match task");
   });
 
   test("rejects a symbolic link created inside the isolated workspace", () => {
-    const store = new MeshArtifactStore(tempRoot());
+    const root = tempRoot();
+    const store = new MeshArtifactStore(root);
     const base = baseArtifact([artifactFile("safe.txt", "safe")]);
     const workspace = store.materialize("task-artifact-link", base);
     symlinkSync("safe.txt", join(workspace.workspace, "link.txt"));
     expect(() => store.captureResult("task-artifact-link", base, workspace.workspace)).toThrow("symbolic link");
+    expect(existsSync(join(root, "task-artifact-link"))).toBe(false);
+    expect(readdirSync(root)).toEqual([]);
+  });
+
+  test("leaves no task workspace after base validation or materialization failure", () => {
+    const root = tempRoot();
+    const invalidStore = new MeshArtifactStore(root);
+    const file = artifactFile("safe.txt", "safe");
+    const invalid = { ...baseArtifact([file]), sha256: "0".repeat(64) };
+    expect(() => invalidStore.materialize("task-invalid-base", invalid)).toThrow("manifest hash mismatch");
+    expect(readdirSync(root)).toEqual([]);
+
+    const partialStore = new MeshArtifactStore(root, {
+      afterMaterializedFileWrite: () => {
+        throw new Error("injected materialization failure");
+      },
+    });
+    expect(() => partialStore.materialize("task-partial-base", baseArtifact([file])))
+      .toThrow("injected materialization failure");
+    expect(existsSync(join(root, "task-partial-base"))).toBe(false);
+    expect(readdirSync(root)).toEqual([]);
+  });
+
+  test("rejects a file replaced by a symlink in the capture read window", () => {
+    const root = tempRoot();
+    const outside = join(tempRoot(), "outside-file-race");
+    mkdirSync(outside);
+    const outsideFile = join(outside, "outside-secret.txt");
+    writeFileSync(outsideFile, "must-never-be-captured");
+    let replaced = false;
+    const store = new MeshArtifactStore(root, {
+      beforeFileRead: (path) => {
+        if (replaced) return;
+        replaced = true;
+        renameSync(path, `${path}.owned`);
+        symlinkSync(outsideFile, path);
+      },
+    });
+    const base = baseArtifact([artifactFile("safe.txt", "safe")]);
+    const workspace = store.materialize("task-artifact-file-race", base);
+
+    expect(() => store.captureResult("task-artifact-file-race", base, workspace.workspace))
+      .toThrow("changed or is unreadable");
+    expect(replaced).toBe(true);
+    expect(readFileSync(outsideFile, "utf8")).toBe("must-never-be-captured");
+    expect(existsSync(join(root, "task-artifact-file-race"))).toBe(false);
+    expect(readdirSync(root)).toEqual([]);
   });
 
   test("rejects whole-workspace replacement without reading outside files", () => {

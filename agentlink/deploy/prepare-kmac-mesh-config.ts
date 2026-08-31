@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   parseMeshConfig,
   type MeshConfig,
@@ -14,7 +16,21 @@ import {
 import { GITHUB_STATUS_RUNNER_ID } from "./kmac-github-status";
 
 const RESOURCE_ID = "workspace:kmac-m4";
-const RUNNER_ID = "kmac-status-v1";
+const STATUS_RUNNER_ID = "kmac-status-v1";
+export const CODEX_TASK_RUNNER_ID = "kmac-codex-v1";
+export const CODEX_TASK_FIXED_ARGS = [
+  "exec",
+  "--sandbox", "workspace-write",
+  "--skip-git-repo-check",
+  "--ephemeral",
+  "--color", "never",
+  "-",
+] as const;
+export const CODEX_TASK_WORKSPACE_CAPABILITIES = [
+  "structured-artifact-input",
+  "task-scoped-workspace",
+  "changed-file-manifest",
+] as const;
 
 export interface KmacStatusRunnerOptions {
   runtimeBun: string;
@@ -31,7 +47,15 @@ function requireAbsolute(value: string, label: string): void {
   if (!isAbsolute(value)) throw new Error(`${label} must be an absolute path`);
 }
 
-export function withKmacStatusRunner(
+function pathsOverlap(left: string, right: string): boolean {
+  const contains = (root: string, candidate: string): boolean => {
+    const rel = relative(resolve(root), resolve(candidate));
+    return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+  };
+  return contains(left, right) || contains(right, left);
+}
+
+export function withKmacRunners(
   config: MeshConfig,
   options: KmacStatusRunnerOptions,
 ): MeshConfig {
@@ -51,17 +75,25 @@ export function withKmacStatusRunner(
 
   const resource = config.resources.find((entry) => entry.id === RESOURCE_ID);
   if (!resource) throw new Error(`missing resource ${RESOURCE_ID}`);
-  const existing = config.runners?.find((runner) => runner.id === RUNNER_ID);
+  const artifactRoot = join(options.stateDir, "mesh-workspaces");
+  if (pathsOverlap(artifactRoot, resource.root)) {
+    throw new Error("artifact workspace root must be isolated from the registered resource");
+  }
+  const existing = config.runners?.find((runner) => runner.id === STATUS_RUNNER_ID);
   if (existing && (existing.resourceId !== RESOURCE_ID || existing.purpose !== "status")) {
-    throw new Error(`${RUNNER_ID} is already bound to another capability`);
+    throw new Error(`${STATUS_RUNNER_ID} is already bound to another capability`);
   }
   const existingGithub = config.runners?.find((runner) => runner.id === GITHUB_STATUS_RUNNER_ID);
   if (existingGithub && (existingGithub.resourceId !== RESOURCE_ID || existingGithub.purpose !== "status")) {
     throw new Error(`${GITHUB_STATUS_RUNNER_ID} is already bound to another capability`);
   }
+  const existingCodex = config.runners?.find((runner) => runner.id === CODEX_TASK_RUNNER_ID);
+  if (existingCodex && (existingCodex.resourceId !== RESOURCE_ID || existingCodex.purpose !== "task")) {
+    throw new Error(`${CODEX_TASK_RUNNER_ID} is already bound to another capability`);
+  }
 
   const runner = {
-    id: RUNNER_ID,
+    id: STATUS_RUNNER_ID,
     resourceId: RESOURCE_ID,
     purpose: "status" as const,
     executable: options.runtimeBun,
@@ -132,14 +164,77 @@ export function withKmacStatusRunner(
     workspaceCapabilities: ["read-only-status" as const],
     exposeDebugOutput: false,
   };
+  const codexRunner = {
+    id: CODEX_TASK_RUNNER_ID,
+    resourceId: RESOURCE_ID,
+    purpose: "task" as const,
+    executable: options.codexLauncher,
+    fixedArgs: [...CODEX_TASK_FIXED_ARGS],
+    workdir: ".",
+    env: {
+      HOME: githubHome,
+      PATH: `${dirname(options.codexLauncher)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+    },
+    maxRuntimeMs: 15 * 60_000,
+    maxOutputBytes: 256 * 1024,
+    allowDynamicArgs: false,
+    allowInput: true,
+    title: "KMac Codex isolated artifact task",
+    inputSchema: { type: "string", maxLength: 1_048_576 },
+    resultSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        runnerId: { const: CODEX_TASK_RUNNER_ID },
+        exitCode: { type: ["integer", "null"] },
+        signal: { type: ["string", "null"] },
+        timedOut: { type: "boolean" },
+        durationMs: { type: "integer", minimum: 0 },
+        resultSummary: { type: "string" },
+        integrity: { type: "object" },
+        baseArtifactId: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+        resultArtifactId: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+        resultArtifactSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        changedFiles: { type: "integer", minimum: 0, maximum: 256 },
+        deletedFiles: { type: "integer", minimum: 0, maximum: 256 },
+      },
+      required: [
+        "runnerId",
+        "exitCode",
+        "signal",
+        "timedOut",
+        "durationMs",
+        "resultSummary",
+        "integrity",
+        "baseArtifactId",
+        "resultArtifactId",
+        "resultArtifactSha256",
+        "changedFiles",
+        "deletedFiles",
+      ],
+    },
+    approvalRequired: true,
+    workspaceCapabilities: [...CODEX_TASK_WORKSPACE_CAPABILITIES],
+    exposeDebugOutput: false,
+  };
 
   return parseMeshConfig({
     ...config,
     ...(options.enableRemoteCodexControl === true ? { remoteCodexControl: true } : {}),
+    artifactRoot,
     resources: config.resources.map((entry) => entry.id === RESOURCE_ID
-      ? { ...entry, statusRunnerId: RUNNER_ID, githubStatusRunnerId: GITHUB_STATUS_RUNNER_ID }
+      ? { ...entry, statusRunnerId: STATUS_RUNNER_ID, githubStatusRunnerId: GITHUB_STATUS_RUNNER_ID }
       : entry),
-    runners: [...(config.runners ?? []).filter((entry) => entry.id !== RUNNER_ID && entry.id !== GITHUB_STATUS_RUNNER_ID), runner, githubRunner],
+    runners: [
+      ...(config.runners ?? []).filter((entry) => ![
+        STATUS_RUNNER_ID,
+        GITHUB_STATUS_RUNNER_ID,
+        CODEX_TASK_RUNNER_ID,
+      ].includes(entry.id)),
+      runner,
+      githubRunner,
+      codexRunner,
+    ],
   });
 }
 
@@ -162,7 +257,7 @@ function main(args: string[]): void {
   requireAbsolute(output, "output");
   const source = readFileSync(input, "utf8");
   const config = parseMeshConfig(JSON.parse(source));
-  const prepared = withKmacStatusRunner(config, {
+  const prepared = withKmacRunners(config, {
     runtimeBun: flag(args, "--runtime-bun"),
     statusScript: flag(args, "--status-script"),
     stateDir: flag(args, "--state-dir"),
@@ -175,14 +270,21 @@ function main(args: string[]): void {
   });
   const serialized = `${JSON.stringify(prepared, null, 2)}\n`;
   const temporary = `${output}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, serialized, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  chmodSync(temporary, 0o600);
-  renameSync(temporary, output);
+  let published = false;
+  try {
+    writeFileSync(temporary, serialized, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    chmodSync(temporary, 0o600);
+    renameSync(temporary, output);
+    published = true;
+  } finally {
+    if (!published && existsSync(temporary)) unlinkSync(temporary);
+  }
   process.stdout.write(`${JSON.stringify({
     ok: true,
     resourceId: RESOURCE_ID,
-    statusRunnerId: RUNNER_ID,
+    statusRunnerId: STATUS_RUNNER_ID,
     githubStatusRunnerId: GITHUB_STATUS_RUNNER_ID,
+    taskRunnerId: CODEX_TASK_RUNNER_ID,
     remoteCodexControl: prepared.remoteCodexControl,
     inputSha256: sha256(source),
     outputSha256: sha256(serialized),

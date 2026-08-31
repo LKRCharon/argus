@@ -197,12 +197,20 @@ prepared="$agentlink_base/prepared/$release_id"
   --enable-remote-codex-control
 ```
 
-The preparer binds `workspace:kmac-m4` to both `kmac-status-v1` and
-`kmac-github-status-v1`. Both use `purpose: "status"`, local approval
-disabled, dynamic arguments and stdin disabled, and only the
-`read-only-status` capability. The final flag is an explicit candidate-only
-opt-in; omitting it preserves `remoteCodexControl: false`. No new task runner
-or shell surface is created.
+The preparer binds `workspace:kmac-m4` to `kmac-status-v1`,
+`kmac-github-status-v1`, and `kmac-codex-v1`. The first two use
+`purpose: "status"`, local approval disabled, dynamic arguments and stdin
+disabled, and only the `read-only-status` capability. The Codex runner is a
+fixed `codex exec` invocation: dynamic arguments are disabled, the prompt is
+accepted only through bounded stdin, target-owner approval is required, and
+the runner advertises `structured-artifact-input`, `task-scoped-workspace`,
+and `changed-file-manifest`. Mesh therefore requires a verified base artifact,
+executes Codex in a fresh task-owned workspace below
+`$agentlink_base/state/mesh-workspaces` rather than the registered checkout,
+removes transient workspace/capture directories on normal success or failure,
+and captures a task-bound changed/deleted result manifest. The final flag is an
+explicit candidate-only opt-in; omitting it preserves `remoteCodexControl:
+false`.
 
 ## Phase-three release workflow
 

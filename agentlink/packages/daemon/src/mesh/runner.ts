@@ -24,6 +24,11 @@ const MAX_RUNTIME_MS = 24 * 60 * 60_000;
 const DEFAULT_OUTPUT_BYTES = 256 * 1024;
 const MAX_OUTPUT_BYTES = 1 * 1024 * 1024;
 const MAX_RESULT_SUMMARY_BYTES = 32 * 1024;
+const ARTIFACT_WORKSPACE_CAPABILITIES = [
+  "structured-artifact-input",
+  "task-scoped-workspace",
+  "changed-file-manifest",
+] as const;
 
 export interface MeshRunnerSpec {
   id: string;
@@ -203,6 +208,21 @@ export class MeshRunnerRegistry {
     const workspaceCapabilities = [...(spec.workspaceCapabilities ?? (purpose === "status"
       ? ["read-only-status" as const]
       : []))];
+    if (new Set(workspaceCapabilities).size !== workspaceCapabilities.length) {
+      throw new Error("runner workspaceCapabilities 不允许重复");
+    }
+    const artifactCapabilityCount = ARTIFACT_WORKSPACE_CAPABILITIES
+      .filter((capability) => workspaceCapabilities.includes(capability)).length;
+    if (artifactCapabilityCount !== 0 && artifactCapabilityCount !== ARTIFACT_WORKSPACE_CAPABILITIES.length) {
+      throw new Error("artifact runner 必须完整声明结构化输入、隔离 workspace 和结果 manifest");
+    }
+    if (purpose === "status" && (workspaceCapabilities.length !== 1
+      || workspaceCapabilities[0] !== "read-only-status")) {
+      throw new Error("status runner 只能声明 read-only-status capability");
+    }
+    if (purpose === "task" && workspaceCapabilities.includes("read-only-status")) {
+      throw new Error("task runner 不允许声明 read-only-status capability");
+    }
     this.runners.set(spec.id, {
       id: spec.id,
       resourceId: spec.resourceId,

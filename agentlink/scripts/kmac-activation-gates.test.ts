@@ -95,6 +95,7 @@ describe("KMac activation gates", () => {
       legacyControl: false,
       remoteCodexControl: true,
       allowedRoots: [workspaceRoot],
+      artifactRoot: join(stateDir, "mesh-workspaces"),
       resources: [{
         id: "workspace:kmac-m4",
         ownerNodeId: "node-b",
@@ -143,6 +144,44 @@ describe("KMac activation gates", () => {
         approvalRequired: false,
         workspaceCapabilities: ["read-only-status"],
         exposeDebugOutput: false,
+      }, {
+        id: "kmac-codex-v1",
+        resourceId: "workspace:kmac-m4",
+        purpose: "task",
+        executable: codexBin,
+        fixedArgs: ["exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "--color", "never", "-"],
+        workdir: ".",
+        env: {
+          HOME: homeRoot,
+          PATH: statusPath,
+        },
+        maxRuntimeMs: 900000,
+        maxOutputBytes: 262144,
+        allowDynamicArgs: false,
+        allowInput: true,
+        approvalRequired: true,
+        inputSchema: { type: "string", maxLength: 1048576 },
+        resultSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            runnerId: { const: "kmac-codex-v1" },
+            exitCode: { type: ["integer", "null"] },
+            signal: { type: ["string", "null"] },
+            timedOut: { type: "boolean" },
+            durationMs: { type: "integer", minimum: 0 },
+            resultSummary: { type: "string" },
+            integrity: { type: "object" },
+            baseArtifactId: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+            resultArtifactId: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+            resultArtifactSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            changedFiles: { type: "integer", minimum: 0, maximum: 256 },
+            deletedFiles: { type: "integer", minimum: 0, maximum: 256 },
+          },
+          required: ["runnerId", "exitCode", "signal", "timedOut", "durationMs", "resultSummary", "integrity", "baseArtifactId", "resultArtifactId", "resultArtifactSha256", "changedFiles", "deletedFiles"],
+        },
+        workspaceCapabilities: ["structured-artifact-input", "task-scoped-workspace", "changed-file-manifest"],
+        exposeDebugOutput: false,
       }],
     };
     const configText = `${JSON.stringify(config)}\n`;
@@ -172,6 +211,7 @@ describe("KMac activation gates", () => {
           'readonly GATES_MODULE="$3"',
           'BUN="$4"',
           'base_canonical="$5"',
+          'export EXPECTED_ARTIFACT_ROOT="$5/state/mesh-workspaces"',
           'export HOME="$6"',
           'export AGENTLINK_HOME="$5/agentlink-home"',
           'GITHUB_STATUS_RUNNER_ID="kmac-github-status-v1"',
@@ -206,6 +246,7 @@ describe("KMac activation gates", () => {
           'readonly GATES_MODULE="$3"',
           'BUN="$4"',
           'base_canonical="$5"',
+          'export EXPECTED_ARTIFACT_ROOT="$5/state/mesh-workspaces"',
           'export HOME="$6"',
           'export AGENTLINK_HOME="$5/agentlink-home"',
           'GITHUB_STATUS_RUNNER_ID="kmac-github-status-v1"',
@@ -255,6 +296,21 @@ describe("KMac activation gates", () => {
         }],
         ["status binding", candidate => {
           candidate.resources[0]!.githubStatusRunnerId = "other-runner";
+        }],
+        ["Codex executable", candidate => {
+          candidate.runners.find((entry) => entry.id === "kmac-codex-v1")!.executable = "/tmp/other-codex";
+        }],
+        ["Codex input policy", candidate => {
+          candidate.runners.find((entry) => entry.id === "kmac-codex-v1")!.allowInput = false;
+        }],
+        ["Codex artifact capabilities", candidate => {
+          candidate.runners.find((entry) => entry.id === "kmac-codex-v1")!.workspaceCapabilities = ["task-scoped-workspace"];
+        }],
+        ["Codex result schema", candidate => {
+          candidate.runners.find((entry) => entry.id === "kmac-codex-v1")!.resultSchema!.required = ["runnerId"];
+        }],
+        ["artifact root", candidate => {
+          candidate.artifactRoot = workspaceRoot;
         }],
       ];
       for (const [name, tamper] of tamperedCases) {

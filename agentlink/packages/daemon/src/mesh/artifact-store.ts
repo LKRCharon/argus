@@ -2,15 +2,19 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -34,6 +38,7 @@ export const MAX_ARTIFACT_FILES = 256;
 export const MAX_ARTIFACT_FILE_BYTES = 1 * 1024 * 1024;
 export const MAX_ARTIFACT_TOTAL_BYTES = 8 * 1024 * 1024;
 const MAX_RESULT_MANIFEST_BYTES = 12 * 1024 * 1024;
+const NO_FOLLOW_FLAG = (constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 
 const WINDOWS_AMBIGUOUS_PATH_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f<>:"|?*]/;
 
@@ -54,6 +59,27 @@ interface OwnedWorkspaceIdentity {
   workspace: DirectoryIdentity;
 }
 
+interface WorkspaceEntryStats {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mode: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+  isDirectory: () => boolean;
+  isFile: () => boolean;
+  isSymbolicLink: () => boolean;
+}
+
+interface WorkspaceEntryIdentity {
+  device: bigint;
+  inode: bigint;
+  size: bigint;
+  mode: bigint;
+  modified: bigint;
+  changed: bigint;
+}
+
 export interface MaterializedArtifactWorkspace {
   taskDir: string;
   workspace: string;
@@ -61,6 +87,8 @@ export interface MaterializedArtifactWorkspace {
 }
 
 export interface MeshArtifactStoreCaptureHooks {
+  /** Test-only fault injection proving partial base workspaces are removed. */
+  afterMaterializedFileWrite?: (path: string, index: number) => void;
   /** Test-only synchronization point for deterministic replacement-race coverage. */
   beforeWorkspaceSnapshot?: (workspace: string) => void;
   /** Test-only observer proving rejected trees are never opened for content reads. */
@@ -116,6 +144,14 @@ export function validateBaseArtifactManifest(value: unknown): ValidatedBaseArtif
     totalBytes += content.byteLength;
     if (totalBytes > MAX_ARTIFACT_TOTAL_BYTES) throw new Error("artifact exceeds total size limit");
     contents.set(file.path, content);
+  }
+  for (const path of contents.keys()) {
+    const segments = path.split("/");
+    for (let index = 1; index < segments.length; index++) {
+      if (contents.has(segments.slice(0, index).join("/"))) {
+        throw new Error("artifact file path conflicts with a directory");
+      }
+    }
   }
   const digest = meshArtifactSha256(manifest);
   if (manifest.sha256 !== digest || manifest.artifactId !== `sha256:${digest}`) {
@@ -174,27 +210,45 @@ export class MeshArtifactStore {
     const taskDir = join(root, taskId);
     if (existsSync(taskDir)) throw new Error("task artifact workspace already exists");
     mkdirSync(taskDir, { mode: 0o700 });
+    const taskIdentity = directoryIdentity(taskDir);
     const workspace = join(taskDir, "workspace");
-    mkdirSync(workspace, { mode: 0o700 });
-    this.workspaceIdentities.set(taskId, {
-      root: this.rootIdentity!,
-      taskDir: directoryIdentity(taskDir),
-      workspace: directoryIdentity(workspace),
-    });
     try {
-      for (const file of manifest.files) {
+      mkdirSync(workspace, { mode: 0o700 });
+      this.workspaceIdentities.set(taskId, {
+        root: this.rootIdentity!,
+        taskDir: taskIdentity,
+        workspace: directoryIdentity(workspace),
+      });
+      for (const [index, file] of manifest.files.entries()) {
         const destination = joinArtifactPath(workspace, file.path);
         mkdirSync(resolve(destination, ".."), { recursive: true, mode: 0o700 });
         writeFileSync(destination, contents.get(file.path)!, { flag: "wx", mode: file.mode });
         chmodSync(destination, file.mode);
+        this.captureHooks.afterMaterializedFileWrite?.(destination, index);
       }
       writeAtomicJson(join(taskDir, "base.json"), withoutArtifactContents(manifest));
       return { taskDir, workspace, baseArtifactId: manifest.artifactId };
     } catch (error) {
-      // Keep a failed task directory as a replay tombstone. A retry with the
-      // same task id must not merge into a partially materialized workspace.
+      this.workspaceIdentities.delete(taskId);
+      assertDirectoryIdentity(root, this.rootIdentity!, "artifact workspace root");
+      removeOwnedDirectory(taskDir, taskIdentity, "artifact task directory");
       throw error;
     }
+  }
+
+  /** Remove a materialized workspace when execution cannot reach capture. */
+  discardWorkspace(taskIdValue: string): void {
+    const taskId = MeshTaskIdSchema.parse(taskIdValue);
+    const ownedIdentity = this.workspaceIdentities.get(taskId);
+    if (!ownedIdentity) return;
+    const root = this.ensureRoot();
+    const taskDir = join(root, taskId);
+    const workspace = join(taskDir, "workspace");
+    assertDirectoryIdentity(root, ownedIdentity.root, "artifact workspace root");
+    assertDirectoryIdentity(taskDir, ownedIdentity.taskDir, "artifact task directory");
+    assertDirectoryIdentity(workspace, ownedIdentity.workspace, "artifact workspace");
+    removeOwnedDirectory(taskDir, ownedIdentity.taskDir, "artifact task directory");
+    this.workspaceIdentities.delete(taskId);
   }
 
   captureResult(
@@ -215,52 +269,80 @@ export class MeshArtifactStore {
     if (resolve(workspaceValue) !== expectedWorkspace) throw new Error("artifact workspace does not match task");
     assertContained(root, expectedWorkspace);
 
-    this.captureHooks.beforeWorkspaceSnapshot?.(expectedWorkspace);
     const snapshotWorkspace = join(taskDir, `.workspace-capture-${randomUUID()}`);
-    renameSync(expectedWorkspace, snapshotWorkspace);
-    // rename(2)/MoveFileEx pins the directory entry atomically. If a runner
-    // replaced the workspace before the rename, the moved inode differs and is
-    // rejected before readdir or readFile. A replacement after the rename can
-    // only occupy the old path, which capture never traverses.
-    assertDirectoryIdentity(root, ownedIdentity.root, "artifact workspace root");
-    assertDirectoryIdentity(taskDir, ownedIdentity.taskDir, "artifact task directory");
-    assertMovedDirectoryIdentity(snapshotWorkspace, ownedIdentity.workspace, "artifact workspace snapshot");
-    assertContained(taskDir, snapshotWorkspace);
+    let snapshotCreated = false;
+    let snapshotOwned = false;
+    let workspaceRetired = false;
+    try {
+      this.captureHooks.beforeWorkspaceSnapshot?.(expectedWorkspace);
+      renameSync(expectedWorkspace, snapshotWorkspace);
+      snapshotCreated = true;
 
-    // MeshRunner reaps its process group on POSIX, but portable Node/Bun APIs
-    // cannot revoke handles held by a Windows descendant or a deliberately
-    // detached same-UID process. Such a process could still race path-based
-    // checks on nested entries, including replacing one with an outside link.
-    // The pinned root itself cannot be redirected to an outside replacement.
-    const current = scanWorkspace(snapshotWorkspace, this.captureHooks.beforeFileRead);
-    const original = new Map(base.files.map((file) => [file.path, file]));
-    const changed = [...current.values()]
-      .filter((file) => {
-        const before = original.get(file.path);
-        return !before || before.sha256 !== file.sha256 || before.mode !== file.mode;
-      })
-      .sort((left, right) => compareCanonicalPath(left.path, right.path));
-    const deleted = base.files
-      .map((file) => file.path)
-      .filter((path) => !current.has(path))
-      .sort();
-    const identity = {
-      version: 1 as const,
-      kind: "result" as const,
-      baseArtifactId: base.artifactId,
-      taskId,
-      changed,
-      deleted,
-    };
-    const digest = meshArtifactSha256(identity);
-    const result = MeshResultArtifactManifestSchema.parse({
-      ...identity,
-      artifactId: `sha256:${digest}`,
-      sha256: digest,
-    });
-    validateResultArtifactManifest(result);
-    writeAtomicJson(join(taskDir, "result.json"), result);
-    return result;
+      // The atomic rename pins the directory entry before any traversal. A
+      // replacement is rejected before readdir or content reads.
+      assertDirectoryIdentity(root, ownedIdentity.root, "artifact workspace root");
+      assertDirectoryIdentity(taskDir, ownedIdentity.taskDir, "artifact task directory");
+      assertMovedDirectoryIdentity(snapshotWorkspace, ownedIdentity.workspace, "artifact workspace snapshot");
+      assertContained(taskDir, snapshotWorkspace);
+      snapshotOwned = true;
+
+      const current = scanWorkspace(snapshotWorkspace, this.captureHooks.beforeFileRead);
+      const original = new Map(base.files.map((file) => [file.path, file]));
+      const changed = [...current.values()]
+        .filter((file) => {
+          const before = original.get(file.path);
+          return !before || before.sha256 !== file.sha256 || before.mode !== file.mode;
+        })
+        .sort((left, right) => compareCanonicalPath(left.path, right.path));
+      const deleted = base.files
+        .map((file) => file.path)
+        .filter((path) => !current.has(path))
+        .sort();
+      const identity = {
+        version: 1 as const,
+        kind: "result" as const,
+        baseArtifactId: base.artifactId,
+        taskId,
+        changed,
+        deleted,
+      };
+      const digest = meshArtifactSha256(identity);
+      const result = MeshResultArtifactManifestSchema.parse({
+        ...identity,
+        artifactId: `sha256:${digest}`,
+        sha256: digest,
+      });
+      validateResultArtifactManifest(result);
+
+      removeMovedOwnedDirectory(
+        snapshotWorkspace,
+        ownedIdentity.workspace,
+        "artifact workspace snapshot",
+      );
+      snapshotOwned = false;
+      workspaceRetired = true;
+      writeAtomicJson(join(taskDir, "result.json"), result);
+      return result;
+    } catch (error) {
+      if (snapshotOwned) {
+        removeMovedOwnedDirectory(
+          snapshotWorkspace,
+          ownedIdentity.workspace,
+          "artifact workspace snapshot",
+        );
+        workspaceRetired = true;
+      } else if (!snapshotCreated) {
+        assertDirectoryIdentity(expectedWorkspace, ownedIdentity.workspace, "artifact workspace");
+        workspaceRetired = true;
+      }
+      if (workspaceRetired) {
+        assertDirectoryIdentity(root, ownedIdentity.root, "artifact workspace root");
+        removeOwnedDirectory(taskDir, ownedIdentity.taskDir, "artifact task directory");
+      }
+      throw error;
+    } finally {
+      this.workspaceIdentities.delete(taskId);
+    }
   }
 
   readResult(taskIdValue: string, artifactIdValue: string): MeshResultArtifactManifest {
@@ -325,6 +407,18 @@ function assertMovedDirectoryIdentity(path: string, expected: DirectoryIdentity,
   }
 }
 
+function removeOwnedDirectory(path: string, expected: DirectoryIdentity, label: string): void {
+  assertDirectoryIdentity(path, expected, label);
+  rmSync(path, { recursive: true });
+  if (existsSync(path)) throw new Error(`${label} could not be removed`);
+}
+
+function removeMovedOwnedDirectory(path: string, expected: DirectoryIdentity, label: string): void {
+  assertMovedDirectoryIdentity(path, expected, label);
+  rmSync(path, { recursive: true });
+  if (existsSync(path)) throw new Error(`${label} could not be removed`);
+}
+
 function assertSameIdentity(current: DirectoryIdentity, expected: DirectoryIdentity, label: string): void {
   if (current.canonicalPath !== expected.canonicalPath
     || current.device !== expected.device
@@ -345,39 +439,138 @@ function scanWorkspace(
   beforeFileRead?: (path: string) => void,
 ): Map<string, MeshArtifactFile> {
   const files = new Map<string, MeshArtifactFile>();
-  const pending = [workspace];
+  const workspaceStats = workspaceEntryStats(workspace);
+  if (!workspaceStats.isDirectory() || workspaceStats.isSymbolicLink()) {
+    throw new Error("artifact workspace root is not an owned directory");
+  }
+  const pending = [{ path: workspace, identity: workspaceEntryIdentity(workspaceStats) }];
+  const visitedDirectories: Array<{ path: string; identity: WorkspaceEntryIdentity }> = [];
   let totalBytes = 0;
   while (pending.length > 0) {
     const directory = pending.pop()!;
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const absolute = join(directory, entry.name);
-      const info = lstatSync(absolute);
+    assertWorkspaceEntryIdentity(directory.path, directory.identity, "artifact workspace directory", "directory");
+    visitedDirectories.push(directory);
+    const entries = readdirSync(directory.path, { withFileTypes: true });
+    assertWorkspaceEntryIdentity(directory.path, directory.identity, "artifact workspace directory", "directory");
+    for (const entry of entries) {
+      const absolute = join(directory.path, entry.name);
+      const info = workspaceEntryStats(absolute);
       if (info.isSymbolicLink()) throw new Error("artifact workspace contains a symbolic link");
       if (info.isDirectory()) {
-        pending.push(absolute);
+        pending.push({ path: absolute, identity: workspaceEntryIdentity(info) });
         continue;
       }
       if (!info.isFile()) throw new Error("artifact workspace contains a non-regular file");
       if (files.size >= MAX_ARTIFACT_FILES) throw new Error("artifact exceeds file count limit");
-      if (info.size > MAX_ARTIFACT_FILE_BYTES) throw new Error("artifact file exceeds size limit");
-      totalBytes += info.size;
+      if (info.size > BigInt(MAX_ARTIFACT_FILE_BYTES)) throw new Error("artifact file exceeds size limit");
+      totalBytes += Number(info.size);
       if (totalBytes > MAX_ARTIFACT_TOTAL_BYTES) throw new Error("artifact exceeds total size limit");
       const path = relative(workspace, absolute).split(sep).join("/");
       validatePortableArtifactPath(path, "artifact workspace file path");
       if (files.has(path)) throw new Error("artifact contains a duplicate path");
       beforeFileRead?.(absolute);
-      const content = readFileSync(absolute);
+      const content = readWorkspaceFile(absolute, workspaceEntryIdentity(info));
       files.set(path, MeshArtifactFileSchema.parse({
         type: "file",
         path,
-        mode: info.mode & 0o777,
+        mode: Number(info.mode & 0o777n),
         size: content.byteLength,
         sha256: sha256Hex(content),
         contentBase64: content.toString("base64"),
       }));
     }
   }
+  for (const directory of visitedDirectories) {
+    assertWorkspaceEntryIdentity(directory.path, directory.identity, "artifact workspace directory", "directory");
+  }
   return files;
+}
+
+function workspaceEntryStats(path: string): WorkspaceEntryStats {
+  return lstatSync(path, { bigint: true }) as unknown as WorkspaceEntryStats;
+}
+
+function workspaceEntryIdentity(info: WorkspaceEntryStats): WorkspaceEntryIdentity {
+  return {
+    device: info.dev,
+    inode: info.ino,
+    size: info.size,
+    mode: info.mode,
+    modified: info.mtimeNs,
+    changed: info.ctimeNs,
+  };
+}
+
+function sameWorkspaceEntry(left: WorkspaceEntryIdentity, right: WorkspaceEntryIdentity): boolean {
+  return left.device === right.device
+    && left.inode === right.inode
+    && left.size === right.size
+    && left.mode === right.mode
+    && left.modified === right.modified
+    && left.changed === right.changed;
+}
+
+function assertWorkspaceEntryIdentity(
+  path: string,
+  expected: WorkspaceEntryIdentity,
+  label: string,
+  kind: "directory" | "file",
+): void {
+  let current: WorkspaceEntryStats;
+  try {
+    current = workspaceEntryStats(path);
+  } catch {
+    throw new Error(`${label} changed or is unreadable`);
+  }
+  const kindMatches = kind === "directory" ? current.isDirectory() : current.isFile();
+  if (current.isSymbolicLink() || !kindMatches
+    || !sameWorkspaceEntry(expected, workspaceEntryIdentity(current))) {
+    throw new Error(`${label} changed or is unreadable`);
+  }
+}
+
+function readWorkspaceFile(path: string, expected: WorkspaceEntryIdentity): Buffer {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | NO_FOLLOW_FLAG);
+    const opened = fstatSync(descriptor, { bigint: true }) as unknown as WorkspaceEntryStats;
+    if (!opened.isFile() || opened.isSymbolicLink()
+      || !sameWorkspaceEntry(expected, workspaceEntryIdentity(opened))) {
+      throw new Error("artifact workspace file changed or is unreadable");
+    }
+    const content = Buffer.alloc(Number(opened.size));
+    let offset = 0;
+    while (offset < content.byteLength) {
+      const count = readSync(descriptor, content, offset, content.byteLength - offset, offset);
+      if (count <= 0) throw new Error("artifact workspace file changed or is unreadable");
+      offset += count;
+    }
+    verifyDescriptorContent(descriptor, content);
+    const afterDescriptor = fstatSync(descriptor, { bigint: true }) as unknown as WorkspaceEntryStats;
+    if (!afterDescriptor.isFile()
+      || !sameWorkspaceEntry(expected, workspaceEntryIdentity(afterDescriptor))) {
+      throw new Error("artifact workspace file changed or is unreadable");
+    }
+    assertWorkspaceEntryIdentity(path, expected, "artifact workspace file", "file");
+    return content;
+  } catch {
+    throw new Error("artifact workspace file changed or is unreadable");
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function verifyDescriptorContent(descriptor: number, expected: Buffer): void {
+  const chunk = Buffer.alloc(Math.min(64 * 1024, Math.max(1, expected.byteLength)));
+  let offset = 0;
+  while (offset < expected.byteLength) {
+    const requested = Math.min(chunk.byteLength, expected.byteLength - offset);
+    const count = readSync(descriptor, chunk, 0, requested, offset);
+    if (count !== requested || !chunk.subarray(0, count).equals(expected.subarray(offset, offset + count))) {
+      throw new Error("artifact workspace file changed or is unreadable");
+    }
+    offset += count;
+  }
 }
 
 function joinArtifactPath(root: string, path: string): string {
