@@ -67,6 +67,10 @@ export interface CodexRequestOptions {
   durableStart?: boolean;
 }
 
+export interface CodexStartRequestOptions extends CodexRequestOptions {
+  forkFromSessionId?: string;
+}
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_EVENTS_PER_PEER = 500;
 const DEFAULT_MAX_APPROVALS_PER_PEER = 100;
@@ -133,13 +137,17 @@ export class CodexPeerGateway {
     targetNodeId: string,
     text: string,
     cwd?: string,
-    options: CodexRequestOptions = {},
+    options: CodexStartRequestOptions = {},
   ): Promise<Record<string, unknown>> {
+    const forkFromSessionId = options.forkFromSessionId === undefined
+      ? undefined
+      : MeshThreadIdSchema.parse(options.forkFromSessionId);
     return this.request(targetNodeId, {
       kind: "new-session",
       agent: "codex",
       text,
       ...(cwd ? { cwd } : {}),
+      ...(forkFromSessionId ? { forkFromSessionId } : {}),
     }, ["input-ack"], { ...options, durableStart: true });
   }
 

@@ -122,6 +122,21 @@ function handle(message: {
         response(message.id, { thread: { id: "thread-new" } });
       }
       break;
+    case "thread/fork": {
+      if (mode !== "fork-history") break;
+      const params = message.params ?? {};
+      if (params.threadId !== "thread-source"
+        || params.excludeTurns !== true
+        || params.cwd !== "/workspace/fork") {
+        error(message.id, "invalid thread fork");
+        break;
+      }
+      response(message.id, {
+        thread: { id: "thread-forked", forkedFromId: "thread-source", turns: [] },
+        cwd: "/workspace/fork",
+      });
+      break;
+    }
     case "thread/resume": {
       if (mode === "paginated-read") {
         error(message.id, "thread thread-paginated already has an active writer", -32000);
@@ -244,6 +259,10 @@ function handle(message: {
     case "thread/queue/start": {
       if (!mode.startsWith("queue-")) break;
       const id = String(message.params?.queuedSubmissionId ?? "");
+      if (mode === "queue-owner-required") {
+        error(message.id, "resume the thread before starting a queued message", -32000);
+        break;
+      }
       if (mode === "queue-cleanup-fails") {
         error(message.id, "queue start failed", -32000);
         break;

@@ -34,6 +34,35 @@ describe("CodexPeerGateway", () => {
     });
   });
 
+  test("carries an explicit fork source only on the durable new-session payload", async () => {
+    let sent: Record<string, unknown> | undefined;
+    const gateway = new CodexPeerGateway(async (_targetNodeId, payload) => {
+      sent = payload;
+    }, { requestTimeoutMs: 1_000 });
+
+    const pending = gateway.startThread("mac-node", "continue", "/workspace/fork", {
+      forkFromSessionId: "thread-source",
+      controlRequestId: "codex:fork-peer",
+      deadlineAt: Date.now() + 1_000,
+    });
+    await Promise.resolve();
+    expect(sent).toMatchObject({
+      kind: "new-session",
+      agent: "codex",
+      text: "continue",
+      cwd: "/workspace/fork",
+      forkFromSessionId: "thread-source",
+      controlRequestId: "codex:fork-peer",
+    });
+    expect(gateway.handlePayload("mac-node", {
+      kind: "input-ack",
+      controlRequestId: "codex:fork-peer",
+      sessionId: "thread-forked",
+      status: "running",
+    })).toBe(true);
+    expect(await pending).toMatchObject({ sessionId: "thread-forked" });
+  });
+
   test("routes a remote error to the matching request", async () => {
     let sent: Record<string, unknown> | undefined;
     const gateway = new CodexPeerGateway(async (_targetNodeId, payload) => {

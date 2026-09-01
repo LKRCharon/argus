@@ -88,6 +88,49 @@ describe("durable remote Codex operations", () => {
     )).toThrow("idempotencyKey");
   });
 
+  test("dispatches the fork source and conflicts when only that durable input changes", async () => {
+    const { controller } = controllerFixture();
+    const forkSources: Array<string | undefined> = [];
+    controller.codex.startThread = async (_targetNodeId, _text, _cwd, options) => {
+      forkSources.push(options?.forkFromSessionId);
+      return { kind: "input-ack", sessionId: "thread-forked", status: "running" };
+    };
+
+    const first = controller.startCodexThreadOperation(
+      "node-kmac",
+      "perform task",
+      "codex-fork-idempotency",
+      "/workspace",
+      60_000,
+      "thread-source-a",
+    );
+    await nextTurn();
+    expect(controller.getCodexOperation(first.operationId)).toMatchObject({
+      status: "completed",
+      sessionId: "thread-forked",
+    });
+    expect(forkSources).toEqual(["thread-source-a"]);
+
+    const duplicate = controller.startCodexThreadOperation(
+      "node-kmac",
+      "perform task",
+      "codex-fork-idempotency",
+      "/workspace",
+      60_000,
+      "thread-source-a",
+    );
+    expect(duplicate.operationId).toBe(first.operationId);
+    expect(() => controller.startCodexThreadOperation(
+      "node-kmac",
+      "perform task",
+      "codex-fork-idempotency",
+      "/workspace",
+      60_000,
+      "thread-source-b",
+    )).toThrow("idempotencyKey");
+    expect(forkSources).toEqual(["thread-source-a"]);
+  });
+
   test("marks a policy-disabled remote start failed without a watcher timeout", async () => {
     const { controller } = controllerFixture();
     controller.codex.startThread = async () => {

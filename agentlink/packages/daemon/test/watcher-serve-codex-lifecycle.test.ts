@@ -39,8 +39,10 @@ function fakeServer(
     concurrent: number;
     maxConcurrent: number;
     startThreads?: number;
+    forkThreads?: number;
     methodOrder?: string[];
     rejectStartThread?: boolean;
+    queueOwnerRequired?: boolean;
   },
   startThreadDelay = 60,
   resumeDelay = 0,
@@ -72,6 +74,11 @@ function fakeServer(
         state.concurrent -= 1;
       }
     },
+    async forkThread(sourceThreadId: string, cwd?: string): Promise<string> {
+      state.forkThreads = (state.forkThreads ?? 0) + 1;
+      state.methodOrder?.push(`forkThread:${sourceThreadId}:${cwd ?? ""}`);
+      return "forked-thread";
+    },
     async startTurn(_threadId: string, text: string): Promise<string> {
       state.turns += 1;
       state.methodOrder?.push(`startTurn:${text}`);
@@ -81,10 +88,17 @@ function fakeServer(
       threadId: string,
       text: string,
       clientUserMessageId: string,
-    ): Promise<{ turnId: string; delivery: "queue" }> {
+    ): Promise<{
+      turnId: string | null;
+      delivery: "queue" | "queued";
+      queuedSubmissionId?: string;
+    }> {
       if (resumeDelay > 0) await Bun.sleep(resumeDelay);
-      state.turns += 1;
       state.methodOrder?.push(`sendInput:${threadId}:${clientUserMessageId}:${text}`);
+      if (state.queueOwnerRequired) {
+        return { turnId: null, delivery: "queued", queuedSubmissionId: "queued-owner" };
+      }
+      state.turns += 1;
       return { turnId: "queued-turn", delivery: "queue" };
     },
     async steerTurn(_threadId: string, _turnId: string, text: string): Promise<void> {
@@ -210,6 +224,107 @@ test("serveWatch returns a correlated new-session acknowledgement with its threa
     status: "running",
   });
   expect(state.turns).toBe(1);
+  controls.stop();
+});
+
+test("serveWatch forks first and acknowledges the explicit new thread id", async () => {
+  const conn = new FakeConn();
+  const chan = new SecureChannel(new Uint8Array(32).fill(2));
+  const state = {
+    turns: 0,
+    stopped: false,
+    concurrent: 0,
+    maxConcurrent: 0,
+    startThreads: 0,
+    forkThreads: 0,
+    methodOrder: [] as string[],
+  };
+  const server = fakeServer(state, 0);
+  const controls = await serveWatch(conn as unknown as WsConn, chan, {
+    meshStrict: true,
+    meshRemoteCodexControl: true,
+    codexServerFactory: () => server,
+  });
+  conn.push({
+    op: "chan-data",
+    data: { enc: await chan.seal({
+      kind: "new-session",
+      agent: "codex",
+      text: "continue in a fork",
+      cwd: "/workspace/fork",
+      forkFromSessionId: "thread-source",
+      controlRequestId: "codex:fork-session",
+      deadlineAt: Date.now() + 300,
+    }) },
+  });
+  const ack = await waitFor(conn.sent, async (frame) => {
+    const payload = await chan.open<Record<string, unknown>>(frame.data.enc);
+    return payload.kind === "input-ack" && payload.controlRequestId === "codex:fork-session";
+  });
+  expect(await chan.open(ack.data.enc)).toMatchObject({
+    kind: "input-ack",
+    controlRequestId: "codex:fork-session",
+    sessionId: "forked-thread",
+    status: "running",
+  });
+  expect(state.startThreads ?? 0).toBe(0);
+  expect(state.forkThreads).toBe(1);
+  expect(state.methodOrder).toEqual([
+    "forkThread:thread-source:/workspace/fork",
+    "startTurn:continue in a fork",
+  ]);
+  controls.stop();
+});
+
+test("serveWatch reports owner-preserved input as queued without inventing an active turn", async () => {
+  const conn = new FakeConn();
+  const chan = new SecureChannel(new Uint8Array(32).fill(1));
+  const state = {
+    turns: 0,
+    stopped: false,
+    concurrent: 0,
+    maxConcurrent: 0,
+    methodOrder: [] as string[],
+    queueOwnerRequired: true,
+  };
+  const server = fakeServer(state, 0);
+  const controls = await serveWatch(conn as unknown as WsConn, chan, {
+    meshStrict: true,
+    meshRemoteCodexControl: true,
+    codexServerFactory: () => server,
+  });
+  const send = async (suffix: string): Promise<void> => {
+    conn.push({ op: "chan-data", data: { enc: await chan.seal({
+      kind: "codex-input",
+      sessionId: "desktop-owned-thread",
+      text: `queued ${suffix}`,
+      controlRequestId: `codex:queued-${suffix}`,
+      deadlineAt: Date.now() + 500,
+    }) } });
+  };
+
+  await send("first");
+  const first = await waitFor(conn.sent, async (frame) => {
+    const payload = await chan.open<Record<string, unknown>>(frame.data.enc);
+    return payload.controlRequestId === "codex:queued-first";
+  });
+  expect(await chan.open(first.data.enc)).toMatchObject({
+    kind: "input-ack",
+    sessionId: "desktop-owned-thread",
+    status: "queued",
+    queuedSubmissionId: "queued-owner",
+  });
+
+  await send("second");
+  await waitFor(conn.sent, async (frame) => {
+    const payload = await chan.open<Record<string, unknown>>(frame.data.enc);
+    return payload.controlRequestId === "codex:queued-second";
+  });
+  expect(state.turns).toBe(0);
+  expect(state.methodOrder).toEqual([
+    "sendInput:desktop-owned-thread:codex:queued-first:queued first",
+    "sendInput:desktop-owned-thread:codex:queued-second:queued second",
+  ]);
   controls.stop();
 });
 

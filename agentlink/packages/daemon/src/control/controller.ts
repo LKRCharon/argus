@@ -10,6 +10,7 @@ import {
   MeshTaskResultPayloadSchema,
   MeshTaskRequestPayloadSchema,
   MeshTaskStatusPayloadSchema,
+  MeshThreadIdSchema,
   stableStringify,
   type MeshApproval,
   type MeshBaseArtifactManifest,
@@ -520,11 +521,16 @@ export class MeshController {
     idempotencyKey: string,
     cwd?: string,
     deadlineMs = 120_000,
+    forkFromSessionId?: string,
   ): CodexOperationRecord {
+    const forkSource = forkFromSessionId === undefined
+      ? undefined
+      : MeshThreadIdSchema.parse(forkFromSessionId);
     const requestDigest = createHash("sha256").update(stableStringify({
       targetNodeId,
       text,
       cwd: cwd ?? null,
+      forkFromSessionId: forkSource ?? null,
     }), "utf8").digest("hex");
     const started = this.codexOperations.begin({
       requesterNodeId: this.nodeId,
@@ -536,7 +542,7 @@ export class MeshController {
     if (started.conflict) throw new Error("idempotencyKey 已绑定不同 Codex operation");
     if (started.created) {
       queueMicrotask(() => {
-        void this.executeCodexStart(started.record, text, cwd);
+        void this.executeCodexStart(started.record, text, cwd, forkSource);
       });
     }
     return started.record;
@@ -588,7 +594,12 @@ export class MeshController {
     return this.codex.respondApproval(targetNodeId, requestId, optionId);
   }
 
-  private async executeCodexStart(record: CodexOperationRecord, text: string, cwd?: string): Promise<void> {
+  private async executeCodexStart(
+    record: CodexOperationRecord,
+    text: string,
+    cwd?: string,
+    forkFromSessionId?: string,
+  ): Promise<void> {
     const controlRequestId = `codex-op:${record.operationId}`;
     try {
       this.codexOperations.update(record.operationId, "sent", {
@@ -599,6 +610,7 @@ export class MeshController {
       const response = await this.codex.startThread(record.targetNodeId, text, cwd, {
         controlRequestId,
         deadlineAt: record.deadlineAt,
+        ...(forkFromSessionId ? { forkFromSessionId } : {}),
       });
       this.completeCodexStart(record.operationId, response);
     } catch (error) {

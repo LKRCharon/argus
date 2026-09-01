@@ -108,8 +108,18 @@ function fakeController(root = mkdtempSync(join(tmpdir(), "argus-control-"))): {
       codexCalls.push({ method: "read", args: [targetNodeId, sessionId, deadlineMs] });
       return { kind: "codex-resumed", sessionId, events: [] };
     },
-    startCodexThreadOperation: (targetNodeId, _text, idempotencyKey, _cwd, deadlineMs) => {
-      codexCalls.push({ method: "start", args: [targetNodeId, idempotencyKey, deadlineMs] });
+    startCodexThreadOperation: (
+      targetNodeId,
+      _text,
+      idempotencyKey,
+      _cwd,
+      deadlineMs,
+      forkFromSessionId,
+    ) => {
+      codexCalls.push({
+        method: "start",
+        args: [targetNodeId, idempotencyKey, deadlineMs, forkFromSessionId],
+      });
       const existing = [...operations.values()].find((operation) => operation.idempotencyKey === idempotencyKey);
       if (existing) return existing;
       const now = Date.now();
@@ -746,6 +756,7 @@ describe("Seoul control API", () => {
         targetNodeId: "mac-node",
         text: "private prompt that must not be journalled",
         idempotencyKey: "codex-http-1",
+        forkFromSessionId: "thread-source-1",
         deadlineMs: 90_000,
       }),
     }));
@@ -765,7 +776,38 @@ describe("Seoul control API", () => {
     expect(await detail.json()).toMatchObject({ operationId: "op-test-1", status: "queued" });
     const listed = await handler(new Request("http://localhost/api/codex/operations?targetNodeId=mac-node&limit=1"));
     expect(await listed.json()).toMatchObject({ operations: [{ operationId: "op-test-1" }] });
-    expect(codexCalls).toContainEqual({ method: "start", args: ["mac-node", "codex-http-1", 90_000] });
+    expect(codexCalls).toContainEqual({
+      method: "start",
+      args: ["mac-node", "codex-http-1", 90_000, "thread-source-1"],
+    });
+  });
+
+  test("rejects malformed or misplaced Codex fork sources", async () => {
+    const { controller, codexCalls } = fakeController();
+    const handler = createControlRequestHandler({ controller });
+    const malformed = await handler(new Request("http://localhost/api/codex/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        targetNodeId: "mac-node",
+        text: "fork",
+        forkFromSessionId: "bad thread id",
+      }),
+    }));
+    expect(malformed.status).toBe(400);
+
+    const misplaced = await handler(new Request("http://localhost/api/codex/input", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        targetNodeId: "mac-node",
+        sessionId: "thread-1",
+        text: "continue",
+        forkFromSessionId: "thread-source-1",
+      }),
+    }));
+    expect(misplaced.status).toBe(400);
+    expect(codexCalls).toEqual([]);
   });
 
   test("requires JSON and an explicit allow or deny for remote Codex approvals", async () => {

@@ -658,8 +658,8 @@ class RelayClient(
 
     /**
      * Send a message into a Codex thread. Unlike Qoder, this reaches the very
-     * thread the desktop app has open — app-server owns the session, so a mid-turn
-     * message steers the running turn instead of queueing behind it.
+     * thread the desktop app has open. Active input steers the running turn;
+     * idle desktop-owned input can remain durably queued for that owner.
      */
     /** Returns false when the message could not be handed to the socket. */
     suspend fun sendCodexInput(threadId: String, text: String): Boolean {

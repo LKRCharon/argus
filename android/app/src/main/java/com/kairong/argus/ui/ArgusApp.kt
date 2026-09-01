@@ -1063,9 +1063,9 @@ class ArgusViewModel : ViewModel() {
         armAckTimeout(sessionId)
         val codex = (s?.agent ?: "") == "codex"
         viewModelScope.launch(Dispatchers.IO) {
-            // Codex owns its sessions in app-server, so input can be delivered
-            // into the running thread (and steers it mid-turn). Qoder has no
-            // such protocol; its input goes to Argus for keystroke injection.
+            // Codex active input steers the running turn; idle desktop-owned
+            // input can be durably queued. Qoder has no such protocol, so its
+            // input goes to Argus for keystroke injection.
             val sent = if (codex) relayClient?.sendCodexInput(sessionId, text)
                        else relayClient?.sendUserInput(sessionId, text)
             if (sent != true) {

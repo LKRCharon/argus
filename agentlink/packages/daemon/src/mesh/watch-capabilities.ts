@@ -1,4 +1,4 @@
-import { MeshRequestIdSchema } from "@agentlink/wire";
+import { MeshRequestIdSchema, MeshThreadIdSchema } from "@agentlink/wire";
 
 export interface MeshWatchCapabilities {
   legacyAgentBridge: boolean;
@@ -14,6 +14,7 @@ interface RemoteCodexCommandPayload {
   requestId?: string;
   controlRequestId?: string;
   deadlineAt?: number;
+  forkFromSessionId?: string;
 }
 
 export interface NormalizedRemoteCodexCommand extends RemoteCodexCommandPayload {
@@ -47,6 +48,7 @@ export function validateBoundedRemoteCodexCommand(
 
   const kind = payload.kind ?? "";
   let requestId: string | undefined;
+  let forkFromSessionId: string | undefined;
   const isDirectCodex = [
     "codex-threads",
     "codex-resume",
@@ -55,6 +57,12 @@ export function validateBoundedRemoteCodexCommand(
     "codex-interrupt",
   ].includes(kind);
   if (!isDirectCodex && kind === "new-session" && payload.agent !== "codex") return { status: "invalid" };
+  if (Object.hasOwn(payload, "forkFromSessionId")) {
+    if (kind !== "new-session" || payload.agent !== "codex") return { status: "invalid" };
+    const parsedForkSource = MeshThreadIdSchema.safeParse(payload.forkFromSessionId);
+    if (!parsedForkSource.success) return { status: "invalid" };
+    forkFromSessionId = parsedForkSource.data;
+  }
   if (!isDirectCodex && kind === "permission-response") {
     const parsedRequestId = MeshRequestIdSchema.safeParse(payload.requestId);
     if (!parsedRequestId.success || !parsedRequestId.data.startsWith("codex-")) return { status: "invalid" };
@@ -71,6 +79,7 @@ export function validateBoundedRemoteCodexCommand(
     controlRequestId: controlRequestId.data,
     deadlineAt,
     ...(requestId ? { requestId } : {}),
+    ...(forkFromSessionId ? { forkFromSessionId } : {}),
   };
   return deadlineAt <= now ? { status: "expired", command } : { status: "valid", command };
 }

@@ -103,7 +103,8 @@ export interface CodexQueuedSubmission {
 
 export interface CodexInputDelivery {
   turnId: string | null;
-  delivery: "queue" | "legacy";
+  delivery: "queue" | "queued" | "legacy";
+  queuedSubmissionId?: string;
 }
 
 class CodexRpcError extends Error {
@@ -687,15 +688,12 @@ export class CodexAppServer {
   ): Promise<CodexInputDelivery> {
     const deadline = Date.now() + boundedMs(timeoutMs, 30_000);
     try {
-      return {
-        turnId: await this.startQueuedTurn(
-          threadId,
-          text,
-          clientUserMessageId,
-          remainingBefore(deadline),
-        ),
-        delivery: "queue",
-      };
+      return await this.startQueuedTurn(
+        threadId,
+        text,
+        clientUserMessageId,
+        remainingBefore(deadline),
+      );
     } catch (error) {
       if (!isRpcMethodUnavailable(error)) throw error;
     }
@@ -712,7 +710,7 @@ export class CodexAppServer {
     text: string,
     clientUserMessageId: string,
     timeoutMs: number,
-  ): Promise<string | null> {
+  ): Promise<CodexInputDelivery> {
     const totalMs = boundedMs(timeoutMs, 30_000);
     const deadline = Date.now() + totalMs;
     const cleanupReserve = Math.min(
@@ -749,8 +747,15 @@ export class CodexAppServer {
       if (!turnId) {
         throw new CodexDeliveryError("thread/queue/start 结果不明确，禁止自动重试");
       }
-      return String(turnId);
+      return { turnId: String(turnId), delivery: "queue" };
     } catch (error) {
+      if (queuedSubmissionId && isQueuedStartOwnerRequired(error)) {
+        return {
+          turnId: null,
+          delivery: "queued",
+          queuedSubmissionId,
+        };
+      }
       // If add itself is unavailable there is nothing to clean and the caller
       // may use the legacy path. If start is unavailable, the created item must
       // still be deleted before that fallback is allowed.
@@ -843,6 +848,24 @@ export class CodexAppServer {
     return res?.thread?.id ?? res?.threadId ?? null;
   }
 
+  /** Fork persisted history without resuming or taking ownership of the source. */
+  async forkThread(
+    threadId: string,
+    cwd?: string,
+    timeoutMs = 30_000,
+    onLateThread?: (threadId: string) => void,
+  ): Promise<string | null> {
+    const res = await this.call<any>("thread/fork", {
+      threadId,
+      excludeTurns: true,
+      ...(cwd ? { cwd } : {}),
+    }, timeoutMs, (late) => {
+      const forkedThreadId = late?.thread?.id ?? late?.threadId;
+      if (forkedThreadId) onLateThread?.(String(forkedThreadId));
+    });
+    return res?.thread?.id ?? res?.threadId ?? null;
+  }
+
   async stop(): Promise<void> {
     if (this.stopping) await this.stopping;
     const proc = this.proc;
@@ -868,6 +891,11 @@ function remainingBefore(deadline: number): number {
 
 function isRpcMethodUnavailable(error: unknown): boolean {
   return error instanceof CodexRpcError && Number(error.code) === -32601;
+}
+
+function isQueuedStartOwnerRequired(error: unknown): boolean {
+  return error instanceof CodexRpcError
+    && error.message.toLowerCase().includes("resume the thread before starting a queued message");
 }
 
 function queuedSubmissionIdFrom(value: any): string | null {

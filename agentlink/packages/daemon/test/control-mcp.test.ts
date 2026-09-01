@@ -161,6 +161,12 @@ describe("Seoul Codex MCP gateway", () => {
       const submitTool = tools.tools.find((tool) => tool.name === "mesh_submit_job");
       expect(submitTool?.inputSchema.properties).toHaveProperty("groupId");
       expect(submitTool?.inputSchema.properties).toHaveProperty("runnerId");
+      const startTool = tools.tools.find((tool) => tool.name === "remote_codex_start_thread");
+      expect(startTool?.inputSchema.properties).toHaveProperty("forkFromSessionId");
+      const sendTool = tools.tools.find((tool) => tool.name === "remote_codex_send_message");
+      expect(sendTool?.description).toBe(
+        "向指定远端 Codex 线程发送消息；运行中的回合会被 steer。status=queued 仅表示消息已持久入队，尚未执行；如需立即继续，请调用 remote_codex_start_thread 并传 forkFromSessionId。",
+      );
 
       const result = await mcp.client.callTool({ name: "mesh_list_devices", arguments: {} });
       const text = textContent(result);
@@ -602,7 +608,7 @@ describe("Seoul Codex MCP gateway", () => {
     }
   });
 
-  test("routes bounded remote Codex thread, input, and approval calls", async () => {
+  test("routes bounded remote Codex fork, input, and approval calls", async () => {
     const captured: Request[] = [];
     const fetchImpl: ControlFetch = async (input, init) => {
       const request = new Request(input, init);
@@ -629,6 +635,16 @@ describe("Seoul Codex MCP gateway", () => {
           note: "已发送到 Codex 会话",
         }, { status: 202 });
       }
+      if (path === "/api/codex/start") {
+        return Response.json({
+          operationId: "op-fork-1",
+          targetNodeId: "mac-node",
+          kind: "start-thread",
+          idempotencyKey: "codex-fork-1",
+          status: "queued",
+          retryable: false,
+        }, { status: 202 });
+      }
       return Response.json({
         kind: "permission-response-ack",
         requestId: "codex-approval-1",
@@ -646,6 +662,26 @@ describe("Seoul Codex MCP gateway", () => {
       expect(listedText).toContain("thread-1");
       expect(listedText).not.toContain("private-token");
 
+      const started = await mcp.client.callTool({
+        name: "remote_codex_start_thread",
+        arguments: {
+          targetNodeId: "mac-node",
+          text: "continue in a fork",
+          cwd: "/workspace/fork",
+          idempotencyKey: "codex-fork-1",
+          forkFromSessionId: "thread-source-1",
+        },
+      });
+      expect(started.isError).not.toBe(true);
+      expect(await captured[1].clone().json()).toEqual({
+        targetNodeId: "mac-node",
+        text: "continue in a fork",
+        cwd: "/workspace/fork",
+        idempotencyKey: "codex-fork-1",
+        forkFromSessionId: "thread-source-1",
+        deadlineMs: 120_000,
+      });
+
       await mcp.client.callTool({
         name: "remote_codex_send_message",
         arguments: {
@@ -654,7 +690,7 @@ describe("Seoul Codex MCP gateway", () => {
           text: "continue",
         },
       });
-      expect(await captured[1].clone().json()).toEqual({
+      expect(await captured[2].clone().json()).toEqual({
         targetNodeId: "mac-node",
         sessionId: "thread-1",
         text: "continue",
@@ -670,11 +706,43 @@ describe("Seoul Codex MCP gateway", () => {
         },
       });
       expect(approval.isError).not.toBe(true);
-      expect(await captured[2].clone().json()).toEqual({
+      expect(await captured[3].clone().json()).toEqual({
         targetNodeId: "mac-node",
         requestId: "codex-approval-1",
         optionId: "deny",
       });
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  test("rejects malformed and misplaced fork sources before HTTP dispatch", async () => {
+    let fetches = 0;
+    const mcp = await connectMcp(async () => {
+      fetches += 1;
+      return Response.json({});
+    });
+    try {
+      const malformed = await mcp.client.callTool({
+        name: "remote_codex_start_thread",
+        arguments: {
+          targetNodeId: "mac-node",
+          text: "fork",
+          forkFromSessionId: "bad thread id",
+        },
+      });
+      expect(malformed.isError).toBe(true);
+      const misplaced = await mcp.client.callTool({
+        name: "remote_codex_send_message",
+        arguments: {
+          targetNodeId: "mac-node",
+          sessionId: "thread-1",
+          text: "continue",
+          forkFromSessionId: "thread-source-1",
+        },
+      });
+      expect(misplaced.isError).toBe(true);
+      expect(fetches).toBe(0);
     } finally {
       await mcp.close();
     }

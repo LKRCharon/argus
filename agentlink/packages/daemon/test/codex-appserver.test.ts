@@ -166,6 +166,27 @@ describe("owned Codex app-server lifecycle", () => {
     await server.stop();
   });
 
+  test("preserves an owner-blocked queue item and reports its durable submission id", async () => {
+    const { server } = harness(["queue-owner-required"]);
+    await server.start();
+    expect(await server.sendInput(
+      "thread-queue",
+      "wait for the desktop owner",
+      "codex:queue-owner-required",
+      1_000,
+    )).toEqual({
+      turnId: null,
+      delivery: "queued",
+      queuedSubmissionId: "queued-1",
+    });
+    expect(await server.listQueuedSubmissions("thread-queue", 1_000)).toEqual([{
+      id: "queued-1",
+      clientUserMessageId: "codex:queue-owner-required",
+      input: [{ type: "text", text: "wait for the desktop owner" }],
+    }]);
+    await server.stop();
+  });
+
   test("deletes the exact queued submission when queue start fails", async () => {
     const { server } = harness(["queue-success"]);
     await server.start();
@@ -222,6 +243,17 @@ describe("owned Codex app-server lifecycle", () => {
       "codex:legacy-input",
       1_000,
     )).toEqual({ turnId: "turn-legacy", delivery: "legacy" });
+    await server.stop();
+  });
+
+  test("forks persisted history without resuming or hydrating the source", async () => {
+    const { server } = harness(["fork-history"]);
+    await server.start();
+    expect(await server.forkThread(
+      "thread-source",
+      "/workspace/fork",
+      1_000,
+    )).toBe("thread-forked");
     await server.stop();
   });
 

@@ -35,6 +35,12 @@ describe("strict Mesh watch capabilities", () => {
       expect(isBoundedRemoteCodexCommand({ ...bounded, kind }, now)).toBe(true);
     }
     expect(isBoundedRemoteCodexCommand({ ...bounded, kind: "new-session", agent: "codex" }, now)).toBe(true);
+    expect(isBoundedRemoteCodexCommand({
+      ...bounded,
+      kind: "new-session",
+      agent: "codex",
+      forkFromSessionId: "thread-source",
+    }, now)).toBe(true);
     expect(isBoundedRemoteCodexCommand({ ...bounded, kind: "permission-response", requestId: "codex-approval-1" }, now)).toBe(true);
     expect(isBoundedRemoteCodexCommand({ ...bounded, kind: "new-session", agent: "qoder" }, now)).toBe(false);
     expect(isBoundedRemoteCodexCommand({ ...bounded, kind: "permission-response", requestId: "acp-approval-1" }, now)).toBe(false);
@@ -62,6 +68,34 @@ describe("strict Mesh watch capabilities", () => {
     expect(validateBoundedRemoteCodexCommand({ ...bounded, kind: "new-session", agent: "qoder" }, now).status).toBe("invalid");
     for (const kind of ["list-sessions", "user-input", "remote-control", "cloud-session"]) {
       expect(validateBoundedRemoteCodexCommand({ ...bounded, kind }, now).status).toBe("invalid");
+    }
+  });
+
+  test("accepts a bounded fork source only on Codex new-session", () => {
+    const now = 1_000_000;
+    const bounded = { controlRequestId: "codex:request-1", deadlineAt: now + 1_000 };
+    expect(validateBoundedRemoteCodexCommand({
+      ...bounded,
+      kind: "new-session",
+      agent: "codex",
+      forkFromSessionId: "thread-source",
+    }, now)).toMatchObject({
+      status: "valid",
+      command: { forkFromSessionId: "thread-source" },
+    });
+    expect(validateBoundedRemoteCodexCommand({
+      ...bounded,
+      kind: "new-session",
+      agent: "codex",
+      forkFromSessionId: "bad thread id",
+    }, now).status).toBe("invalid");
+    for (const kind of ["codex-input", "codex-resume", "permission-response"]) {
+      expect(validateBoundedRemoteCodexCommand({
+        ...bounded,
+        kind,
+        requestId: "codex-approval-1",
+        forkFromSessionId: "thread-source",
+      }, now).status).toBe("invalid");
     }
   });
 

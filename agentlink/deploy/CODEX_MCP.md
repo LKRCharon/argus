@@ -98,6 +98,14 @@ Operation states are `queued`, `sent`, `acknowledged`, `running`, `completed`,
 intentional: synchronous list/read/send calls can carry a deadline up to 120
 seconds and must not be cut off by an older 15-second outer timeout.
 
+`remote_codex_send_message` never silently changes the requested `sessionId`.
+Its `status: "queued"` response means only that the message is durably queued,
+not that Codex has started executing it. If a desktop-owned idle thread cannot
+resume the queued message and work must continue immediately, call
+`remote_codex_start_thread` with `forkFromSessionId` set to the source thread.
+The remote peer copies the persisted history into a new thread without resuming
+the source writer, then starts the initial turn in that new thread.
+
 `remote_codex_get_events` uses a cursor scoped to the requested `targetNodeId`;
 each peer has its own contiguous sequence. `hasMore` means another retained
 forward page can be fetched. `cursorGap` means the caller's cursor predates the

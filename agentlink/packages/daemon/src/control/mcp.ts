@@ -74,6 +74,7 @@ const ListJobsInputSchema = z.object({
 const RemoteTargetInputSchema = z.object({
   targetNodeId: MeshNodeIdSchema,
   deadlineMs: DeadlineMsSchema.optional().default(30_000),
+  forkFromSessionId: z.never().optional(),
 }).strip();
 const RemoteThreadInputSchema = RemoteTargetInputSchema.extend({
   sessionId: MeshThreadIdSchema,
@@ -87,6 +88,7 @@ const RemoteStartInputSchema = RemoteTargetInputSchema.extend({
   text: z.string().max(64 * 1024).refine((value) => value.trim().length > 0, "text 不能为空"),
   cwd: z.string().max(4_096).optional(),
   idempotencyKey: MeshIdempotencyKeySchema.optional(),
+  forkFromSessionId: MeshThreadIdSchema.optional(),
   deadlineMs: DeadlineMsSchema.optional().default(120_000),
 }).strip();
 const RemoteInputSchema = RemoteThreadInputSchema.extend({
@@ -228,6 +230,7 @@ export class ControlApiClient {
     deadlineMs: number,
     cwd?: string,
     idempotencyKey?: string,
+    forkFromSessionId?: string,
   ): Promise<unknown> {
     return this.request("POST", "/api/codex/start", {
       targetNodeId,
@@ -235,6 +238,7 @@ export class ControlApiClient {
       deadlineMs,
       ...(cwd ? { cwd } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(forkFromSessionId ? { forkFromSessionId } : {}),
     });
   }
 
@@ -488,13 +492,14 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async ({ targetNodeId, text, cwd, idempotencyKey, deadlineMs }) => toolCall(async () => (
+  }, async ({ targetNodeId, text, cwd, idempotencyKey, forkFromSessionId, deadlineMs }) => toolCall(async () => (
     summarizeCodexOperation(await api.startCodexThread(
       targetNodeId,
       text,
       deadlineMs,
       cwd,
       idempotencyKey,
+      forkFromSessionId,
     ))
   )));
 
@@ -528,7 +533,7 @@ export function createControlMcpServer(options: ControlMcpOptions = {}): McpServ
 
   server.registerTool("remote_codex_send_message", {
     title: "Send remote Codex message",
-    description: "向指定远端 Codex 线程发送消息；运行中的回合会被 steer，空闲线程会开始新回合。",
+    description: "向指定远端 Codex 线程发送消息；运行中的回合会被 steer。status=queued 仅表示消息已持久入队，尚未执行；如需立即继续，请调用 remote_codex_start_thread 并传 forkFromSessionId。",
     inputSchema: RemoteInputSchema,
     annotations: {
       readOnlyHint: false,

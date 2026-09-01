@@ -527,6 +527,7 @@ export async function serveWatch(
           text?: string;
           sessionId?: string;
           cwd?: string;
+          forkFromSessionId?: string;
           /** Which agent a new session should use ("qoder" | "codex"). */
           agent?: string;
           task?: unknown;
@@ -567,7 +568,18 @@ export async function serveWatch(
         if (payload?.kind && PHONE_COMMANDS.has(payload.kind) && !MESH_COMMANDS.has(payload.kind)) {
           console.log(`[watch] 收到手机指令: ${payload.kind}`);
         }
-        if (remoteCodexCommand.status === "expired") {
+        if (Object.hasOwn(openedPayload, "forkFromSessionId")
+            && remoteCodexCommand.status === "invalid") {
+          await sendPayload({
+            kind: "codex-error",
+            code: "invalid-codex-fork-source",
+            note: "forkFromSessionId is valid only on a bounded Codex new-session command",
+            timedOut: false,
+            timedOutStage: "watcher",
+            retryable: false,
+            ...controlReply,
+          });
+        } else if (remoteCodexCommand.status === "expired") {
           await sendPayload({
             kind: "codex-error",
             note: "request expired in watcher queue",
@@ -770,7 +782,8 @@ export async function serveWatch(
             const srv = await withinDeadline(codexControl(), deadlineAt);
             const active = activeTurns.get(payload.sessionId);
             let steered = false;
-            let delivery: "queue" | "legacy" = "queue";
+            let delivery: "queue" | "queued" | "legacy" = "queue";
+            let queuedSubmissionId: string | undefined;
             if (active) {
               // Mid-turn: steer instead of queueing a second turn.
               try {
@@ -790,17 +803,21 @@ export async function serveWatch(
                 remainingMs(deadlineAt),
               );
               delivery = result.delivery;
+              queuedSubmissionId = result.queuedSubmissionId;
               if (result.turnId) activeTurns.set(payload.sessionId, result.turnId);
             }
             const reply = {
               kind: "input-ack",
               sessionId: payload.sessionId,
-              status: "running",
+              status: delivery === "queued" ? "queued" : "running",
               note: steered
                 ? "已插话到进行中的回合"
+                : delivery === "queued"
+                  ? "已持久保存到 Codex 桌面队列"
                 : delivery === "queue"
                   ? "已通过 Codex 队列发送到会话"
                   : "已通过兼容模式发送到 Codex 会话",
+              ...(queuedSubmissionId ? { queuedSubmissionId } : {}),
               ...controlReply,
             };
             if (controlRequestId) {
@@ -855,6 +872,7 @@ export async function serveWatch(
         } else if (payload?.kind === "new-session" && payload.text) {
           const wantCodex = payload.agent === "codex";
           const cwd = payload.cwd ?? homedir();
+          const sessionCwd = payload.forkFromSessionId ? (payload.cwd ?? "") : cwd;
           const prompt = payload.text;
           let r: { ok: boolean; note: string; sessionId?: string };
           if (wantCodex) {
@@ -890,7 +908,7 @@ export async function serveWatch(
             try {
               const srv = await withinDeadline(codexControl(), deadlineAt);
               if (stopped) throw new Error("watcher 已停止");
-              const threadId = await srv.startThread(cwd, remainingMs(deadlineAt), controlRequestId ? (lateThreadId) => {
+              const onLateThread = controlRequestId ? (lateThreadId: string) => {
                 if (stopped) return;
                 void enqueueSendAsync({
                   kind: "input-ack",
@@ -900,15 +918,31 @@ export async function serveWatch(
                   lateAfterTimeout: true,
                   ...controlReply,
                 });
-              } : undefined);
-              if (!threadId) throw new Error("thread/start 未返回 threadId");
+              } : undefined;
+              const threadId = payload.forkFromSessionId
+                ? await srv.forkThread(
+                    payload.forkFromSessionId,
+                    payload.cwd,
+                    remainingMs(deadlineAt),
+                    onLateThread,
+                  )
+                : await srv.startThread(cwd, remainingMs(deadlineAt), onLateThread);
+              if (!threadId) {
+                throw new Error(`${payload.forkFromSessionId ? "thread/fork" : "thread/start"} 未返回 threadId`);
+              }
               createdThreadId = threadId;
               if (Date.now() >= deadlineAt) {
                 throw new Error("app-server deadline exceeded before initial turn");
               }
               const turnId = await srv.startTurn(threadId, prompt, remainingMs(deadlineAt));
               if (turnId) activeTurns.set(threadId, turnId);
-              r = { ok: true, note: `已在 ${cwd} 新建 Codex 会话`, sessionId: threadId };
+              r = {
+                ok: true,
+                note: payload.forkFromSessionId
+                  ? "已从指定会话派生 Codex 会话"
+                  : `已在 ${cwd} 新建 Codex 会话`,
+                sessionId: threadId,
+              };
             } catch (e) {
               if (controlRequestId) {
                 await sendPayload(codexErrorReply(e, controlReply, createdThreadId));
@@ -922,7 +956,7 @@ export async function serveWatch(
                 kind: "session-started",
                 sessionId: newId,
                 agent: "codex",
-                cwd,
+                cwd: sessionCwd,
                 prompt,
                 ...controlReply,
               });

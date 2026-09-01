@@ -39,6 +39,7 @@ const DeadlineMsSchema = z.coerce.number().int().min(1_000).max(2 * 60_000);
 const CodexTargetSchema = z.object({
   targetNodeId: MeshNodeIdSchema,
   deadlineMs: DeadlineMsSchema.optional().default(30_000),
+  forkFromSessionId: z.never().optional(),
 }).strip();
 const CodexThreadSchema = CodexTargetSchema.extend({
   sessionId: MeshThreadIdSchema,
@@ -47,6 +48,7 @@ const CodexStartSchema = CodexTargetSchema.extend({
   text: CodexTextSchema,
   cwd: z.string().max(4_096).optional(),
   idempotencyKey: MeshIdempotencyKeySchema.optional(),
+  forkFromSessionId: MeshThreadIdSchema.optional(),
   deadlineMs: DeadlineMsSchema.optional().default(120_000),
 }).strip();
 const CodexInputSchema = CodexThreadSchema.extend({
@@ -111,7 +113,14 @@ export interface ControlController {
   requestResultArtifact(taskId: string): ReturnType<MeshController["requestResultArtifact"]>;
   listCodexThreads(targetNodeId: string, deadlineMs?: number): Promise<Record<string, unknown>>;
   readCodexThread(targetNodeId: string, sessionId: string, deadlineMs?: number): Promise<Record<string, unknown>>;
-  startCodexThreadOperation(targetNodeId: string, text: string, idempotencyKey: string, cwd?: string, deadlineMs?: number): CodexOperationRecord;
+  startCodexThreadOperation(
+    targetNodeId: string,
+    text: string,
+    idempotencyKey: string,
+    cwd?: string,
+    deadlineMs?: number,
+    forkFromSessionId?: string,
+  ): CodexOperationRecord;
   getCodexOperation(operationId: string): CodexOperationRecord | undefined;
   listCodexOperations(query: CodexOperationListQuery): { operations: CodexOperationRecord[]; nextCursor?: string };
   sendCodexInput(targetNodeId: string, sessionId: string, text: string, deadlineMs?: number): Promise<Record<string, unknown>>;
@@ -229,6 +238,7 @@ async function handleApi(request: Request, url: URL, controller: ControlControll
           idempotencyKey,
           input.cwd,
           input.deadlineMs,
+          input.forkFromSessionId,
         );
       } catch (error) {
         if (error instanceof Error && error.message.includes("idempotencyKey")) {
