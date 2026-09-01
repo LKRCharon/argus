@@ -740,7 +740,7 @@ export async function serveWatch(
           // or VS Code has open, not a separate headless run.
           try {
             const srv = await withinDeadline(codexControl(), deadlineAt);
-            await srv.resume(payload.sessionId, remainingMs(deadlineAt));
+            await srv.resumeForInput(payload.sessionId, remainingMs(deadlineAt));
             const active = activeTurns.get(payload.sessionId);
             let steered = false;
             if (active) {

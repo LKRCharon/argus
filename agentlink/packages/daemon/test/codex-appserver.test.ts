@@ -115,6 +115,32 @@ describe("owned Codex app-server lifecycle", () => {
     await server.stop();
   });
 
+  test("resumes input without deprecated full-history hydration", async () => {
+    const { server } = harness(["paginated-resume"]);
+    await server.start();
+    expect(await server.resumeForInput("thread-paginated", 250)).toEqual({
+      canAcceptDirectInput: true,
+      cwd: "/workspace/paginated",
+    });
+    await server.stop();
+  });
+
+  test("hydrates one bounded full-items turn page in chronological order", async () => {
+    const { server } = harness(["paginated-resume"]);
+    await server.start();
+    const resumed = await server.resume("thread-paginated", 250);
+
+    expect(resumed.turns.map((turn) => turn.id)).toEqual(["turn-old", "turn-new"]);
+    expect(resumed.events).toEqual([
+      { type: "user-text", text: "old prompt" },
+      { type: "turn-done", reason: "completed" },
+      { type: "text", text: "new reply" },
+    ]);
+    expect(resumed.canAcceptDirectInput).toBe(true);
+    expect(resumed.cwd).toBe("/workspace/paginated");
+    await server.stop();
+  });
+
   test("bounds late-result retention when an operation never answers", async () => {
     const { server } = harness(["never-thread-start"], { lateResultGraceMs: 25 });
     await server.start();

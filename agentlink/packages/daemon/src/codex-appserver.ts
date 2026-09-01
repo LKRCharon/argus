@@ -25,6 +25,7 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
 const DEFAULT_LATE_RESULT_GRACE_MS = 30_000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 500;
 const MAX_STDOUT_FRAME_BYTES = 16 * 1024 * 1024;
+const RESUME_HISTORY_TURN_LIMIT = 40;
 
 function isMicrosoftStorePath(candidate: string): boolean {
   return process.platform === "win32" && candidate.toLowerCase().includes("\\windowsapps\\");
@@ -511,8 +512,8 @@ export class CodexAppServer {
   }
 
   /**
-   * Load a thread into the server so it can take input, and flatten its history
-   * into the same event shape the live stream uses.
+   * Load a bounded recent page and flatten it into the same event shape the
+   * live stream uses.
    *
    * Flattening happens here rather than on the phone: the item taxonomy
    * (userMessage / reasoning / agentMessage / commandExecution / fileChange …)
@@ -525,12 +526,41 @@ export class CodexAppServer {
     events: Record<string, unknown>[];
     cwd?: string;
   }> {
-    const res = await this.call<any>("thread/resume", { threadId }, timeoutMs);
-    const turns: any[] = res?.initialTurnsPage?.data ?? res?.thread?.turns ?? [];
+    const res = await this.call<any>("thread/resume", {
+      threadId,
+      excludeTurns: true,
+      // app-server deprecated full-history hydration for paginated threads.
+      // A full-items turn page keeps the existing history contract bounded
+      // without teaching the phone app-server's item pagination protocol.
+      initialTurnsPage: {
+        limit: RESUME_HISTORY_TURN_LIMIT,
+        sortDirection: "desc",
+        itemsView: "full",
+      },
+    }, timeoutMs);
+    const page: any[] = Array.isArray(res?.initialTurnsPage?.data)
+      ? res.initialTurnsPage.data
+      : [];
+    const turns = page.slice().reverse();
     return {
       canAcceptDirectInput: res?.thread?.canAcceptDirectInput === true,
       turns,
       events: flattenTurns(turns),
+      cwd: res?.cwd,
+    };
+  }
+
+  /** Resume only the live thread state needed before start/steer input. */
+  async resumeForInput(threadId: string, timeoutMs = 30_000): Promise<{
+    canAcceptDirectInput: boolean;
+    cwd?: string;
+  }> {
+    const res = await this.call<any>("thread/resume", {
+      threadId,
+      excludeTurns: true,
+    }, timeoutMs);
+    return {
+      canAcceptDirectInput: res?.thread?.canAcceptDirectInput === true,
       cwd: res?.cwd,
     };
   }

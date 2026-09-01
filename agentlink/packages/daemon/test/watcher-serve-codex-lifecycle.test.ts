@@ -85,6 +85,11 @@ function fakeServer(
       if (resumeDelay > 0) await Bun.sleep(resumeDelay);
       return { canAcceptDirectInput: true };
     },
+    async resumeForInput(threadId: string): Promise<{ canAcceptDirectInput: boolean }> {
+      state.methodOrder?.push(`resumeForInput:${threadId}`);
+      if (resumeDelay > 0) await Bun.sleep(resumeDelay);
+      return { canAcceptDirectInput: true };
+    },
     async listThreads(): Promise<unknown[]> {
       return [{ id: "following-thread" }];
     },
@@ -229,9 +234,9 @@ test("serveWatch keeps same-session resume, start, and steer commands ordered", 
   expect([...acks].sort()).toEqual(["codex:input-1", "codex:input-2"]);
   expect(state.turns).toBe(1);
   expect(state.methodOrder).toEqual([
-    "resume:thread-ordered",
+    "resumeForInput:thread-ordered",
     "startTurn:first",
-    "resume:thread-ordered",
+    "resumeForInput:thread-ordered",
     "steerTurn:second",
   ]);
   controls.stop();

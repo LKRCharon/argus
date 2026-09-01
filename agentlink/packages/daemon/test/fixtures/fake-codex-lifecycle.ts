@@ -21,7 +21,15 @@ function response(id: number | string | undefined, result: unknown): void {
   else send(value);
 }
 
-function handle(message: { id?: number | string; method?: string }): void {
+function error(id: number | string | undefined, message: string): void {
+  send({ jsonrpc: "2.0", id, error: { code: -32602, message } });
+}
+
+function handle(message: {
+  id?: number | string;
+  method?: string;
+  params?: Record<string, any>;
+}): void {
   switch (message.method) {
     case "initialize":
       if (mode === "exit-init") {
@@ -56,6 +64,55 @@ function handle(message: { id?: number | string; method?: string }): void {
         response(message.id, { thread: { id: "thread-new" } });
       }
       break;
+    case "thread/resume": {
+      if (mode !== "paginated-resume") break;
+      const params = message.params ?? {};
+      if (params.excludeTurns !== true) {
+        send({
+          jsonrpc: "2.0",
+          method: "deprecationNotice",
+          params: { summary: "Full-history hydration is deprecated for paginated threads." },
+        });
+        error(message.id, "full-history resume rejected");
+        break;
+      }
+      const initial = params.initialTurnsPage;
+      if (initial === undefined) {
+        response(message.id, {
+          thread: { id: "thread-paginated", canAcceptDirectInput: true, turns: [] },
+          cwd: "/workspace/paginated",
+        });
+        break;
+      }
+      if (initial.limit !== 40 || initial.sortDirection !== "desc" || initial.itemsView !== "full") {
+        error(message.id, "invalid bounded turn page");
+        break;
+      }
+      response(message.id, {
+        thread: { id: "thread-paginated", canAcceptDirectInput: true, turns: [] },
+        cwd: "/workspace/paginated",
+        initialTurnsPage: {
+          data: [
+            {
+              id: "turn-new",
+              status: "inProgress",
+              items: [{ id: "new-agent", type: "agentMessage", text: "new reply" }],
+            },
+            {
+              id: "turn-old",
+              status: "completed",
+              items: [{
+                id: "old-user",
+                type: "userMessage",
+                content: [{ type: "text", text: "old prompt" }],
+              }],
+            },
+          ],
+          nextCursor: "older-turns",
+        },
+      });
+      break;
+    }
   }
 }
 
