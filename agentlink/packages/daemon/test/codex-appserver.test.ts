@@ -94,8 +94,8 @@ describe("owned Codex app-server lifecycle", () => {
 
   test("bounds initialization timeout, reaps the failed child, and permits retry", async () => {
     const { server, children } = harness(["hang-init", "split"], {
-      startupTimeoutMs: 40,
-      shutdownGraceMs: 20,
+      startupTimeoutMs: 150,
+      shutdownGraceMs: 30,
     });
     await expect(server.start()).rejects.toThrow("initialize 超时");
     expect(exited(children[0]!)).toBe(true);
@@ -125,8 +125,8 @@ describe("owned Codex app-server lifecycle", () => {
     await server.stop();
   });
 
-  test("hydrates one bounded full-items turn page in chronological order", async () => {
-    const { server } = harness(["paginated-resume"]);
+  test("reads one bounded full-items turn page without claiming the active writer", async () => {
+    const { server } = harness(["paginated-read"]);
     await server.start();
     const resumed = await server.resume("thread-paginated", 250);
 
@@ -138,6 +138,90 @@ describe("owned Codex app-server lifecycle", () => {
     ]);
     expect(resumed.canAcceptDirectInput).toBe(true);
     expect(resumed.cwd).toBe("/workspace/paginated");
+    await server.stop();
+  });
+
+  test("falls back to bounded resume only when turn pagination is unavailable", async () => {
+    const { server } = harness(["legacy-read"]);
+    await server.start();
+    const resumed = await server.resume("thread-paginated", 250);
+    expect(resumed.events).toEqual([
+      { type: "user-text", text: "legacy prompt" },
+      { type: "turn-done", reason: "completed" },
+    ]);
+    expect(resumed.cwd).toBe("/workspace/paginated");
+    await server.stop();
+  });
+
+  test("starts cross-writer input through the experimental queue", async () => {
+    const { server } = harness(["queue-success"]);
+    await server.start();
+    expect(await server.sendInput(
+      "thread-queue",
+      "queued prompt",
+      "codex:queue-success",
+      1_000,
+    )).toEqual({ turnId: "turn-queued", delivery: "queue" });
+    expect(await server.listQueuedSubmissions("thread-queue", 1_000)).toEqual([]);
+    await server.stop();
+  });
+
+  test("deletes the exact queued submission when queue start fails", async () => {
+    const { server } = harness(["queue-success"]);
+    await server.start();
+    const originalCall = server.call.bind(server);
+    (server as unknown as { call: (...args: any[]) => Promise<any> }).call = async (
+      method: string,
+      ...args: any[]
+    ) => {
+      if (method === "thread/queue/start") throw new Error("queue start failed");
+      return originalCall(method, ...args);
+    };
+    let failure: unknown;
+    try {
+      await server.sendInput(
+        "thread-queue",
+        "must be cleaned",
+        "codex:start-error",
+        1_000,
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(String(failure)).toContain("queue start failed");
+    expect(await server.listQueuedSubmissions("thread-queue", 1_000)).toEqual([]);
+    await server.stop();
+  });
+
+  test("refuses automatic retry when a failed queue start cannot be cleaned", async () => {
+    const { server } = harness(["queue-cleanup-fails"]);
+    await server.start();
+    let failure: unknown;
+    try {
+      await server.sendInput(
+        "thread-queue",
+        "ambiguous prompt",
+        "codex:queue-ambiguous",
+        1_000,
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ retryable: false });
+    expect(String(failure)).toContain("禁止自动重试");
+    expect(await server.listQueuedSubmissions("thread-queue", 1_000)).toHaveLength(1);
+    await server.stop();
+  });
+
+  test("uses legacy resume and turn start only when queue methods are absent", async () => {
+    const { server } = harness(["legacy-queue"]);
+    await server.start();
+    expect(await server.sendInput(
+      "thread-legacy",
+      "legacy prompt",
+      "codex:legacy-input",
+      1_000,
+    )).toEqual({ turnId: "turn-legacy", delivery: "legacy" });
     await server.stop();
   });
 

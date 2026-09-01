@@ -77,6 +77,16 @@ function fakeServer(
       state.methodOrder?.push(`startTurn:${text}`);
       return "unexpected-turn";
     },
+    async sendInput(
+      threadId: string,
+      text: string,
+      clientUserMessageId: string,
+    ): Promise<{ turnId: string; delivery: "queue" }> {
+      if (resumeDelay > 0) await Bun.sleep(resumeDelay);
+      state.turns += 1;
+      state.methodOrder?.push(`sendInput:${threadId}:${clientUserMessageId}:${text}`);
+      return { turnId: "queued-turn", delivery: "queue" };
+    },
     async steerTurn(_threadId: string, _turnId: string, text: string): Promise<void> {
       state.methodOrder?.push(`steerTurn:${text}`);
     },
@@ -234,11 +244,50 @@ test("serveWatch keeps same-session resume, start, and steer commands ordered", 
   expect([...acks].sort()).toEqual(["codex:input-1", "codex:input-2"]);
   expect(state.turns).toBe(1);
   expect(state.methodOrder).toEqual([
-    "resumeForInput:thread-ordered",
-    "startTurn:first",
-    "resumeForInput:thread-ordered",
+    "sendInput:thread-ordered:codex:input-1:first",
     "steerTurn:second",
   ]);
+  controls.stop();
+});
+
+test("serveWatch replays a correlated Codex input acknowledgement without sending twice", async () => {
+  const conn = new FakeConn();
+  const chan = new SecureChannel(new Uint8Array(32).fill(3));
+  const state = { turns: 0, stopped: false, concurrent: 0, maxConcurrent: 0 };
+  const server = fakeServer(state, 0);
+  const controls = await serveWatch(conn as unknown as WsConn, chan, {
+    meshStrict: true,
+    meshRemoteCodexControl: true,
+    codexServerFactory: () => server,
+  });
+  const frame = async (): Promise<Frame> => ({
+    op: "chan-data",
+    data: { enc: await chan.seal({
+      kind: "codex-input",
+      sessionId: "thread-idempotent",
+      text: "send once",
+      controlRequestId: "codex:input-idempotent",
+      deadlineAt: Date.now() + 500,
+    }) },
+  });
+
+  conn.push(await frame());
+  await waitFor(conn.sent, async (sent) => {
+    const payload = await chan.open<Record<string, unknown>>(sent.data.enc);
+    return payload.kind === "input-ack";
+  });
+  conn.push(await frame());
+  await waitFor([conn.sent], async (sent) => {
+    let acknowledgements = 0;
+    for (const item of sent) {
+      const payload = await chan.open<Record<string, unknown>>(item.data.enc);
+      if (payload.kind === "input-ack"
+        && payload.controlRequestId === "codex:input-idempotent") acknowledgements += 1;
+    }
+    return acknowledgements === 2;
+  });
+
+  expect(state.turns).toBe(1);
   controls.stop();
 });
 

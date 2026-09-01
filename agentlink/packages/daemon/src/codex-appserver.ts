@@ -2,11 +2,11 @@
  * Client for `codex app-server` — the JSON-RPC server that owns Codex threads.
  *
  * This is a different class of integration from transcript watching. Watching
- * infers what happened by tailing files; app-server *is* the session owner, so
- * a thread started in the Codex app or VS Code can be resumed here, spoken to,
- * steered mid-turn and interrupted. Verified against 0.146.0-alpha.3.1: a
- * vscode-sourced thread resumed from an outside connection reports
- * `canAcceptDirectInput: true`.
+ * infers what happened by tailing files; app-server exposes stored history and
+ * a durable user-message queue. Newer Codex releases enforce one active writer
+ * per thread, so Argus reads without resuming and sends through that queue when
+ * the desktop app owns the live session. Direct resume remains a compatibility
+ * path for older binaries that do not expose the queue methods.
  *
  * Codex's own `remote-control` needs a server-side eligibility flag that most
  * accounts do not have yet. Argus owns one private JSONL-over-stdio child, so
@@ -26,6 +26,9 @@ const DEFAULT_LATE_RESULT_GRACE_MS = 30_000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 500;
 const MAX_STDOUT_FRAME_BYTES = 16 * 1024 * 1024;
 const RESUME_HISTORY_TURN_LIMIT = 40;
+const QUEUE_LIST_LIMIT = 100;
+const QUEUE_CLEANUP_RESERVE_MAX_MS = 1_500;
+const QUEUE_LATE_CLEANUP_TIMEOUT_MS = 5_000;
 
 function isMicrosoftStorePath(candidate: string): boolean {
   return process.platform === "win32" && candidate.toLowerCase().includes("\\windowsapps\\");
@@ -91,6 +94,38 @@ type Pending = {
   timedOut: boolean;
   onLateResult?: (value: any) => void;
 };
+
+export interface CodexQueuedSubmission {
+  id: string;
+  clientUserMessageId: string;
+  input: unknown[];
+}
+
+export interface CodexInputDelivery {
+  turnId: string | null;
+  delivery: "queue" | "legacy";
+}
+
+class CodexRpcError extends Error {
+  constructor(
+    readonly code: number | string | undefined,
+    message: string,
+    readonly data?: unknown,
+  ) {
+    super(message);
+    this.name = "CodexRpcError";
+  }
+}
+
+/** A delivery may already have started, so callers must not retry it blindly. */
+export class CodexDeliveryError extends Error {
+  readonly retryable = false;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexDeliveryError";
+  }
+}
 
 export interface CodexAppServerOptions {
   /** Test injection. Production always spawns the resolved Codex binary. */
@@ -253,6 +288,7 @@ export class CodexAppServer {
       if (this.proc !== proc) throw new Error("app-server 在初始化前退出");
       await this.call("initialize", {
         clientInfo: { name: "argus", title: "Argus", version: "0.1.0" },
+        capabilities: { experimentalApi: true },
       }, Math.max(1, deadline - Date.now()));
       this.notify("initialized");
     } catch (error) {
@@ -346,7 +382,13 @@ export class CodexAppServer {
         }
         return;
       }
-      if (msg.error) p.reject(new Error(msg.error.message ?? "app-server 错误"));
+      if (msg.error) {
+        p.reject(new CodexRpcError(
+          msg.error.code,
+          msg.error.message ?? "app-server 错误",
+          msg.error.data,
+        ));
+      }
       else p.resolve(msg.result);
       return;
     }
@@ -512,8 +554,8 @@ export class CodexAppServer {
   }
 
   /**
-   * Load a bounded recent page and flatten it into the same event shape the
-   * live stream uses.
+   * Read a bounded recent page without claiming the thread's writer lock, then
+   * flatten it into the same event shape the live stream uses.
    *
    * Flattening happens here rather than on the phone: the item taxonomy
    * (userMessage / reasoning / agentMessage / commandExecution / fileChange …)
@@ -526,22 +568,55 @@ export class CodexAppServer {
     events: Record<string, unknown>[];
     cwd?: string;
   }> {
+    const deadline = Date.now() + boundedMs(timeoutMs, 30_000);
+    try {
+      const read = await this.call<any>("thread/read", {
+        threadId,
+        includeTurns: false,
+      }, remainingBefore(deadline));
+      const page = await this.call<any>("thread/turns/list", {
+        threadId,
+        limit: RESUME_HISTORY_TURN_LIMIT,
+        sortDirection: "desc",
+        itemsView: "full",
+      }, remainingBefore(deadline));
+      const newestFirst: any[] = Array.isArray(page?.data) ? page.data : [];
+      const turns = newestFirst.slice().reverse();
+      const thread = read?.thread;
+      return {
+        canAcceptDirectInput: thread?.canAcceptDirectInput === true,
+        turns,
+        events: flattenTurns(turns),
+        cwd: typeof thread?.cwd === "string" ? thread.cwd : undefined,
+      };
+    } catch (error) {
+      // 0.146 and earlier do not expose turn pagination. Only an explicit
+      // method-not-found response may fall back to resume; active-writer and
+      // other runtime failures must remain visible rather than being retried.
+      if (!isRpcMethodUnavailable(error)) throw error;
+      return this.resumeWithBoundedHistory(threadId, remainingBefore(deadline));
+    }
+  }
+
+  private async resumeWithBoundedHistory(threadId: string, timeoutMs: number): Promise<{
+    canAcceptDirectInput: boolean;
+    turns: any[];
+    events: Record<string, unknown>[];
+    cwd?: string;
+  }> {
     const res = await this.call<any>("thread/resume", {
       threadId,
       excludeTurns: true,
-      // app-server deprecated full-history hydration for paginated threads.
-      // A full-items turn page keeps the existing history contract bounded
-      // without teaching the phone app-server's item pagination protocol.
       initialTurnsPage: {
         limit: RESUME_HISTORY_TURN_LIMIT,
         sortDirection: "desc",
         itemsView: "full",
       },
     }, timeoutMs);
-    const page: any[] = Array.isArray(res?.initialTurnsPage?.data)
+    const newestFirst: any[] = Array.isArray(res?.initialTurnsPage?.data)
       ? res.initialTurnsPage.data
       : [];
-    const turns = page.slice().reverse();
+    const turns = newestFirst.slice().reverse();
     return {
       canAcceptDirectInput: res?.thread?.canAcceptDirectInput === true,
       turns,
@@ -563,6 +638,171 @@ export class CodexAppServer {
       canAcceptDirectInput: res?.thread?.canAcceptDirectInput === true,
       cwd: res?.cwd,
     };
+  }
+
+  async listQueuedSubmissions(
+    threadId: string,
+    timeoutMs = 30_000,
+  ): Promise<CodexQueuedSubmission[]> {
+    const res = await this.call<any>("thread/queue/list", {
+      threadId,
+      limit: QUEUE_LIST_LIMIT,
+    }, timeoutMs);
+    const rows: any[] = Array.isArray(res?.data) ? res.data : [];
+    return rows.flatMap((row): CodexQueuedSubmission[] => {
+      const id = typeof row?.id === "string" ? row.id : "";
+      const clientUserMessageId = typeof row?.clientUserMessageId === "string"
+        ? row.clientUserMessageId
+        : "";
+      if (!id || !clientUserMessageId) return [];
+      return [{
+        id,
+        clientUserMessageId,
+        input: Array.isArray(row.input) ? row.input : [],
+      }];
+    });
+  }
+
+  async deleteQueuedSubmission(
+    threadId: string,
+    queuedSubmissionId: string,
+    timeoutMs = 30_000,
+  ): Promise<boolean> {
+    const res = await this.call<any>("thread/queue/delete", {
+      threadId,
+      queuedSubmissionId,
+    }, timeoutMs);
+    return res?.deleted === true;
+  }
+
+  /**
+   * Deliver input through the cross-writer queue. Older app-server releases
+   * fall back to resume + turn/start only when the queue method is absent.
+   */
+  async sendInput(
+    threadId: string,
+    text: string,
+    clientUserMessageId: string,
+    timeoutMs = 30_000,
+  ): Promise<CodexInputDelivery> {
+    const deadline = Date.now() + boundedMs(timeoutMs, 30_000);
+    try {
+      return {
+        turnId: await this.startQueuedTurn(
+          threadId,
+          text,
+          clientUserMessageId,
+          remainingBefore(deadline),
+        ),
+        delivery: "queue",
+      };
+    } catch (error) {
+      if (!isRpcMethodUnavailable(error)) throw error;
+    }
+
+    await this.resumeForInput(threadId, remainingBefore(deadline));
+    return {
+      turnId: await this.startTurn(threadId, text, remainingBefore(deadline)),
+      delivery: "legacy",
+    };
+  }
+
+  private async startQueuedTurn(
+    threadId: string,
+    text: string,
+    clientUserMessageId: string,
+    timeoutMs: number,
+  ): Promise<string | null> {
+    const totalMs = boundedMs(timeoutMs, 30_000);
+    const deadline = Date.now() + totalMs;
+    const cleanupReserve = Math.min(
+      QUEUE_CLEANUP_RESERVE_MAX_MS,
+      Math.max(20, Math.floor(totalMs / 5)),
+    );
+    const deliveryDeadline = Math.max(Date.now() + 1, deadline - cleanupReserve);
+    let queuedSubmissionId: string | null = null;
+
+    try {
+      const added = await this.call<any>("thread/queue/add", {
+        threadId,
+        input: [{ type: "text", text }],
+        clientUserMessageId,
+      }, remainingBefore(deliveryDeadline), (late) => {
+        const lateId = queuedSubmissionIdFrom(late);
+        if (!lateId) return;
+        // The caller already received a timeout. Remove the exact late-created
+        // item so it cannot sit in the desktop queue and execute unexpectedly.
+        void this.deleteQueuedSubmission(
+          threadId,
+          lateId,
+          QUEUE_LATE_CLEANUP_TIMEOUT_MS,
+        ).catch(() => {});
+      });
+      queuedSubmissionId = queuedSubmissionIdFrom(added);
+      if (!queuedSubmissionId) throw new Error("thread/queue/add 返回无效 submission");
+
+      const started = await this.call<any>("thread/queue/start", {
+        threadId,
+        queuedSubmissionId,
+      }, remainingBefore(deliveryDeadline));
+      const turnId = started?.turn?.id ?? started?.turnId;
+      if (!turnId) {
+        throw new CodexDeliveryError("thread/queue/start 结果不明确，禁止自动重试");
+      }
+      return String(turnId);
+    } catch (error) {
+      // If add itself is unavailable there is nothing to clean and the caller
+      // may use the legacy path. If start is unavailable, the created item must
+      // still be deleted before that fallback is allowed.
+      if (isRpcMethodUnavailable(error) && !queuedSubmissionId) throw error;
+
+      try {
+        const cleanup = await this.cleanupQueuedInput(
+          threadId,
+          clientUserMessageId,
+          queuedSubmissionId,
+          deadline,
+        );
+        if (cleanup === "ambiguous") {
+          throw new CodexDeliveryError("Codex 队列项已不在队列中，投递结果不明确，禁止自动重试");
+        }
+      } catch (cleanupError) {
+        if (cleanupError instanceof CodexDeliveryError) throw cleanupError;
+        const original = error instanceof Error ? error.message : String(error);
+        throw new CodexDeliveryError(`${original}; Codex 队列清理失败，禁止自动重试`);
+      }
+      throw error;
+    }
+  }
+
+  private async cleanupQueuedInput(
+    threadId: string,
+    clientUserMessageId: string,
+    queuedSubmissionId: string | null,
+    deadline: number,
+  ): Promise<"clean" | "absent" | "ambiguous"> {
+    if (queuedSubmissionId) {
+      const deleted = await this.deleteQueuedSubmission(
+        threadId,
+        queuedSubmissionId,
+        remainingBefore(deadline),
+      );
+      return deleted ? "clean" : "ambiguous";
+    }
+
+    const matches = (await this.listQueuedSubmissions(
+      threadId,
+      remainingBefore(deadline),
+    )).filter((item) => item.clientUserMessageId === clientUserMessageId);
+    if (matches.length === 0) return "absent";
+    for (const item of matches) {
+      if (!await this.deleteQueuedSubmission(
+        threadId,
+        item.id,
+        remainingBefore(deadline),
+      )) return "ambiguous";
+    }
+    return "clean";
   }
 
   /** Send a message, starting a new turn. */
@@ -620,6 +860,19 @@ export class CodexAppServer {
 function boundedMs(value: number | undefined, fallback: number): number {
   if (value === undefined || !Number.isFinite(value)) return fallback;
   return Math.max(1, Math.trunc(value));
+}
+
+function remainingBefore(deadline: number): number {
+  return Math.max(1, deadline - Date.now());
+}
+
+function isRpcMethodUnavailable(error: unknown): boolean {
+  return error instanceof CodexRpcError && Number(error.code) === -32601;
+}
+
+function queuedSubmissionIdFrom(value: any): string | null {
+  const id = value?.queuedSubmission?.id;
+  return typeof id === "string" && id ? id : null;
 }
 
 function hasExited(proc: ChildProcessWithoutNullStreams): boolean {

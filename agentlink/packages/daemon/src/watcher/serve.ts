@@ -21,6 +21,7 @@ import {
 } from "@agentlink/wire";
 import type { NormalizedEvent } from "../agent/types";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -321,6 +322,13 @@ export async function serveWatch(
   const CODEX_START_MAX_CONCURRENCY = 2;
   /** Turn currently running per thread, so steer/interrupt have a target. */
   const activeTurns = new Map<string, string>();
+  /** Successful correlated inputs, bounded so relay replay cannot send twice. */
+  const completedCodexInputs = new Map<string, {
+    sessionId: string;
+    text: string;
+    reply: Record<string, unknown>;
+  }>();
+  const CODEX_INPUT_ACK_CACHE_LIMIT = 256;
   /** Approvals awaiting a phone answer: requestId -> app-server request id. */
   const pendingApprovals = new Map<string, number | string>();
 
@@ -738,11 +746,31 @@ export async function serveWatch(
         } else if (payload?.kind === "codex-input" && payload.sessionId && payload.text) {
           // Real two-way control: this lands in the same thread the desktop app
           // or VS Code has open, not a separate headless run.
+          const completed = controlRequestId
+            ? completedCodexInputs.get(controlRequestId)
+            : undefined;
+          if (completed) {
+            if (completed.sessionId === payload.sessionId && completed.text === payload.text) {
+              await sendPayload(completed.reply);
+            } else {
+              await sendPayload({
+                kind: "codex-error",
+                code: "codex-control-request-conflict",
+                note: "controlRequestId was reused for different Codex input",
+                timedOut: false,
+                timedOutStage: "watcher",
+                retryable: false,
+                sessionId: payload.sessionId,
+                ...controlReply,
+              });
+            }
+            return;
+          }
           try {
             const srv = await withinDeadline(codexControl(), deadlineAt);
-            await srv.resumeForInput(payload.sessionId, remainingMs(deadlineAt));
             const active = activeTurns.get(payload.sessionId);
             let steered = false;
+            let delivery: "queue" | "legacy" = "queue";
             if (active) {
               // Mid-turn: steer instead of queueing a second turn.
               try {
@@ -755,16 +783,39 @@ export async function serveWatch(
               }
             }
             if (!steered) {
-              const turnId = await srv.startTurn(payload.sessionId, payload.text, remainingMs(deadlineAt));
-              if (turnId) activeTurns.set(payload.sessionId, turnId);
+              const result = await srv.sendInput(
+                payload.sessionId,
+                payload.text,
+                controlRequestId ?? `argus-${randomUUID()}`,
+                remainingMs(deadlineAt),
+              );
+              delivery = result.delivery;
+              if (result.turnId) activeTurns.set(payload.sessionId, result.turnId);
             }
-            await sendPayload({
+            const reply = {
               kind: "input-ack",
               sessionId: payload.sessionId,
               status: "running",
-              note: steered ? "已插话到进行中的回合" : "已发送到 Codex 会话",
+              note: steered
+                ? "已插话到进行中的回合"
+                : delivery === "queue"
+                  ? "已通过 Codex 队列发送到会话"
+                  : "已通过兼容模式发送到 Codex 会话",
               ...controlReply,
-            });
+            };
+            if (controlRequestId) {
+              completedCodexInputs.set(controlRequestId, {
+                sessionId: payload.sessionId,
+                text: payload.text,
+                reply,
+              });
+              while (completedCodexInputs.size > CODEX_INPUT_ACK_CACHE_LIMIT) {
+                const oldest = completedCodexInputs.keys().next().value;
+                if (!oldest) break;
+                completedCodexInputs.delete(oldest);
+              }
+            }
+            await sendPayload(reply);
           } catch (e) {
             await sendPayload(controlRequestId
               ? codexErrorReply(e, controlReply, payload.sessionId)
@@ -1098,6 +1149,9 @@ function codexErrorReply(
   const note = timedOut
     ? "Codex app-server request timed out"
     : startupFailed ? "Codex app-server startup failed" : "Codex app-server request failed";
+  const explicitRetryable = typeof (error as { retryable?: unknown })?.retryable === "boolean"
+    ? (error as { retryable: boolean }).retryable
+    : undefined;
   console.log(`[watch] Codex control failed: ${code}`);
   return {
     kind: "codex-error",
@@ -1105,7 +1159,7 @@ function codexErrorReply(
     note,
     timedOut,
     timedOutStage: "app-server",
-    retryable: timedOut || /连接|connect|unavailable|启动/i.test(diagnostic),
+    retryable: explicitRetryable ?? (timedOut || /连接|connect|unavailable|启动/i.test(diagnostic)),
     ...(sessionId ? { sessionId } : {}),
     ...controlReply,
   };
