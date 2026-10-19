@@ -1,0 +1,26 @@
+[Unit]
+Description=Argus authenticated desktop gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/argus-desktop-gateway/current
+Environment=ARGUS_GATEWAY_CONFIG=/home/ubuntu/argus-desktop-gateway/config.json
+ExecStart=/home/ubuntu/.bun/bin/bun run packages/desktop-bridge/src/gateway.ts
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+MemoryMax=256M
+TasksMax=64
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -33,6 +33,11 @@
 
 ## 功能
 
+需要从 Windows 浏览器继续 Mac 原 Codex App 的会话，可使用独立的
+[Argus Desktop Web](agentlink/packages/desktop-bridge/README.md)：支持项目选择、
+新建对话、增量回复、追加指令和停止；原生未发送草稿可由窗口组件操作。
+这条路径使用两段 SSH，受信任的中转服务器会终止加密，与原 AgentLink 配对通道独立。
+
 目标是让你的代理**安全地**、不被打断地持续工作。下面的一切都为此服务。
 
 ### 代理感知的保持唤醒

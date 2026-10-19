@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mac 窗口 · Argus</title><link rel="stylesheet" href="/style.css"></head>
+<body><div class="shell">
+<header><div class="brand"><span class="mark">▣</span><div><strong>Mac 窗口</strong><span class="subtitle">ChatGPT / Codex · 现有会话</span></div></div><div class="connection"><i id="dot"></i><span id="connection">正在连接 Mac…</span></div></header>
+<main>
+<section class="toolbar"><div class="window-select"><label for="windows">当前窗口</label><select id="windows" aria-label="选择 Mac 窗口"><option value="">等待 Mac 窗口</option></select><button id="refresh" class="icon" title="刷新窗口" aria-label="刷新窗口">↻</button></div><div class="tools"><button id="focus">唤起 App</button><button id="keyboard" aria-pressed="false">启用键鼠</button><button id="fullscreen" class="icon" title="全屏" aria-label="全屏">⛶</button></div></section>
+<section id="stage" class="stage" tabindex="0" aria-label="Mac App 画面，启用键鼠后可点击操作"><img id="screen" alt="Mac 上的 ChatGPT / Codex 窗口" draggable="false" hidden><div id="empty" class="empty"><div class="empty-icon">▣</div><h1 id="empty-title">正在连接你的 Mac</h1><p id="empty-text">连接后，这里显示 Mac 上现有的 App 窗口。</p></div></section>
+<section id="permissions" class="permissions" hidden><div><strong>首次连接，需要在 Mac 授权</strong><p>允许屏幕录制后显示画面；允许辅助功能后可操作窗口。授权后重新打开此组件。</p></div><div class="permission-buttons"><button id="screen-permission">在 Mac 打开录屏授权</button><button id="accessibility-permission">在 Mac 打开辅助功能授权</button></div></section>
+<section class="compose"><label for="text">中文 / 长文本输入</label><div class="compose-row"><textarea id="text" rows="2" maxlength="4000" placeholder="先在 App 画面里点选输入框，再把文字输入到 Mac。"></textarea><div class="compose-buttons"><button id="insert">输入到 Mac</button><button id="enter" class="subtle">按 Enter</button></div></div></section>
+<footer><span id="details">SSH 加密连接 · 仅转发 App 窗口</span><span id="hint">启用键鼠后，Ctrl 对应 Mac 的 ⌘；中文可用下方输入框。</span></footer>
+<div id="toast" role="status" hidden></div>
+</main></div><script src="/app.js"></script></body></html>

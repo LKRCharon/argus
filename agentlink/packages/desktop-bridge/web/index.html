@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Argus · 设备会话</title><link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <aside id="sidebar">
+    <div class="brand">Argus <span id="device-name">设备会话</span></div>
+    <div id="device-controls" class="device-controls" hidden><select id="device" aria-label="选择设备"></select><button id="logout" type="button">退出</button></div>
+    <div class="connection"><span id="dot"></span><span id="connection">正在连接设备</span><button id="refresh" title="刷新会话">刷新</button></div>
+    <div class="project-actions"><select id="project" aria-label="选择项目"><option value="">全部会话</option></select><button id="new-chat" title="在所选项目新建对话">新建对话</button></div>
+    <input id="search" type="search" placeholder="搜索会话" aria-label="搜索会话">
+    <nav id="threads" aria-label="设备上的会话"></nav>
+    <button id="more-threads" class="quiet" hidden>更多会话</button>
+    <footer><span id="execution-location">执行保留在目标设备</span><a id="window-link" href="http://127.0.0.1:18942/" target="_blank" rel="noopener" hidden>原窗口与草稿</a></footer>
+  </aside>
+  <main>
+    <header><button id="menu" class="quiet" aria-label="显示会话列表">会话</button><div><h1 id="title">选择一个会话</h1><p id="workspace"></p></div><span id="runtime"></span></header>
+    <div id="notice" role="status" hidden></div>
+    <section id="conversation" aria-label="聊天记录">
+      <button id="older" class="quiet" hidden>加载更早的消息</button>
+      <div id="empty"><strong id="empty-title">继续设备上的工作</strong><p id="empty-text">选择现有会话，或选择项目后新建对话。</p></div>
+      <div id="messages"></div>
+    </section>
+    <section id="requests" aria-label="等待处理的请求" hidden></section>
+    <form id="composer">
+      <textarea id="input" rows="3" placeholder="向此会话发送消息" aria-label="消息" disabled></textarea>
+      <div class="composer-bar"><span class="composer-settings"><span id="model">原 App 的模型</span><span id="permissions">发送默认：完全访问</span></span><span class="composer-actions"><button type="button" id="stop" hidden>停止</button><button type="submit" id="send" disabled>发送</button></span></div>
+      <p class="hint" id="hint">Enter 发送 · Shift + Enter 换行</p>
+    </form>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

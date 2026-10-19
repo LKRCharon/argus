@@ -29,6 +29,13 @@ and phone connection are optional and must be configured by their owner.
 
 ## Quick start
 
+For browser control of existing Codex desktop chats on a Mac, see the optional
+[Argus Desktop Web](agentlink/packages/desktop-bridge/README.md) adapter. It adds
+project selection, new chats, live text, steering, and stopping through the
+original App, plus an optional window viewer for native drafts. Its SSH relay
+terminates transport encryption and must be trusted; it uses a separate path
+from the paired AgentLink channel described below.
+
 Build and open the macOS app from the repository root:
 
 ```bash
