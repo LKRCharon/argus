@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { CodexAppServer } from "../../daemon/src/codex-appserver";
 import { DesktopIpc, type Message } from "./ipc";
@@ -7,6 +6,7 @@ import { applyPatches, desktopTurns, publicState, publicTurn, textInput, viewDif
 import { DesktopProjects } from "./projects";
 import { fullAccessThreadSettings, fullAccessThreadStart } from "./permissions";
 import { approvalTarget } from "./requests";
+import { openDesktopThread } from "./platform";
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -14,7 +14,8 @@ export class DesktopBridge extends EventEmitter {
   readonly ipc: DesktopIpc;
   private catalogue = new CodexAppServer();
   private creatorFactory = () => new CodexAppServer();
-  private states = new Map<string, { owner: string; revision: number; state: Message; view: Message }>();
+  private states = new Map<string, { owner: string; revision: number; viewRevision: number; state: Message; view: Message }>();
+  private flushes = new Map<string, ReturnType<typeof setTimeout>>();
   private subscriptions = new Map<string, number>();
   private selections = new Map<string, Promise<Message>>();
   private approving = new Set<string>();
@@ -25,7 +26,7 @@ export class DesktopBridge extends EventEmitter {
     super();
     this.ipc = new DesktopIpc(socketPath);
     this.ipc.on("broadcast", message => this.onBroadcast(message));
-    this.ipc.on("disconnect", () => { this.states.clear(); this.emit("event", { type: "connection", connected: false }); });
+    this.ipc.on("disconnect", () => { this.clearFlushes(); this.states.clear(); this.emit("event", { type: "connection", connected: false }); });
     this.ipc.on("connected", () => {
       this.emit("event", { type: "connection", connected: true });
       for (const id of this.subscriptions.keys()) void this.ipc.follow(id, true).catch(() => {});
@@ -95,7 +96,28 @@ export class DesktopBridge extends EventEmitter {
 
   snapshot(threadId: string): Message | null {
     const snapshot = this.states.get(threadId);
-    return snapshot ? { type: "snapshot", threadId, revision: snapshot.revision, view: snapshot.view } : null;
+    return snapshot ? { type: "snapshot", threadId, revision: snapshot.viewRevision, view: snapshot.view } : null;
+  }
+
+  private clearFlushes(): void {
+    for (const timer of this.flushes.values()) clearTimeout(timer);
+    this.flushes.clear();
+  }
+
+  private flush(id: string): void {
+    this.flushes.delete(id);
+    const current = this.states.get(id);
+    if (!current) return;
+    try {
+      const view = publicState(current.state);
+      this.deliveries.observe(desktopTurns(current.state));
+      const patches = viewDiff(current.view, view), baseRevision = current.viewRevision;
+      current.view = view; current.viewRevision = current.revision;
+      this.emit("event", { type: "patches", threadId: id, baseRevision, revision: current.viewRevision, patches });
+    } catch {
+      this.states.delete(id); this.emit("event", { type: "resync", threadId: id });
+      void this.ipc.follow(id, true).catch(() => {});
+    }
   }
 
   private onBroadcast(message: Message): void {
@@ -106,7 +128,8 @@ export class DesktopBridge extends EventEmitter {
     try {
       if (change.type === "snapshot") {
         if (change.conversationState?.id !== id) throw new Error("Desktop snapshot thread mismatch");
-        this.states.set(id, { owner: message.sourceClientId, revision: change.revision, state: change.conversationState, view: publicState(change.conversationState) });
+        clearTimeout(this.flushes.get(id)); this.flushes.delete(id);
+        this.states.set(id, { owner: message.sourceClientId, revision: change.revision, viewRevision: change.revision, state: change.conversationState, view: publicState(change.conversationState) });
       } else if (change.type === "patches") {
         if (!previous || previous.owner !== message.sourceClientId || previous.revision !== change.baseRevision) {
           void this.ipc.follow(id, true).catch(() => {});
@@ -116,15 +139,16 @@ export class DesktopBridge extends EventEmitter {
         previous.revision = change.revision;
       } else return;
       const current = this.states.get(id)!;
-      this.deliveries.observe(desktopTurns(current.state));
-      if (change.type === "snapshot") this.emit("event", this.snapshot(id));
-      else {
-        const view = publicState(current.state);
-        const patches = viewDiff(current.view, view);
-        current.view = view;
-        this.emit("event", { type: "patches", threadId: id, baseRevision: change.baseRevision, revision: change.revision, patches });
+      if (change.type === "snapshot") {
+        this.deliveries.observe(desktopTurns(current.state));
+        this.emit("event", this.snapshot(id));
+      } else if (!this.flushes.has(id)) {
+        // Apply every native patch in order, project once per 40 ms window.
+        // This is a maximum delay, not a debounce that can starve a busy chat.
+        this.flushes.set(id, setTimeout(() => this.flush(id), 40));
       }
     } catch {
+      clearTimeout(this.flushes.get(id)); this.flushes.delete(id);
       this.states.delete(id);
       this.emit("event", { type: "resync", threadId: id });
       void this.ipc.follow(id, true).catch(() => {});
@@ -145,6 +169,7 @@ export class DesktopBridge extends EventEmitter {
     if (count > 0) this.subscriptions.set(threadId, count);
     else {
       this.subscriptions.delete(threadId); this.states.delete(threadId);
+      clearTimeout(this.flushes.get(threadId)); this.flushes.delete(threadId);
       if (this.ipc.connected) void this.ipc.follow(threadId, false).catch(() => {});
     }
   }
@@ -162,18 +187,14 @@ export class DesktopBridge extends EventEmitter {
       await this.rpc("thread/read", { threadId, includeTurns: false });
       try { return await this.owner(threadId, 1000); }
       catch { /* An explicit selection may ask the App to load an unowned chat. */ }
-      if (process.platform !== "darwin") throw new Error("This adapter controls a Mac desktop App");
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn("/usr/bin/open", ["-b", "com.openai.codex", `codex://threads/${encodeURIComponent(threadId)}`], { stdio: "ignore" });
-        child.once("error", reject); child.once("exit", code => code === 0 ? resolve() : reject(new Error("Cannot open the Mac thread")));
-      });
+      await openDesktopThread(threadId);
       const deadline = Date.now() + 15000;
       while (Date.now() < deadline) {
         await pause(300);
         try { return await this.owner(threadId, 1000); }
         catch { /* Wait for the original desktop owner, never execute in the reader. */ }
       }
-      throw new Error("原 App 尚未接管此会话；请在 Mac 打开该会话后重试");
+      throw new Error("原 App 尚未接管此会话；请在目标设备打开该会话后重试");
     })();
     this.selections.set(threadId, selection);
     try { return await selection; } finally { this.selections.delete(threadId); }
@@ -201,7 +222,7 @@ export class DesktopBridge extends EventEmitter {
       const response = await this.ipc.request("thread-follower-update-thread-settings", {
         conversationId: threadId, threadSettings: fullAccessThreadSettings(), ...(activeTurnId ? { activeTurnId } : {}),
       }, { targetClientId: owner.handledByClientId });
-      if (response.result?.applied !== true) throw new Error("Mac 未接受完全访问设置，消息尚未发送");
+      if (response.result?.applied !== true) throw new Error("原 App 未接受完全访问设置，消息尚未发送");
       return { applied: true, activeTurnId: activeTurnId ?? null };
     } finally { release(); }
   }
@@ -243,7 +264,7 @@ export class DesktopBridge extends EventEmitter {
     if (!state || state.owner !== owner.handledByClientId) throw new Error("审批状态尚未同步，请刷新会话");
     const { request, kind } = approvalTarget(state.state, requestId, method, decision);
     const key = JSON.stringify([threadId, method, request.id]);
-    if (this.approving.has(key)) throw new Error("此审批正在发送，请等待 Mac 同步");
+    if (this.approving.has(key)) throw new Error("此审批正在发送，请等待目标设备同步");
     this.approving.add(key);
     try {
       const response = await this.ipc.request(`thread-follower-${kind}-approval-decision`, { conversationId: threadId, requestId: request.id, decision }, { targetClientId: owner.handledByClientId });
@@ -252,6 +273,6 @@ export class DesktopBridge extends EventEmitter {
   }
 
   async close(): Promise<void> {
-    clearInterval(this.timer); this.ipc.close(); await this.catalogue.stop(); this.deliveries.close();
+    clearInterval(this.timer); this.clearFlushes(); this.ipc.close(); await this.catalogue.stop(); this.deliveries.close();
   }
 }

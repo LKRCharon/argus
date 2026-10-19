@@ -19,6 +19,7 @@
     "packages/*/src/**/*.ts",
     "packages/*/test/**/*.ts",
     "packages/desktop-bridge/web/**/*.ts",
+    "packages/desktop-bridge/gateway-web/**/*.ts",
     "packages/desktop-bridge/deploy/**/*.ts",
     "packages/desktop-bridge/fallback/build.ts",
     "scripts/**/*.ts",

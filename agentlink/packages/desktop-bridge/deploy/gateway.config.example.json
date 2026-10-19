@@ -1,0 +1,11 @@
+{
+  "origin": "https://argus.example.com",
+  "basePath": "/r/REPLACE_WITH_AT_LEAST_40_RANDOM_HEX_CHARACTERS",
+  "authFile": "/home/ubuntu/oj-data/users.json",
+  "allowedUsers": ["kairong"],
+  "port": 18945,
+  "devices": [
+    {"id": "mac", "name": "Mac", "upstream": "http://127.0.0.1:18943"},
+    {"id": "windows", "name": "Windows", "upstream": "http://127.0.0.1:18944"}
+  ]
+}

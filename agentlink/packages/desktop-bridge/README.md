@@ -1,10 +1,12 @@
 # Argus Desktop Web
 
-在 Windows 浏览器中继续 Mac Codex 桌面 App 的现有会话。网页在本地排版，Mac 保留会话、模型和实际执行；回复通过增量数据回传。支持项目选择、项目内新建对话、草稿、历史分页、追加指令和停止。按设备所有者的选择，Argus 发送默认使用原生完全访问。
+在浏览器中继续 Mac 或 Windows Codex 桌面 App 的现有会话。网页在浏览器排版，目标设备保留会话、模型和实际执行；回复通过增量数据回传。支持设备与项目选择、项目内新建对话、草稿、历史分页、追加指令和停止。按设备所有者的选择，Argus 发送默认使用原生完全访问。
 
 这是独立的实验性适配器。目前针对 Codex 桌面版所带 CLI `0.163.0-alpha.10.2` 验证；桌面 follower IPC 不是官方稳定公开 API，App 升级后需要重新检查兼容性。适配器没有复制原 App 的前端包。
 
 ## 日常使用
+
+公网部署打开配置的 HTTPS 域名，使用允许的 OJ 账号和原密码登录，再选择 Mac 或 Windows。网页、API 和 WebSocket 均需登录。部署、Windows 受控端及回退方式见 [gateway.md](docs/gateway.md)。下面的本机 SSH 入口仍可使用。
 
 Windows 运行 [Open-Codex-Web.cmd](deploy/windows/Open-Codex-Web.cmd)，打开 `http://127.0.0.1:18943/`。需要 Windows OpenSSH，以及已能免交互登录中转服务器的 SSH 别名 `myten`。可通过 PowerShell 的 `-Relay` 参数换用其他别名。
 

@@ -23,6 +23,7 @@ export interface Creation {
 /** Write before dispatch. A restarted or timed-out request is never sent again. */
 export class Deliveries {
   private db: Database;
+  private tracked = new Map<string, Pick<Delivery, "state" | "turnId">>();
   constructor(path: string) {
     this.db = new Database(path, { create: true, strict: true });
     if (path !== ":memory:") chmodSync(path, 0o600);
@@ -31,6 +32,7 @@ export class Deliveries {
     this.db.exec("CREATE TABLE IF NOT EXISTS creations (id TEXT PRIMARY KEY,projectId TEXT NOT NULL,threadId TEXT,state TEXT NOT NULL,note TEXT)");
     this.db.query("UPDATE deliveries SET state='unknown', note='Bridge restarted during delivery; check history before resending', updatedAt=? WHERE state IN ('received','dispatching')").run(Date.now());
     this.db.exec("UPDATE creations SET state='unknown',note='Bridge restarted during creation; check the original App' WHERE state='creating'");
+    for (const row of this.db.query<Delivery, []>("SELECT id,state,turnId FROM deliveries").all()) this.tracked.set(row.id, row);
   }
 
   claimCreation(id: string, projectId: string): { creation: Creation; fresh: boolean } {
@@ -54,6 +56,7 @@ export class Deliveries {
     if (delivery.hash !== hash) throw new Error("Message ID already belongs to a different message");
     const retry = delivery.state === "blocked" && this.db.query("UPDATE deliveries SET state='received',note=NULL,updatedAt=? WHERE id=? AND state='blocked'").run(Date.now(), id).changes === 1;
     if (retry) delivery = this.get(id)!;
+    this.tracked.set(id, { state: delivery.state, turnId: delivery.turnId });
     return { delivery, fresh: insert.changes === 1 || retry };
   }
 
@@ -61,7 +64,9 @@ export class Deliveries {
 
   update(id: string, state: string, turnId: string | null = null, note: string | null = null): Delivery {
     this.db.query("UPDATE deliveries SET state=?,turnId=COALESCE(?,turnId),note=?,updatedAt=? WHERE id=?").run(state, turnId, note, Date.now(), id);
-    return this.get(id)!;
+    const delivery = this.get(id)!;
+    this.tracked.set(id, { state: delivery.state, turnId: delivery.turnId });
+    return delivery;
   }
 
   observe(turns: Record<string, any>[]): void {
@@ -72,7 +77,7 @@ export class Deliveries {
       const state = turn.status === "inProgress" ? "started" : turn.status === "completed" ? "completed" : turn.status ?? "started";
       for (const id of ids) {
         if (typeof id !== "string") continue;
-        const previous = this.get(id);
+        const previous = this.tracked.get(id);
         if (previous && (previous.state !== state || previous.turnId !== turnId)) this.update(id, state, turnId);
       }
     }

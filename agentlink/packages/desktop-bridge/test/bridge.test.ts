@@ -24,3 +24,24 @@ test("closing or failing one subscription cannot detach another browser", async 
     expect(events).toEqual([true, true, false, true, false]);
   } finally { await bridge.close(); }
 });
+
+test("stream bursts coalesce without losing text, delivery completion or revision continuity", async () => {
+  const deliveries = new Deliveries(":memory:"), bridge = new DesktopBridge(deliveries);
+  bridge.ipc.follow = async () => {};
+  const events: any[] = []; bridge.on("event", event => events.push(event));
+  const emit = (change: any) => bridge.ipc.emit("broadcast", { method: "thread-stream-state-changed", version: 11, sourceClientId: "app", params: { hostId: "local", conversationId: "thread", change } });
+  try {
+    await bridge.subscribe("thread");
+    deliveries.claim("message", "thread", "hi", "send");
+    emit({ type: "snapshot", revision: 0, conversationState: { id: "thread", turns: [{ id: "turn", status: "inProgress", params: { clientUserMessageId: "message" }, items: [{ type: "agentMessage", id: "reply", text: "" }] }] } });
+    for (let revision = 1; revision <= 1000; revision++) emit({ type: "patches", baseRevision: revision - 1, revision, patches: [{ op: "replace", path: ["turns", 0, "items", 0, "text"], value: "a".repeat(revision) }] });
+    emit({ type: "patches", baseRevision: 1000, revision: 1001, patches: [{ op: "replace", path: ["turns", 0, "status"], value: "completed" }] });
+    expect(bridge.snapshot("thread")!.revision).toBe(0);
+    await new Promise(resolve => setTimeout(resolve, 70));
+    const patches = events.filter(event => event.type === "patches");
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toMatchObject({ baseRevision: 0, revision: 1001 });
+    expect(bridge.snapshot("thread")!.view.turns[0].messages[0].text).toBe("a".repeat(1000));
+    expect(deliveries.get("message")!.state).toBe("completed");
+  } finally { await bridge.close(); }
+});

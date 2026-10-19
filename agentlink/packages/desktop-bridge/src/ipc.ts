@@ -75,7 +75,7 @@ export class DesktopIpc extends EventEmitter {
   private pending = new Map<string, { resolve: (value: Message) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   readonly path: string;
 
-  constructor(path = join(homedir(), ".codex", "ipc", "ipc.sock")) {
+  constructor(path = process.platform === "win32" ? String.raw`\\.\pipe\codex-ipc` : join(homedir(), ".codex", "ipc", "ipc.sock")) {
     super();
     this.path = path;
   }
@@ -133,7 +133,7 @@ export class DesktopIpc extends EventEmitter {
   }
 
   private write(message: Message): void {
-    if (!this.socket?.writable) throw new Error("Mac desktop is disconnected");
+    if (!this.socket?.writable) throw new Error("Desktop App is disconnected");
     this.socket.write(encodeFrame(message));
   }
 

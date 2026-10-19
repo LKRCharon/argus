@@ -14,7 +14,7 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -258,6 +258,20 @@ export class CodexAppServer {
       if (usableBinary(APP_BUNDLED)) return APP_BUNDLED;
     }
 
+    if (process.platform === "win32") {
+      // The desktop App installs executable CLI releases outside the Store
+      // package. Use the newest native release, including after an App update.
+      const root = join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "OpenAI", "Codex", "bin");
+      try {
+        const candidates = readdirSync(root, { withFileTypes: true })
+          .filter(entry => entry.isDirectory())
+          .map(entry => join(root, entry.name, "codex.exe"))
+          .filter(usableBinary)
+          .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+        if (candidates[0]) return candidates[0];
+      } catch { /* CLI-only installations can still use standalone or PATH. */ }
+    }
+
     const standaloneDir = join(homedir(), ".codex", "packages", "standalone", "current");
     const standaloneNames = process.platform === "win32" ? ["codex.exe"] : ["codex"];
     for (const name of standaloneNames) {
@@ -310,6 +324,7 @@ export class CodexAppServer {
     return spawn(bin, ["app-server", "--listen", "stdio://"], {
       stdio: ["pipe", "pipe", "pipe"],
       detached: false,
+      windowsHide: true,
     });
   }
 

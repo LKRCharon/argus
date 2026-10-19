@@ -13,14 +13,18 @@ let projects: Row[] = [], draftProject = "", desktopReady = false, listGeneratio
 const projectSelect = element<HTMLSelectElement>("project");
 const nodes = new Map<string, { element: HTMLElement; signature: string }>();
 const pendingApprovals = new Set<string>();
-const storageKey = "argus-desktop-web:";
+const storageKey = "argus-desktop-web:" + (location.pathname === "/" ? "" : location.pathname + ":");
+const appBase = new URL("./", location.href);
+let deviceName = "目标设备", gateway: Row | null = null;
+let requestsSignature = "", renderFrame: number | undefined;
 const currentSlot = () => selected || (draftProject ? "draft:" + draftProject : "");
 function stored(key: string): Row | null { try { return JSON.parse(localStorage.getItem(key) ?? "null"); } catch { return null; } }
 function saveDraft() { const slot = currentSlot(); if (slot) localStorage.setItem(storageKey + "draft:" + slot, input.value); }
 
 function notice(text = "") { element("notice").textContent = text; element("notice").hidden = !text; }
 async function api(path: string, body?: Row, retry = true): Promise<Row> {
-  const response = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json", "X-Argus-Token": token }, body: JSON.stringify(body) } : { cache: "no-store" });
+  const response = await fetch(new URL(path.replace(/^\//, ""), appBase), body ? { method: "POST", headers: { "Content-Type": "application/json", "X-Argus-Token": token }, body: JSON.stringify(body) } : { cache: "no-store" });
+  if (response.status === 401 && gateway) { location.assign("/login"); throw new Error("请重新登录"); }
   if (response.status === 403 && body && retry) { token = (await api("/api/session")).token; return api(path, body, false); }
   const result = await response.json();
   if (!response.ok) throw new Error(result.error ?? `HTTP ${response.status}`);
@@ -28,7 +32,7 @@ async function api(path: string, body?: Row, retry = true): Promise<Row> {
 }
 function connection(ready: boolean, text?: string) {
   desktopReady = ready;
-  element("connection").textContent = text ?? (ready ? "已连接 Mac" : "正在重新连接");
+  element("connection").textContent = text ?? (ready ? "已连接 " + deviceName : "正在重新连接");
   element("dot").classList.toggle("ready", ready);
   if (selected || draftProject) { canSend = ready; controls(); }
 }
@@ -73,18 +77,18 @@ async function loadProjects() {
 }
 function newChat(projectId = projectSelect.value) {
   const project = projects.find(project => project.id === projectId);
-  if (!project) { notice("请先选择一个 Mac 项目，再新建对话。"); projectSelect.focus(); return; }
+  if (!project) { notice("请先选择一个项目，再新建对话。"); projectSelect.focus(); return; }
   saveDraft(); generation++; selected = ""; draftProject = projectId;
   if (socket) { socket.onclose = null; socket.close(); socket = null; }
   clearTimeout(reconnectTimer);
-  running = false; activeTurn = ""; turns = new Map(); liveView = null; nodes.clear(); historyCursor = null;
+  running = false; activeTurn = ""; turns = new Map(); liveView = null; nodes.clear(); historyCursor = null; requestsSignature = "";
   element("messages").replaceChildren(); element("requests").hidden = true; element("older").hidden = true;
   element("title").textContent = "新对话 · " + project.name; element("workspace").textContent = project.roots.join(" · ");
   element("runtime").textContent = "草稿"; element("empty").hidden = false;
   element("model").textContent = "项目默认模型";
   element("permissions").textContent = "发送默认：完全访问 · 无自动审批";
   element("empty-title").textContent = "在 " + project.name + " 开始工作";
-  element("empty-text").textContent = "发送后会在 Mac 原 App 中创建并执行。草稿自动保存在本浏览器。";
+  element("empty-text").textContent = "发送后会在目标设备原 App 中创建并执行。草稿自动保存在本浏览器。";
   input.value = localStorage.getItem(storageKey + "draft:" + currentSlot()) ?? "";
   localStorage.setItem(storageKey + "selected", currentSlot()); canSend = desktopReady; renderThreads(); controls(); notice(); input.focus();
 }
@@ -141,13 +145,16 @@ function mergeTurns(incoming: Row[], prepend = false) {
   renderTurns();
 }
 function renderRequests(requests: Row[]) {
+  const signature = JSON.stringify([selected, requests, [...pendingApprovals]]);
+  if (requestsSignature === signature) return;
+  requestsSignature = signature;
   const root = element("requests"); root.replaceChildren(); root.hidden = requests.length === 0;
   const threadId = selected;
   const activeKeys = new Set(requests.map(request => JSON.stringify([threadId, request.method, request.id])));
   for (const key of pendingApprovals) if (JSON.parse(key)[0] === threadId && !activeKeys.has(key)) pendingApprovals.delete(key);
   for (const request of requests) {
     const section = document.createElement("div"); section.className = "request";
-    const title = document.createElement("strong"); title.textContent = request.kind === "command" ? "Mac 请求运行命令" : request.kind === "file" ? "Mac 请求修改文件" : "Mac 上的任务需要处理";
+    const title = document.createElement("strong"); title.textContent = deviceName + (request.kind === "command" ? " 请求运行命令" : request.kind === "file" ? " 请求修改文件" : " 上的任务需要处理");
     section.append(title);
     if (request.reason) { const reason = document.createElement("p"); reason.textContent = String(request.reason); section.append(reason); }
     if (request.command) { const command = document.createElement("pre"); command.className = "request-command"; command.textContent = typeof request.command === "string" ? request.command : JSON.stringify(request.command, null, 2); section.append(command); }
@@ -168,7 +175,7 @@ function renderRequests(requests: Row[]) {
         section.append(button);
       }
     } else {
-      const link = document.createElement("a"); link.href = "http://127.0.0.1:18942/"; link.target = "_blank"; link.rel = "noopener"; link.textContent = "在原窗口处理"; section.append(link);
+      const text = document.createElement("p"); text.textContent = "请在目标设备的原 App 窗口处理此请求。"; section.append(text);
     }
     root.append(section);
   }
@@ -183,8 +190,12 @@ function renderLiveView() {
   const current = permissions?.fullAccess ? "完全访问" : permissions?.profile === ":workspace" || permissions?.sandbox === "workspaceWrite" ? "工作区权限" : permissions?.profile === ":read-only" || permissions?.sandbox === "readOnly" ? "只读" : "等待同步";
   element("permissions").textContent = `${running ? "当前回合" : "当前设置"}：${current} · 发送默认：完全访问`;
   activeTurn = view.turns.filter((turn: Row) => turn.status === "inProgress").at(-1)?.id ?? "";
-  element("runtime").textContent = running ? "Mac 正在执行" : "已同步";
+  element("runtime").textContent = running ? deviceName + " 正在执行" : "已同步";
   mergeTurns(view.turns); renderRequests(view.requests ?? []); controls();
+}
+function scheduleRender() {
+  if (renderFrame !== undefined) return;
+  renderFrame = requestAnimationFrame(() => { renderFrame = undefined; renderLiveView(); });
 }
 function applyViewPatch(patch: Row) {
   if (!liveView || !Array.isArray(patch.path) || patch.path.some((key: unknown) => ["__proto__", "prototype", "constructor"].includes(String(key)))) throw new Error("Invalid view patch");
@@ -199,7 +210,8 @@ function applyViewPatch(patch: Row) {
 function connectStream(id: string, currentGeneration: number) {
   if (socket) { socket.onclose = null; socket.close(); }
   clearTimeout(reconnectTimer);
-  const ws = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/events`); socket = ws;
+  const eventsUrl = new URL("api/events", appBase); eventsUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(eventsUrl); socket = ws;
   ws.onopen = () => ws.send(JSON.stringify({ type: "subscribe", threadId: id, token }));
   ws.onmessage = event => {
     if (generation !== currentGeneration) return;
@@ -207,13 +219,13 @@ function connectStream(id: string, currentGeneration: number) {
     if (message.type === "connection") connection(message.connected);
     if (message.type === "error") notice(message.error);
     if (message.type === "snapshot" && message.threadId === selected) {
-      liveView = message.view; liveRevision = message.revision; renderLiveView();
+      liveView = message.view; liveRevision = message.revision; scheduleRender();
     }
     if (message.type === "patches" && message.threadId === selected) {
       try {
         if (!liveView || liveRevision !== message.baseRevision) throw new Error("Stream revision changed");
         for (const patch of message.patches) applyViewPatch(patch);
-        liveRevision = message.revision; renderLiveView();
+        liveRevision = message.revision; scheduleRender();
       } catch { ws.close(); }
     }
     if (message.type === "resync") void loadHistory(false).catch(error => notice(error.message));
@@ -239,12 +251,12 @@ async function loadHistory(older: boolean) {
 }
 async function select(id: string) {
   saveDraft();
-  const currentGeneration = ++generation; selected = id; draftProject = ""; canSend = false; running = false; activeTurn = ""; historyCursor = null; turns = new Map(); liveView = null; liveRevision = -1; nodes.clear();
+  const currentGeneration = ++generation; selected = id; draftProject = ""; canSend = false; running = false; activeTurn = ""; historyCursor = null; turns = new Map(); liveView = null; liveRevision = -1; nodes.clear(); requestsSignature = "";
   element("messages").replaceChildren(); element("requests").hidden = true; input.value = localStorage.getItem(storageKey + "draft:" + id) ?? "";
   localStorage.setItem(storageKey + "selected", id);
-  const thread = threads.find(thread => thread.id === id); element("title").textContent = thread?.title ?? "Mac 会话"; element("workspace").textContent = thread?.cwd ?? "";
-  renderThreads(); controls(); notice("正在加载并连接 Mac 上的会话…");
-  element("empty-title").textContent = "继续 Mac 上的工作"; element("empty-text").textContent = "正在读取会话…";
+  const thread = threads.find(thread => thread.id === id); element("title").textContent = thread?.title ?? "设备会话"; element("workspace").textContent = thread?.cwd ?? "";
+  renderThreads(); controls(); notice("正在加载并连接 " + deviceName + " 上的会话…");
+  element("empty-title").textContent = "继续 " + deviceName + " 上的工作"; element("empty-text").textContent = "正在读取会话…";
   try {
     await api("/api/select", { threadId: id });
     if (generation !== currentGeneration) return;
@@ -264,7 +276,7 @@ form.onsubmit = async event => {
   const messageId = prior?.text === text ? prior.id : crypto.randomUUID();
   const creationId = projectId ? prior?.creationId ?? crypto.randomUUID() : undefined;
   localStorage.setItem(storageKey + "pending:" + slot, JSON.stringify({ id: messageId, text, mode, creationId })); saveDraft();
-  busy = true; controls(); notice("正在提交到 Mac…");
+  busy = true; controls(); notice("正在提交到 " + deviceName + "…");
   try {
     if (projectId) {
       const { creation } = await api("/api/new", { projectId, clientCreationId: creationId, title: text });
@@ -309,12 +321,27 @@ setInterval(() => {
 }, 5000);
 async function start() {
   try {
-    token = (await api("/api/session")).token; await loadProjects(); await loadThreads();
+    const session = await api("/api/session"); token = session.token; gateway = session.gateway ?? null;
+    deviceName = session.platform === "win32" ? "Windows" : "Mac";
+    if (gateway) {
+      const deviceSelect = element<HTMLSelectElement>("device");
+      deviceSelect.replaceChildren(...gateway.devices.map((device: Row) => new Option(device.name, device.id)));
+      deviceSelect.value = gateway.deviceId;
+      deviceName = gateway.devices.find((device: Row) => device.id === gateway!.deviceId)?.name ?? deviceName;
+      deviceSelect.onchange = () => { saveDraft(); const device = gateway!.devices.find((device: Row) => device.id === deviceSelect.value); if (device) location.assign(device.url); };
+      element("device-controls").hidden = false;
+      element("logout").onclick = () => { saveDraft(); void fetch(gateway!.logoutUrl, { method: "POST", headers: { "X-Argus-Session-Csrf": gateway!.csrf } }).then(response => { if (response.ok) location.assign("/login"); else notice("退出失败，请重试"); }).catch(() => notice("退出失败，请重试")); };
+    }
+    element("device-name").textContent = deviceName;
+    element("execution-location").textContent = "执行保留在 " + deviceName;
+    element("window-link").hidden = Boolean(gateway) || session.platform !== "darwin";
+    input.placeholder = "向 " + deviceName + " 上的这个会话发送消息";
+    await loadProjects(); await loadThreads();
     const status = await api("/api/status"); desktopReady = status.desktopConnected;
     const previous = localStorage.getItem(storageKey + "selected");
     if (previous?.startsWith("draft:")) newChat(previous.slice(6));
     else if (previous && threads.some(thread => thread.id === previous)) await select(previous);
-    else connection(desktopReady, desktopReady ? "Mac 已连接 · 选择会话" : "等待 Mac App");
+    else connection(desktopReady, desktopReady ? deviceName + " 已连接 · 选择会话" : "等待 " + deviceName + " App");
   } catch (error) { connection(false); notice((error as Error).message); setTimeout(start, 5000); }
 }
 void start();

@@ -1,4 +1,5 @@
 web/app.js
+gateway-web/login.js
 *.sqlite*
 .env*
 !*.example
