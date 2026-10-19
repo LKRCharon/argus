@@ -83,6 +83,7 @@ test("authenticated proxy rewrites native Origin, isolates cookies, and logout r
     ws.onerror = () => { clearTimeout(timer); reject(new Error("WS failed")); };
   });
   expect(JSON.parse(firstMessage).connected).toBe(true);
+  expect((await fetchGateway(`${base}/d/windows/api/session`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(1500) })).status).toBe(200);
   const echo = new Promise<string>(resolve => { ws.onmessage = event => resolve(String(event.data)); });
   ws.send("ping"); expect(await echo).toBe("ping");
   const closed = new Promise<number>(resolve => { ws.onclose = event => resolve(event.code); });
