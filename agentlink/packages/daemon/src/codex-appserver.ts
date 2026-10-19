@@ -21,6 +21,7 @@ import { StringDecoder } from "node:string_decoder";
 
 /** Where the Codex desktop app keeps its bundled binary. */
 const APP_BUNDLED = "/Applications/ChatGPT.app/Contents/Resources/codex";
+const APP_BUNDLED_NESTED = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
 const DEFAULT_LATE_RESULT_GRACE_MS = 30_000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 500;
@@ -252,7 +253,10 @@ export class CodexAppServer {
     const configured = process.env.CODEX_BIN?.trim();
     if (configured && usableBinary(configured)) return configured;
 
-    if (process.platform === "darwin" && usableBinary(APP_BUNDLED)) return APP_BUNDLED;
+    if (process.platform === "darwin") {
+      if (usableBinary(APP_BUNDLED_NESTED)) return APP_BUNDLED_NESTED;
+      if (usableBinary(APP_BUNDLED)) return APP_BUNDLED;
+    }
 
     const standaloneDir = join(homedir(), ".codex", "packages", "standalone", "current");
     const standaloneNames = process.platform === "win32" ? ["codex.exe"] : ["codex"];

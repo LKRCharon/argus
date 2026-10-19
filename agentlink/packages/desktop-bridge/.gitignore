@@ -1,0 +1,6 @@
+web/app.js
+*.sqlite*
+.env*
+!*.example
+runtime/
+fallback/build/
