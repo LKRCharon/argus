@@ -13,6 +13,7 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export class DesktopBridge extends EventEmitter {
   readonly ipc: DesktopIpc;
   private catalogue = new CodexAppServer();
+  private creatorFactory = () => new CodexAppServer();
   private states = new Map<string, { owner: string; revision: number; state: Message; view: Message }>();
   private subscriptions = new Map<string, number>();
   private selections = new Map<string, Promise<Message>>();
@@ -68,20 +69,22 @@ export class DesktopBridge extends EventEmitter {
     const claimed = this.deliveries.claimCreation(id, projectId);
     if (!claimed.fresh) return claimed.creation;
     let dispatched = false;
+    const creator = this.creatorFactory();
     try {
       const { project } = await this.rpc("project/read", { projectId });
       const roots = project.roots?.map((root: Message) => root.path) ?? [];
       if (!roots.length) throw new Error("此项目没有本机工作目录，请在原 App 中处理");
+      await creator.start();
       dispatched = true;
-      const { thread } = await this.rpc("thread/start", { projectId, cwd: roots[0], runtimeWorkspaceRoots: roots, historyMode: "paginated", threadSource: "vscode", ...fullAccessThreadStart });
+      const { thread } = await creator.call("thread/start", { projectId, cwd: roots[0], runtimeWorkspaceRoots: roots, historyMode: "paginated", threadSource: "vscode", ...fullAccessThreadStart });
       this.deliveries.updateCreation(id, "creating", thread.id);
-      try { await this.rpc("thread/name/set", { threadId: thread.id, name: title.split("\n")[0].slice(0, 60) || "新对话" }); }
-      finally { await this.rpc("thread/unsubscribe", { threadId: thread.id }); }
+      try { await creator.call("thread/name/set", { threadId: thread.id, name: title.split("\n")[0].slice(0, 60) || "新对话" }); }
+      finally { await creator.call("thread/unsubscribe", { threadId: thread.id }); }
       return this.deliveries.updateCreation(id, "created", thread.id);
     } catch (error) {
       const previous = this.deliveries.creation(id)!;
       return this.deliveries.updateCreation(id, previous.threadId ? "created" : dispatched ? "unknown" : "blocked", null, error instanceof Error ? error.message : String(error));
-    }
+    } finally { await creator.stop(); }
   }
 
   async history(threadId: string, cursor: string | null): Promise<Message> {

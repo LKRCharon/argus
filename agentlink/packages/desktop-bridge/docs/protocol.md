@@ -74,6 +74,7 @@
 | 快照后连续收到 revision 补丁 | 无需持续传屏幕 | `state.ts` 与 WebSocket |
 | 本机项目目录有两套项目 ID | 只用新项目筛选会漏掉原会话 | `projects.ts` 只读兼容映射 |
 | 新空会话尚无可列出的回合历史 | 先读历史会阻断新建 | 先交原 App 接管，再读历史 |
+| unsubscribe 后原 App 报 active writer；官方文档规定 30 分钟无订阅宽限期 | unsubscribe 不立即释放 writer | `create()` 使用独立创建进程并在返回前退出 |
 | journal 重启恢复及重复 ID 测试 | 超时不能自动再次执行 | `delivery.ts` 的持久状态 |
 | 当前轮权限与下一轮设置不同 | 默认完全访问不能代表当前轮沙箱 | `permissions.ts` 的分别投影 |
 | 原生请求同时有原因和命令，且选项含 `cancel` | 显示原因会遮蔽命令，固定拒绝选项也可能无效 | `requests.ts` 的完整卡片与原生选项校验 |

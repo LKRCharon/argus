@@ -81,7 +81,7 @@ bun run packages/desktop-bridge/deploy/install-tunnel.ts \
 
 已有会话的修改只通过原 App 的 follower 接口进行，不调用读取进程的 `turn/start`，也不抢占原 App 的 writer。目录与分页历史通过独立的 app-server 读取。部分版本仍在桌面兼容缓存中保存项目分组，本组件只读取该缓存，将旧项目 ID 映射为 app-server ID，不修改原缓存或 Codex 数据库。
 
-项目内新建会话先通过 `thread/start` 创建空会话，设置标题并立即 `thread/unsubscribe` 释放 writer；随后由原 App 打开并接管，首条消息仍交给原 App 执行。创建编号与消息编号分开持久化，超时不会触发重复创建。
+项目内新建会话使用独立的短生命周期 app-server，通过 `thread/start` 创建空会话，设置标题、`thread/unsubscribe`，随后退出创建进程释放 writer。只 unsubscribe 会保留原生的无订阅宽限期，不能当作立即释放写入占用。原 App 打开并接管后，首条消息仍交给原 App 执行。创建编号与消息编号分开持久化，超时不会触发重复创建。
 
 消息 journal 在发送前落盘。相同 ID 与相同内容返回已有状态；相同 ID 配不同内容被拒绝。进程中途重启会把未确认投递标为 `unknown`；只有确认在发送前被阻止的消息允许显式重试。
 

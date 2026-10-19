@@ -52,13 +52,29 @@ test("new project chats start with native Full Access before desktop takeover", 
   const {bridge} = fixture(); const calls: Message[] = [];
   (bridge as any).rpc = async (method: string, params: Message) => {
     calls.push({method,params});
-    if (method === "project/read") return {project:{roots:[{path:"/project"}]}};
-    if (method === "thread/start") return {thread:{id:"new-chat"}};
-    return {};
+    expect(method).toBe("project/read");
+    return {project:{roots:[{path:"/project"}]}};
   };
+  (bridge as any).creatorFactory = () => ({
+    start:async()=>{},
+    call:async(method:string,params:Message)=>{calls.push({method,params});return method==="thread/start"?{thread:{id:"new-chat"}}:{};},
+    stop:async()=>{calls.push({method:"creator-exited"});},
+  });
   try {
     expect(await bridge.create("project-id","creation-id","title")).toMatchObject({state:"created",threadId:"new-chat"});
     expect(calls[1]).toMatchObject({method:"thread/start",params:{approvalPolicy:"never",approvalsReviewer:"user",sandbox:"danger-full-access",projectId:"project-id",cwd:"/project"}});
-    expect(calls.at(-1)?.method).toBe("thread/unsubscribe");
+    expect(calls.slice(-2).map(call=>call.method)).toEqual(["thread/unsubscribe","creator-exited"]);
   } finally { await bridge.close(); }
+});
+
+test("a failed creation closes its writer and keeps an uncertain ID from being dispatched twice", async () => {
+  const {bridge} = fixture(); let starts=0, exits=0;
+  (bridge as any).rpc = async () => ({project:{roots:[{path:"/project"}]}});
+  (bridge as any).creatorFactory = () => ({start:async()=>{},call:async()=>{starts++;throw new Error("response timed out");},stop:async()=>{exits++;}});
+  try {
+    expect(await bridge.create("project-id","uncertain-creation","title")).toMatchObject({state:"unknown"});
+    expect(exits).toBe(1);
+    expect(await bridge.create("project-id","uncertain-creation","title")).toMatchObject({state:"unknown"});
+    expect(starts).toBe(1);
+  } finally {await bridge.close();}
 });

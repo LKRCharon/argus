@@ -181,7 +181,7 @@ function renderLiveView() {
   running = view.status === "active" || view.turns.some((turn: Row) => turn.status === "inProgress");
   const permissions = running ? view.currentPermissions : view.nextPermissions;
   const current = permissions?.fullAccess ? "完全访问" : permissions?.profile === ":workspace" || permissions?.sandbox === "workspaceWrite" ? "工作区权限" : permissions?.profile === ":read-only" || permissions?.sandbox === "readOnly" ? "只读" : "等待同步";
-  element("permissions").textContent = `${running ? "当前回合" : "当前设置"}：${current}${permissions?.approvalsReviewer === "auto_review" || permissions?.approvalsReviewer === "guardian_subagent" ? " · 自动审批中" : ""} · 发送默认：完全访问`;
+  element("permissions").textContent = `${running ? "当前回合" : "当前设置"}：${current} · 发送默认：完全访问`;
   activeTurn = view.turns.filter((turn: Row) => turn.status === "inProgress").at(-1)?.id ?? "";
   element("runtime").textContent = running ? "Mac 正在执行" : "已同步";
   mergeTurns(view.turns); renderRequests(view.requests ?? []); controls();
