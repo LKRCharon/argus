@@ -59,6 +59,7 @@ const versions: Record<string, number> = {
   "thread-follower-interrupt-turn": 4,
   "thread-follower-load-complete-history": 1,
   "thread-follower-read-model-settings": 1,
+  "thread-follower-update-thread-settings": 2,
   "thread-follower-command-approval-decision": 1,
   "thread-follower-file-approval-decision": 1,
   "thread-follower-permissions-request-approval-response": 1,

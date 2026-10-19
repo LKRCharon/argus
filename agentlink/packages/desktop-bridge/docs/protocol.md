@@ -15,6 +15,7 @@
 | `thread-follower-steer-turn` | 1 | 追加指令 |
 | `thread-follower-interrupt-turn` | 4 | 停止指定回合 |
 | `thread-follower-read-model-settings` | 1 | 读取原 App 模型设置 |
+| `thread-follower-update-thread-settings` | 2 | 设置完全访问与审批审核者 |
 | `thread-follower-command-approval-decision` | 1 | 命令审批 |
 | `thread-follower-file-approval-decision` | 1 | 文件审批 |
 | `thread-stream-following-changed` | 1 | 订阅广播 |
@@ -45,6 +46,8 @@
 
 停止包含 `conversationId`、`expectedTurnId` 与 `mode:"user-stop"`，避免意外停止后来开始的回合。所有审批均来自用户的明确按钮操作。
 
+发送前向同一 owner 提交 `threadSettings:{approvalPolicy:"never",approvalsReviewer:"user",permissions:":danger-full-access"}`，并检查 `applied:true`。命名 `permissions` 与 `sandboxPolicy` 不能同时提交。当前有执行中的回合时提供快照中的 `activeTurnId`，原生处理器额外通过 `turn/settings/update` 改变该轮审核者。该接口不支持原地改变当前轮沙箱；已有步骤、待处理请求和当前轮沙箱保持原状态。只改变原生设置，不增加审批模型调用。
+
 追加指令还必须传 `attachments:[]` 和 `restoreMessage`。后者提供输入文本及 `context`，包含空的附件、评论附件数组；工作目录与模型沿用原线程。遗漏 `restoreMessage` 时此版本会在读取 `cwd` 前报错。显示模型同时处理原生 `steeringUserMessage` 与服务器确认后的 `userMessage`，按消息编号消除重复；仅乐观显示的追加指令不作为已投递证据。
 
 ## 增量状态
@@ -52,6 +55,16 @@
 订阅参数为 `{conversationId,hostId:"local",following:true}`。接收的 `change` 可以是 `snapshot` 或 `patches`，校验会话 ID、owner、基础 revision 和新 revision；不连续时重新订阅。只支持数据补丁，拒绝原型路径。
 
 当前版本可能将回合放在 canonical history 中：`turnHistory.history.entitiesByKey` 保存实体，`islands[].entries[].value` 保存顺序。适配后只向网页发送会话正文和可见活动，不转发开发者指令或原始内部日志元数据。浏览器接收的是独立的显示模型补丁，长文本增长使用 `append`。
+
+`currentPermissions` 与 `latestThreadSettings` 分别投影为当前轮权限和后续默认权限。不能用后者替代前者，否则会将正在等待审批的旧回合误报为完全访问。
+
+## 转发审批
+
+合并 `requests` 与 `externalRequests`，兼容外层和嵌套请求形状，以方法和原始编号去重。每个卡片同时保存 `reason`、原始 `command`、`cwd` 和完整参数，不用空值合并在原因和命令之间二选一。
+
+`POST /api/approval` 包含 `threadId`、`requestId`、`method` 与 `decision`。决定必须来自当前请求的 `availableDecisions`；兼容未提供该字段的旧命令/文件请求时提供一次允许与拒绝。新版请求可能只提供 `accept` 和 `cancel`，不能凭空发送 `decline`。规则修订对象必须与原生提供的对象相同。
+
+服务器重新确认同一 owner、请求编号和方法，拒绝过期请求和同一请求的并发提交，再定向调用命令/文件审批接口。网页中的其他类型请求完整保留参数，并提供原窗口入口。
 
 ## 实测依据与处理路径
 
@@ -62,5 +75,7 @@
 | 本机项目目录有两套项目 ID | 只用新项目筛选会漏掉原会话 | `projects.ts` 只读兼容映射 |
 | 新空会话尚无可列出的回合历史 | 先读历史会阻断新建 | 先交原 App 接管，再读历史 |
 | journal 重启恢复及重复 ID 测试 | 超时不能自动再次执行 | `delivery.ts` 的持久状态 |
+| 当前轮权限与下一轮设置不同 | 默认完全访问不能代表当前轮沙箱 | `permissions.ts` 的分别投影 |
+| 原生请求同时有原因和命令，且选项含 `cancel` | 显示原因会遮蔽命令，固定拒绝选项也可能无效 | `requests.ts` 的完整卡片与原生选项校验 |
 
 本适配器没有修改原 App、Codex 数据库或桌面兼容缓存。App 更新后若帧版本、输入形状或所有权机制改变，停止该版本的写操作并重新验证；不要通过直接改数据库来补偿。

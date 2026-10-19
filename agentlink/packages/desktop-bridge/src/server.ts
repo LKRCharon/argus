@@ -6,6 +6,7 @@ import type { ServerWebSocket } from "bun";
 import { DesktopBridge } from "./bridge";
 import { Deliveries } from "./delivery";
 import { responseHeaders, sameOrigin, validLocalHost, validToken } from "./security";
+import { sendingDefaults } from "./permissions";
 
 const port = Number(process.env.ARGUS_WEB_PORT ?? 18943);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid ARGUS_WEB_PORT");
@@ -58,15 +59,15 @@ const server = Bun.serve<Client>({
           return json({ result: await bridge.interrupt(threadId(body.threadId), threadId(body.turnId)) });
         }
         if (path === "/api/approval") {
-          if (body.decision !== "accept" && body.decision !== "decline") throw new Error("Invalid approval decision");
+          if (typeof body.method !== "string" || body.method.length > 200 || body.decision == null) throw new Error("Invalid approval decision");
           if (typeof body.requestId !== "number" && typeof body.requestId !== "string") throw new Error("Invalid request ID");
-          return json({ result: await bridge.approval(threadId(body.threadId), body.requestId, body.decision) });
+          return json({ result: await bridge.approval(threadId(body.threadId), body.requestId, body.method, body.decision) });
         }
         return json({ error: "Not found" }, 404);
       }
       if (request.method !== "GET") return json({ error: "Method not allowed" }, 405);
-      if (path === "/api/session") return json({ token, version: "0.1.0", transport: "desktop-ipc" });
-      if (path === "/api/status") return json({ service: "argus-desktop-web", version: "0.1.0", desktopConnected: bridge.ipc.connected, release });
+      if (path === "/api/session") return json({ token, version: "0.1.0", transport: "desktop-ipc", sendingDefaults });
+      if (path === "/api/status") return json({ service: "argus-desktop-web", version: "0.1.0", desktopConnected: bridge.ipc.connected, release, sendingDefaults });
       if (path === "/api/projects") return json(await bridge.projects());
       if (path === "/api/threads") return json(await bridge.list(url.searchParams.get("cursor"), url.searchParams.has("projectId") ? threadId(url.searchParams.get("projectId")) : null));
       if (path === "/api/history") return json(await bridge.history(threadId(url.searchParams.get("threadId")), url.searchParams.get("cursor")));

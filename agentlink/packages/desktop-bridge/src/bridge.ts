@@ -5,6 +5,8 @@ import { DesktopIpc, type Message } from "./ipc";
 import { Deliveries, type Delivery, type Creation } from "./delivery";
 import { applyPatches, desktopTurns, publicState, publicTurn, textInput, viewDiff } from "./state";
 import { DesktopProjects } from "./projects";
+import { fullAccessThreadSettings, fullAccessThreadStart } from "./permissions";
+import { approvalTarget } from "./requests";
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -14,6 +16,7 @@ export class DesktopBridge extends EventEmitter {
   private states = new Map<string, { owner: string; revision: number; state: Message; view: Message }>();
   private subscriptions = new Map<string, number>();
   private selections = new Map<string, Promise<Message>>();
+  private approving = new Set<string>();
   private desktopProjects = new DesktopProjects();
   private timer: ReturnType<typeof setInterval>;
 
@@ -70,7 +73,7 @@ export class DesktopBridge extends EventEmitter {
       const roots = project.roots?.map((root: Message) => root.path) ?? [];
       if (!roots.length) throw new Error("此项目没有本机工作目录，请在原 App 中处理");
       dispatched = true;
-      const { thread } = await this.rpc("thread/start", { projectId, cwd: roots[0], runtimeWorkspaceRoots: roots, historyMode: "paginated", threadSource: "vscode" });
+      const { thread } = await this.rpc("thread/start", { projectId, cwd: roots[0], runtimeWorkspaceRoots: roots, historyMode: "paginated", threadSource: "vscode", ...fullAccessThreadStart });
       this.deliveries.updateCreation(id, "creating", thread.id);
       try { await this.rpc("thread/name/set", { threadId: thread.id, name: title.split("\n")[0].slice(0, 60) || "新对话" }); }
       finally { await this.rpc("thread/unsubscribe", { threadId: thread.id }); }
@@ -179,12 +182,34 @@ export class DesktopBridge extends EventEmitter {
     return result.result?.settings ?? null;
   }
 
+  /** Change native thread defaults; an existing turn keeps its sandbox until it ends. */
+  async useFullAccess(threadId: string, owner?: Message): Promise<Message> {
+    owner ??= await this.owner(threadId);
+    const release = await this.subscribe(threadId);
+    try {
+      const deadline = Date.now() + 5000;
+      while (this.states.get(threadId)?.owner !== owner.handledByClientId) {
+        if (Date.now() >= deadline) throw new Error("权限状态尚未同步，请稍后重试");
+        await pause(50);
+      }
+      const state = this.states.get(threadId)!.state;
+      const active = desktopTurns(state).slice().reverse().find(turn => turn.status === "inProgress");
+      const activeTurnId = active?.turnId ?? active?.id;
+      const response = await this.ipc.request("thread-follower-update-thread-settings", {
+        conversationId: threadId, threadSettings: fullAccessThreadSettings(), ...(activeTurnId ? { activeTurnId } : {}),
+      }, { targetClientId: owner.handledByClientId });
+      if (response.result?.applied !== true) throw new Error("Mac 未接受完全访问设置，消息尚未发送");
+      return { applied: true, activeTurnId: activeTurnId ?? null };
+    } finally { release(); }
+  }
+
   async send(threadId: string, text: string, id: string, mode: "send" | "steer"): Promise<Delivery> {
     const claimed = this.deliveries.claim(id, threadId, text, mode);
     if (!claimed.fresh) return claimed.delivery;
     let dispatched = false;
     try {
       const owner = await this.owner(threadId);
+      await this.useFullAccess(threadId, owner);
       const input = textInput(text);
       this.deliveries.update(id, "dispatching");
       dispatched = true;
@@ -209,16 +234,18 @@ export class DesktopBridge extends EventEmitter {
     return response.result;
   }
 
-  async approval(threadId: string, requestId: string | number, decision: "accept" | "decline"): Promise<Message> {
-    const requests = this.states.get(threadId)?.state.requests ?? [];
-    const request = requests.find((entry: Message) => String(entry.id ?? entry.requestId) === String(requestId));
-    if (!request) throw new Error("该审批已结束或尚未同步，请刷新会话");
-    const method = request.method ?? request.request?.method;
-    const kind = method === "item/commandExecution/requestApproval" ? "command" : method === "item/fileChange/requestApproval" ? "file" : null;
-    if (!kind) throw new Error("此类交互请在原窗口处理");
+  async approval(threadId: string, requestId: string | number, method: string, decision: unknown): Promise<Message> {
     const owner = await this.owner(threadId);
-    const response = await this.ipc.request(`thread-follower-${kind}-approval-decision`, { conversationId: threadId, requestId: request.id ?? request.requestId, decision }, { targetClientId: owner.handledByClientId });
-    return response.result;
+    const state = this.states.get(threadId);
+    if (!state || state.owner !== owner.handledByClientId) throw new Error("审批状态尚未同步，请刷新会话");
+    const { request, kind } = approvalTarget(state.state, requestId, method, decision);
+    const key = JSON.stringify([threadId, method, request.id]);
+    if (this.approving.has(key)) throw new Error("此审批正在发送，请等待 Mac 同步");
+    this.approving.add(key);
+    try {
+      const response = await this.ipc.request(`thread-follower-${kind}-approval-decision`, { conversationId: threadId, requestId: request.id, decision }, { targetClientId: owner.handledByClientId });
+      return response.result;
+    } finally { this.approving.delete(key); }
   }
 
   async close(): Promise<void> {

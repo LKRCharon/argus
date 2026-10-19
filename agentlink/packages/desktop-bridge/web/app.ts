@@ -12,6 +12,7 @@ let liveView: Row | null = null, liveRevision = -1;
 let projects: Row[] = [], draftProject = "", desktopReady = false, listGeneration = 0;
 const projectSelect = element<HTMLSelectElement>("project");
 const nodes = new Map<string, { element: HTMLElement; signature: string }>();
+const pendingApprovals = new Set<string>();
 const storageKey = "argus-desktop-web:";
 const currentSlot = () => selected || (draftProject ? "draft:" + draftProject : "");
 function stored(key: string): Row | null { try { return JSON.parse(localStorage.getItem(key) ?? "null"); } catch { return null; } }
@@ -80,7 +81,8 @@ function newChat(projectId = projectSelect.value) {
   element("messages").replaceChildren(); element("requests").hidden = true; element("older").hidden = true;
   element("title").textContent = "新对话 · " + project.name; element("workspace").textContent = project.roots.join(" · ");
   element("runtime").textContent = "草稿"; element("empty").hidden = false;
-  element("model").textContent = "项目默认模型与权限";
+  element("model").textContent = "项目默认模型";
+  element("permissions").textContent = "发送默认：完全访问 · 无自动审批";
   element("empty-title").textContent = "在 " + project.name + " 开始工作";
   element("empty-text").textContent = "发送后会在 Mac 原 App 中创建并执行。草稿自动保存在本浏览器。";
   input.value = localStorage.getItem(storageKey + "draft:" + currentSlot()) ?? "";
@@ -140,16 +142,29 @@ function mergeTurns(incoming: Row[], prepend = false) {
 }
 function renderRequests(requests: Row[]) {
   const root = element("requests"); root.replaceChildren(); root.hidden = requests.length === 0;
+  const threadId = selected;
+  const activeKeys = new Set(requests.map(request => JSON.stringify([threadId, request.method, request.id])));
+  for (const key of pendingApprovals) if (JSON.parse(key)[0] === threadId && !activeKeys.has(key)) pendingApprovals.delete(key);
   for (const request of requests) {
     const section = document.createElement("div"); section.className = "request";
-    const title = document.createElement("strong"); title.textContent = "Mac 上的任务需要处理";
-    const content = document.createElement("p"); content.textContent = request.params?.reason ?? request.params?.command ?? request.method ?? "请查看原 App";
-    section.append(title, content);
-    const method = request.method ?? request.request?.method;
-    if (["item/commandExecution/requestApproval", "item/fileChange/requestApproval"].includes(method)) {
-      for (const [decision, label] of [["accept", "允许本次"], ["decline", "拒绝"]]) {
-        const button = document.createElement("button"); button.textContent = label;
-        button.onclick = () => { button.disabled = true; void api("/api/approval", { threadId: selected, requestId: request.id ?? request.requestId, decision }).catch(error => { notice(error.message); button.disabled = false; }); };
+    const title = document.createElement("strong"); title.textContent = request.kind === "command" ? "Mac 请求运行命令" : request.kind === "file" ? "Mac 请求修改文件" : "Mac 上的任务需要处理";
+    section.append(title);
+    if (request.reason) { const reason = document.createElement("p"); reason.textContent = String(request.reason); section.append(reason); }
+    if (request.command) { const command = document.createElement("pre"); command.className = "request-command"; command.textContent = typeof request.command === "string" ? request.command : JSON.stringify(request.command, null, 2); section.append(command); }
+    if (request.cwd) { const cwd = document.createElement("p"); cwd.className = "request-cwd"; cwd.textContent = "工作目录：" + request.cwd; section.append(cwd); }
+    const details = document.createElement("details"), summary = document.createElement("summary"), data = document.createElement("pre");
+    summary.textContent = "完整请求详情"; data.textContent = JSON.stringify(request.details ?? {}, null, 2); details.append(summary, data); section.append(details);
+    const key = JSON.stringify([threadId, request.method, request.id]);
+    if (request.actions?.length) {
+      for (const action of request.actions) {
+        const button = document.createElement("button"); button.textContent = action.label; button.disabled = pendingApprovals.has(key);
+        button.onclick = () => {
+          pendingApprovals.add(key);
+          for (const control of section.querySelectorAll("button")) control.disabled = true;
+          void api("/api/approval", { threadId, requestId: request.id, method: request.method, decision: action.value })
+            .then(() => { if (selected === threadId && liveView) renderRequests(liveView.requests ?? []); })
+            .catch(error => { pendingApprovals.delete(key); notice(error.message); if (selected === threadId && liveView) renderRequests(liveView.requests ?? []); });
+        };
         section.append(button);
       }
     } else {
@@ -164,9 +179,12 @@ function renderLiveView() {
   connection(true);
   element("model").textContent = [view.model, view.effort].filter(Boolean).join(" · ");
   running = view.status === "active" || view.turns.some((turn: Row) => turn.status === "inProgress");
+  const permissions = running ? view.currentPermissions : view.nextPermissions;
+  const current = permissions?.fullAccess ? "完全访问" : permissions?.profile === ":workspace" || permissions?.sandbox === "workspaceWrite" ? "工作区权限" : permissions?.profile === ":read-only" || permissions?.sandbox === "readOnly" ? "只读" : "等待同步";
+  element("permissions").textContent = `${running ? "当前回合" : "当前设置"}：${current}${permissions?.approvalsReviewer === "auto_review" || permissions?.approvalsReviewer === "guardian_subagent" ? " · 自动审批中" : ""} · 发送默认：完全访问`;
   activeTurn = view.turns.filter((turn: Row) => turn.status === "inProgress").at(-1)?.id ?? "";
   element("runtime").textContent = running ? "Mac 正在执行" : "已同步";
-  mergeTurns(view.turns); renderRequests([...(view.requests ?? []), ...(view.externalRequests ?? [])]); controls();
+  mergeTurns(view.turns); renderRequests(view.requests ?? []); controls();
 }
 function applyViewPatch(patch: Row) {
   if (!liveView || !Array.isArray(patch.path) || patch.path.some((key: unknown) => ["__proto__", "prototype", "constructor"].includes(String(key)))) throw new Error("Invalid view patch");

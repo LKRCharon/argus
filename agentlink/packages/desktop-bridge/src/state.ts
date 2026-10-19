@@ -1,4 +1,6 @@
 import type { Message } from "./ipc";
+import { permissionView } from "./permissions";
+import { pendingRequests, publicRequest } from "./requests";
 
 const forbidden = new Set(["__proto__", "prototype", "constructor"]);
 
@@ -79,11 +81,12 @@ export function publicState(state: Message): Message {
   return {
     id: state.id, title: state.title, cwd: state.cwd,
     model: state.latestModel, effort: state.latestReasoningEffort,
+    currentPermissions: permissionView(state.currentPermissions),
+    nextPermissions: permissionView(state.latestThreadSettings),
     status: state.threadRuntimeStatus?.type ?? "unknown",
     turns: desktopTurns(state).slice(-10).map(publicTurn),
     // Requests are rendered as explicit user actions and never auto-approved.
-    requests: Array.isArray(state.requests) ? structuredClone(state.requests) : [],
-    externalRequests: Array.isArray(state.externalRequests) ? structuredClone(state.externalRequests) : [],
+    requests: pendingRequests(state).map(publicRequest),
   };
 }
 
