@@ -22,6 +22,6 @@
 
 ## 复验
 
-在 Mac 的持久项目目录中解开发布 Git 归档，运行 `bun install --frozen-lockfile`、`bun test`、`bun run typecheck`、`bun run desktop:build`。随后用独立测试会话检查发送、停止、追加指令、重复编号与桥接重启恢复。不要用用户正在执行的任务测试停止。
+在 Mac 的持久项目目录中解开发布 Git 归档，运行 `bun install --frozen-lockfile`、`bun test`、`bun run typecheck`、`bun run desktop:build`。从 Windows 生成归档时使用 `git -c core.autocrlf=false archive`，并比对归档 SHA256；只用默认 `git archive` 仍可能受到 Windows 自动换行配置影响。随后用独立测试会话检查发送、停止、追加指令、重复编号与桥接重启恢复。不要用用户正在执行的任务测试停止。
 
 检查 `/api/status` 的 Git 提交与源码摘要，再分别检查中转服务器和 Windows 的相同状态。仅凭配置文件或排队回执不能证明 Mac 原 App 已执行。

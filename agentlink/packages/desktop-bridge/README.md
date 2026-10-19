@@ -137,4 +137,10 @@ bun run typecheck
 bun run desktop:build
 ```
 
-完整套件包含 macOS/Unix 路径与 shell 测试，必须在 Mac 的持久工作目录中运行；将 Windows CRLF 工作树直接打包到 Mac，或从 `/tmp` 运行依赖持久目录的发布测试，都会产生环境性失败。发布验证使用 Git 提交归档保持行尾和文件模式。
+完整套件包含 macOS/Unix 路径与 shell 测试，必须在 Mac 的持久工作目录中运行；将 Windows CRLF 工作树直接打包到 Mac，或从 `/tmp` 运行依赖持久目录的发布测试，都会产生环境性失败。Windows 的 `core.autocrlf` 也可能影响 `git archive`，生成验证归档时需显式禁用转换：
+
+```bash
+git -c core.autocrlf=false archive --format=tar.gz --output=argus-source.tar.gz HEAD
+```
+
+在 Mac 校验归档 SHA256 后解包，保持原始行尾和文件模式。
